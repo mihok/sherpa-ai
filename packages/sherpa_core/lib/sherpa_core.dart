@@ -6,7 +6,9 @@
 library;
 
 export 'src/agent/agent_event.dart';
+export 'src/agent/agent_runner.dart';
 export 'src/agent/approval_handler.dart';
+export 'src/agent/prompt_boundary.dart';
 export 'src/common/cancellation.dart';
 export 'src/common/clock.dart';
 export 'src/common/ids.dart';
@@ -15,6 +17,8 @@ export 'src/context/budget.dart';
 export 'src/context/compaction.dart';
 export 'src/context/context_manager.dart';
 export 'src/context/overlay.dart';
+export 'src/context/part_rewrite.dart';
+export 'src/context/passthrough_context_manager.dart';
 export 'src/context/token_estimator.dart';
 export 'src/memory/memory_monitor.dart';
 export 'src/model/content.dart';
@@ -28,4 +32,6 @@ export 'src/session/in_memory_store.dart';
 export 'src/session/plan.dart';
 export 'src/session/session_store.dart';
 export 'src/tools/approval.dart';
+export 'src/tools/composite_router.dart';
+export 'src/tools/plan_tool.dart';
 export 'src/tools/tool_router.dart';

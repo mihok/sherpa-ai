@@ -15,14 +15,16 @@ analyzer:
 
 linter:
   rules:
-    - always_declare_return_types
-    - avoid_dynamic_calls
-    - cancel_subscriptions
-    - close_sinks
-    - directives_ordering
-    - prefer_final_locals
-    - prefer_single_quotes
-    - sort_constructors_first
-    - unawaited_futures
-    - unnecessary_lambdas
-    - use_super_parameters
+    always_declare_return_types: true
+    avoid_dynamic_calls: true
+    cancel_subscriptions: true
+    close_sinks: true
+    directives_ordering: true
+    prefer_final_locals: true
+    prefer_single_quotes: true
+    sort_constructors_first: true
+    unawaited_futures: true
+    unnecessary_lambdas: true
+    use_super_parameters: true
+    # Private named parameters read poorly at call sites.
+    prefer_initializing_formals: false

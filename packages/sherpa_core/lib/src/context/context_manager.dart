@@ -6,6 +6,7 @@ import '../model/message.dart';
 import '../model/tool.dart';
 import '../provider/capabilities.dart';
 import '../provider/model_provider.dart';
+import '../session/plan.dart';
 import 'budget.dart';
 import 'overlay.dart';
 
@@ -54,12 +55,17 @@ final class ContextRequest {
     required this.capabilities,
     required this.counter,
     this.systemPrompt,
+    this.plan,
     this.memory = MemoryState.unknown,
     this.settings = const ContextSettings(),
     this.cancel,
   });
 
   final String sessionId;
+
+  /// Pinned plan/task; the manager decides where it is placed so it can
+  /// trade freshness against prompt-cache stability.
+  final Plan? plan;
 
   /// Active branch of the transcript, root → leaf, unmodified.
   final List<Message> path;

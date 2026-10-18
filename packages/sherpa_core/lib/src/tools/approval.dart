@@ -91,7 +91,7 @@ final class ApprovalPolicy {
     Set<String> trustedServers = const {},
     List<ApprovalGrant> grants = const [],
     this.autoRunReadOnly = true,
-  })  : _clock = clock, // ignore: prefer_initializing_formals
+  })  : _clock = clock, 
         _trusted = {...trustedServers},
         _grants = [...grants];
 
