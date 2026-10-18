@@ -136,7 +136,7 @@ SE_API se_status se_backend_init(const se_init_params * p);
 SE_API int32_t se_system_info_json(char * buf, int32_t cap);
 
 /* ===================================================================================================== */
-/* Cancellation tokens (for synchronous calls: model load, memory estimate, bench)                        */
+/* Cancellation tokens (for the blocking calls se_model_load and se_bench)                               */
 /* ===================================================================================================== */
 
 typedef struct se_canceller se_canceller;
@@ -177,7 +177,7 @@ typedef struct se_model_params {
   /* Identity recorded in state files and checked on load, e.g. "sha256:<hex of the GGUF>". NULL = a quick
    * fingerprint (sha256 over size + first/last MiB), which detects other files but not every edit. */
   const char *   model_id;
-  const char *   mmproj_path;           /* optional multimodal projector (needs se_feature "mtmd")           */
+  const char *   mmproj_path;           /* optional projector; needs a SHERPA_ENGINE_MTMD build (system info "mtmd") */
   const char *   draft_model_path;      /* optional draft model for SE_SPEC_DRAFT                            */
   se_progress_cb progress_cb;           /* optional                                                          */
   void *         progress_user;
@@ -289,7 +289,9 @@ typedef enum se_event_type {
   SE_EVENT_REASONING_DELTA      = 2,  /* text                                                                 */
   SE_EVENT_TOOL_CALL_START      = 3,  /* index, id, name                                                      */
   SE_EVENT_TOOL_CALL_ARGS_DELTA = 4,  /* index, id, text = arguments fragment                                 */
-  SE_EVENT_TOOL_CALL_DONE       = 5,  /* index, id, name, text = complete arguments JSON                      */
+  SE_EVENT_TOOL_CALL_DONE       = 5,  /* index, id, name, text = complete arguments JSON. Only for replies
+                                         that ended normally; a call cut by max_tokens/cancel appears only
+                                         (partially) in FINISH's message JSON                               */
   SE_EVENT_USAGE                = 6,  /* prompt_tokens, cached_tokens, completion_tokens                      */
   SE_EVENT_PERF                 = 7,  /* ttft_ms, prefill_tps, decode_tps, draft_accept_rate, name = backend  */
   SE_EVENT_FINISH               = 8,  /* code = se_finish_reason, name = reason string,

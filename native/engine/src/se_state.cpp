@@ -99,7 +99,7 @@ SE_API se_status se_state_save(se_session * s, const char * path) {
     common_json h = se::state_identity(S);
     h["n_ctx"]    = S.n_ctx_seq;
     h["n_tokens"] = (uint64_t) S.history.size();
-    const std::string hj = h.dump();
+    const std::string hj = h.dump_safe();
 
     std::string prefix(se::k_magic, sizeof se::k_magic);
     se::put(prefix, (uint32_t) hj.size());

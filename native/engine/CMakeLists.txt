@@ -26,6 +26,7 @@ set(SHERPA_ENGINE_LIBRARY_TYPE "SHARED" CACHE STRING "SHARED (Android, host) or 
 set_property(CACHE SHERPA_ENGINE_LIBRARY_TYPE PROPERTY STRINGS SHARED STATIC)
 set(LLAMA_CPP_SRC "$ENV{LLAMA_CPP_SRC}" CACHE PATH "Pinned llama.cpp source tree (native/llama/fetch.sh)")
 set(SHERPA_TEST_MODEL "/opt/models/Qwen3-0.6B-Q4_K_M.gguf" CACHE FILEPATH "GGUF used by the host tests")
+set(SHERPA_TEST_THREADS "4" CACHE STRING "Threads used by the host tests (lower it on shared CI runners)")
 
 # ---- pins ---------------------------------------------------------------------------------------------------
 set(_sherpa_lock "${CMAKE_CURRENT_LIST_DIR}/../llama/llama.lock")
@@ -179,6 +180,30 @@ if(SHERPA_ENGINE_LIBRARY_TYPE STREQUAL "SHARED")
   endif()
 endif()
 
+# ---- static bundle (iOS) --------------------------------------------------------------------------------
+# build_ios.sh merges every static archive of the engine's link closure into one framework binary.
+# Upstream's xcframework lacks llama-common (R05 §5.2), so we ship our own; CMake writes the exact archive
+# paths for each configuration so the script never guesses generator-specific output directories.
+if(SHERPA_ENGINE_LIBRARY_TYPE STREQUAL "STATIC")
+  set(_bundle sherpa_engine)
+  foreach(_t ${SHERPA_COMMON_TARGET} llama-common-base cpp-httplib vendor-hash llama ggml ggml-base ggml-cpu
+             ggml-metal ggml-blas mtmd)
+    if(TARGET ${_t})
+      get_target_property(_ty ${_t} TYPE)
+      if(_ty STREQUAL "STATIC_LIBRARY")
+        list(APPEND _bundle ${_t})
+      endif()
+    endif()
+  endforeach()
+  set(_bundle_files "")
+  foreach(_t IN LISTS _bundle)
+    list(APPEND _bundle_files "$<TARGET_FILE:${_t}>")
+  endforeach()
+  file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/sherpa-static-libs-$<CONFIG>.txt"
+       CONTENT "$<JOIN:${_bundle_files},\n>\n")
+  add_custom_target(sherpa_engine_bundle DEPENDS ${_bundle})
+endif()
+
 # ---- host tests -----------------------------------------------------------------------------------------
 if(SHERPA_ENGINE_TESTS)
   enable_testing()
@@ -201,10 +226,12 @@ if(SHERPA_ENGINE_TESTS)
                      "${CMAKE_CURRENT_LIST_DIR}/tests/make_test_lora.py" "${LLAMA_CPP_SRC}" "${SHERPA_TEST_MODEL}" "${_lora}")
     set_tests_properties(make_test_lora PROPERTIES FIXTURES_SETUP lora)
     add_test(NAME engine COMMAND sherpa_engine_tests --model "${SHERPA_TEST_MODEL}" --lora "${_lora}"
-                                                     --tmp "${CMAKE_BINARY_DIR}")
+                                                     --threads ${SHERPA_TEST_THREADS} --tmp "${CMAKE_BINARY_DIR}"
+                                                     --bench-json "${CMAKE_BINARY_DIR}/bench.json")
     set_tests_properties(engine PROPERTIES FIXTURES_REQUIRED lora)
   else()
-    add_test(NAME engine COMMAND sherpa_engine_tests --model "${SHERPA_TEST_MODEL}" --tmp "${CMAKE_BINARY_DIR}")
+    add_test(NAME engine COMMAND sherpa_engine_tests --model "${SHERPA_TEST_MODEL}" --threads ${SHERPA_TEST_THREADS}
+                                                     --tmp "${CMAKE_BINARY_DIR}" --bench-json "${CMAKE_BINARY_DIR}/bench.json")
   endif()
   set_tests_properties(engine PROPERTIES TIMEOUT 3600)
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/testdata")

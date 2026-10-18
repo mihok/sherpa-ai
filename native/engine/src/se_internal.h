@@ -234,10 +234,10 @@ struct ThreadPools {
 // ---------------------------------------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------------------------------------
-struct SpecStats {
-  int64_t n_drafted = 0;
-  int64_t n_accepted = 0;
-  int64_t n_auto_disabled = 0;
+struct SpecStats {  // written by the worker, read by se_session_info_json at any time
+  std::atomic<int64_t> n_drafted{0};
+  std::atomic<int64_t> n_accepted{0};
+  std::atomic<int64_t> n_auto_disabled{0};
 };
 
 struct SessionImpl {

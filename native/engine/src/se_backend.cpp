@@ -407,7 +407,7 @@ std::string system_info_json() {
   sup["mlock"]       = llama_supports_mlock();
   sup["gpu_offload"] = llama_supports_gpu_offload();
   j["supports"] = sup;
-  return j.dump();
+  return j.dump_safe();  // dump() throws on invalid UTF-8 (common/json.h); never fail a report on it
 }
 
 }  // namespace se

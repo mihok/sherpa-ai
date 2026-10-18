@@ -47,7 +47,7 @@ bool boolean(const common_json & j, const char * key, bool def) {
 }  // namespace
 
 ChatRequest parse_chat_request(const ModelImpl & m, const char * json) {
-  if (m.vocab_only && !m.tmpls) fail(SE_ERR_TEMPLATE, "model has no usable chat template");
+  if (!m.tmpls) fail(SE_ERR_TEMPLATE, "model has no usable chat template: " + m.tmpl_error);
   const common_json body = parse_json_object(json, "request");
   ChatRequest r;
   common_chat_templates_inputs & in = r.inputs;
@@ -468,6 +468,7 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
       pe.ev.progress_done  = (int32_t) keep;
       pe.ev.progress_total = n_prompt;
       emit(std::move(pe));
+      // Chunks of at most n_batch tokens: llama_decode GGML_ASSERTs n_tokens <= n_batch (llama-context.cpp:1785).
       for (size_t i = keep; i < end; i += n_batch) {
         if (cancel.load()) fail(SE_ERR_CANCELLED, "cancelled");
         const size_t e = std::min(end, i + n_batch);
@@ -513,8 +514,8 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
       if (feed_dft && n_dft_synced != n_past) feed_dft = spec_on = false;
       if (spec_on) {
         int64_t room = (int64_t) n_ctx_seq - (int64_t) n_past - 1;
-        room = std::min<int64_t>(room, (int64_t) n_outputs_max - 1);  // outputs per decode (GGML_ASSERT)
-        room = std::min<int64_t>(room, (int64_t) n_batch - 1);        // tokens per decode (GGML_ASSERT)
+        room = std::min<int64_t>(room, (int64_t) n_outputs_max - 1);  // outputs/decode: GGML_ASSERT llama-context.cpp:2273
+        room = std::min<int64_t>(room, (int64_t) n_batch - 1);        // tokens/decode: GGML_ASSERT llama-context.cpp:1785
         room = std::min<int64_t>(room, n_draft_max);
         if (req.max_tokens >= 0) room = std::min<int64_t>(room, (int64_t) req.max_tokens - n_gen - 1);
         if (room >= 1) {
@@ -625,7 +626,7 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
       if (spec_on && params.spec_min_accept > 0 && gen_drafted >= params.spec_min_drafted &&
           (double) gen_accepted < params.spec_min_accept * (double) gen_drafted) {
         spec_on = false;
-        spec_stats.n_auto_disabled++;
+        spec_stats.n_auto_disabled.fetch_add(1);
         log(SE_LOG_INFO, "speculative decoding disabled for this reply (accepted %lld/%lld)\n",
             (long long) gen_accepted, (long long) gen_drafted);
       }
@@ -653,6 +654,8 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
   try {
     common_chat_msg final_msg;
     final_msg.role = "assistant";
+    // A reply cut by max_tokens / cancel can end inside a multi-byte character; never emit half of it.
+    text.resize(utf8_complete_prefix(text));
     if (parser_ready) {
       // A reply cut by max_tokens or cancellation may end inside a tool call: parse it as partial.
       const bool partial = finish != SE_FINISH_STOP;
@@ -672,11 +675,15 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
       out.update(final_msg, true);
       final_msg = out.prev;
     }
-    for (size_t i = 0; i < final_msg.tool_calls.size(); ++i) {
-      const auto & tc = final_msg.tool_calls[i];
-      out.send(SE_EVENT_TOOL_CALL_DONE, tc.arguments, (int32_t) i, tc.id, tc.name);
+    // DONE promises a complete call. A reply cut by max_tokens / cancel / error may end inside the
+    // arguments; those partial calls are only in FINISH's message JSON.
+    if (finish == SE_FINISH_STOP) {
+      for (size_t i = 0; i < final_msg.tool_calls.size(); ++i) {
+        const auto & tc = final_msg.tool_calls[i];
+        out.send(SE_EVENT_TOOL_CALL_DONE, tc.arguments, (int32_t) i, tc.id, tc.name);
+      }
+      if (!final_msg.tool_calls.empty()) finish = SE_FINISH_TOOL_CALLS;
     }
-    if (finish == SE_FINISH_STOP && !final_msg.tool_calls.empty()) finish = SE_FINISH_TOOL_CALLS;
     if (err != SE_OK) {
       Event e;
       e.ev.type = SE_EVENT_ERROR;
@@ -708,15 +715,15 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
       p.name                 = backend_label();
       emit(std::move(p));
     }
-    spec_stats.n_drafted  += drafted;
-    spec_stats.n_accepted += accepted;
+    spec_stats.n_drafted.fetch_add(drafted);
+    spec_stats.n_accepted.fetch_add(accepted);
     {
       Event f;
       f.ev.type = SE_EVENT_FINISH;
       f.ev.code = finish;
       f.name    = finish == SE_FINISH_STOP ? "stop" : finish == SE_FINISH_LENGTH ? "length"
                 : finish == SE_FINISH_TOOL_CALLS ? "tool_calls" : finish == SE_FINISH_CANCELLED ? "cancelled" : "error";
-      f.text    = final_msg.to_json_oaicompat().dump();
+      f.text    = final_msg.to_json_oaicompat().dump_safe();  // model output may hold invalid UTF-8
       emit(std::move(f));
     }
   } catch (...) {

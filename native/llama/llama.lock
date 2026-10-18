@@ -1,0 +1,54 @@
+# Sherpa native dependency pins (plan of record: docs/PLAN.md "Local inference engine", R05 §7).
+#
+# Format: shell-sourceable KEY=VALUE lines (no spaces around '=', no quotes needed).
+# Consumers: native/llama/fetch.sh, build_android.sh, build_ios.sh (source this file) and
+# native/engine/CMakeLists.txt (parses LLAMA_COMMIT / LLAMA_TREE_SHA256 with file(STRINGS)).
+#
+# Bumping llama.cpp: change LLAMA_COMMIT, re-run `fetch.sh --print-tree-hash <tree>` on the new tree and
+# update LLAMA_TREE_SHA256, re-verify docs/research/04 §12/§15 (chat parsers + speculative API churn), then
+# re-run native/engine tests. The PyPI mirror is only valid while some llama-cpp-python release vendors
+# exactly LLAMA_COMMIT; clear LLAMA_PYPI_* when it no longer does.
+
+# --- llama.cpp -------------------------------------------------------------------------------------------
+LLAMA_COMMIT=0c1e57098bba43ac29e6e3b677cdceebdd22334f
+LLAMA_COMMIT_DATE=2026-10-01
+LLAMA_VERSION=0.5.0-dev
+GGML_VERSION=0.25.3
+# Content hash of the build-relevant part of the tree (see tree_hash() in fetch.sh: sorted sha256sum
+# lines of CMakeLists.txt LICENSE cmake common ggml include src vendor tools/mtmd licenses, excluding .git).
+# Every source path (override, cache, GitHub tarball, PyPI sdist) is verified against this, because
+# GitHub's generated archive bytes are not guaranteed stable and could not be fetched when pinning.
+LLAMA_TREE_SHA256=390f5ce237c6171540e3ab76c1a4b72c9ed70da2e338e90346405fd00de10537
+LLAMA_GITHUB_TARBALL_URL=https://github.com/ggml-org/llama.cpp/archive/0c1e57098bba43ac29e6e3b677cdceebdd22334f.tar.gz
+# Unknown at pin time (github.com unreachable from the pinning host). fetch.sh prints the observed hash
+# on first download; record it here. Empty = rely on LLAMA_TREE_SHA256 only.
+LLAMA_GITHUB_TARBALL_SHA256=
+# PyPI sdist mirror: llama-cpp-python 0.3.36 vendors llama.cpp at exactly LLAMA_COMMIT.
+LLAMA_PYPI_SDIST_URL=https://files.pythonhosted.org/packages/ec/e9/e7de2b0463ea3ffbf0ede6cb21b58c1258a8f6521aae45ca773a59fe7cf3/llama_cpp_python-0.3.36.tar.gz
+LLAMA_PYPI_SDIST_SHA256=832db0699007f1be95a7e41ef12e88926b02ba836461e36a36372db2760c1a2e
+LLAMA_PYPI_SDIST_SIZE=76589250
+LLAMA_PYPI_SDIST_SUBDIR=llama_cpp_python-0.3.36/vendor/llama.cpp
+
+# --- KleidiAI (Arm microkernels, linked into every Android CPU variant) -----------------------------------
+# Upstream pins v1.24.0 by MD5 in ggml/src/ggml-cpu/CMakeLists.txt:648-650 and fetches it at *configure*
+# time; we pre-fetch and pass FETCHCONTENT_SOURCE_DIR_KLEIDIAI so CMake never touches the network (R05 §4.4).
+KLEIDIAI_VERSION=v1.24.0
+KLEIDIAI_URL=https://gitlab.arm.com/kleidi/kleidiai/-/archive/v1.24.0/kleidiai-v1.24.0.tar.gz
+KLEIDIAI_URL_FALLBACK=https://github.com/ARM-software/kleidiai/archive/refs/tags/v1.24.0.tar.gz
+KLEIDIAI_SHA256=9348b969e042d8890a54b01a463dbe71f5a4c074b5329e9c26a85ef3b68aa19b
+KLEIDIAI_MD5=2f02ebe29573d45813e671eb304f2a00
+KLEIDIAI_TREE_SHA256=11f216d59fd6d066c26346ca0c05dfce9b21000cd9c481aac3942de557b1de79
+
+# --- Toolchains ---------------------------------------------------------------------------------------------
+# NDK r29 matches upstream CI (.github/workflows/build-android.yml:99); r28+ link 16 KB-aligned by default.
+ANDROID_NDK_VERSION=29.0.14206865
+ANDROID_CMAKE_VERSION=3.31.6
+ANDROID_ABI=arm64-v8a
+# minSdk 29 per docs/PLAN.md §4 (EXP-A showed the tree compiles down to android-24).
+ANDROID_PLATFORM=29
+# Stripped (--strip-unneeded) arm64-v8a payload budget for the CI size gate, in bytes (R05 §8.8 said 14 MB
+# for llama+ggml only; Sherpa also links llama-common (chat/tool parsers, sampler, speculative) into
+# libsherpa_engine.so).
+ANDROID_SIZE_BUDGET_BYTES=16777216
+IOS_DEPLOYMENT_TARGET=17.0
+XCODE_VERSION=26.4

@@ -1,0 +1,4 @@
+# The repo-wide "*.lock" rule (root .gitignore) would hide the dependency pins; they must be committed.
+!llama.lock
+# Build outputs of build_android.sh / build_ios.sh (CI publishes them as artifacts).
+/out/

@@ -7,6 +7,10 @@
 
 #include <fstream>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 namespace se {
 
 ModelImpl::~ModelImpl() {
@@ -157,37 +161,41 @@ std::string build_model_info(ModelImpl & m) {
   j["n_params"]     = (uint64_t) llama_model_n_params(model);
   j["size_bytes"]   = (uint64_t) llama_model_size(model);
   j["n_ctx_train"]  = llama_model_n_ctx_train(model);
-  j["n_embd"]       = llama_model_n_embd(model);
-  j["n_layer"]      = llama_model_n_layer(model);
-  j["n_head"]       = llama_model_n_head(model);
-  const int32_t n_head_kv = llama_model_n_head_kv(model);
-  j["n_head_kv"]    = n_head_kv;
-  // head_dim must come from <arch>.attention.key_length: n_embd/n_head is wrong for Qwen3 (64 vs 128,
-  // R04 §6).
-  const int64_t n_head = std::max<int32_t>(1, llama_model_n_head(model));
-  const int64_t key_len = meta_int(model, arch + ".attention.key_length", llama_model_n_embd(model) / n_head);
-  const int64_t val_len = meta_int(model, arch + ".attention.value_length", key_len);
-  j["key_length"]     = key_len;
-  j["value_length"]   = val_len;
-  j["sliding_window"] = llama_model_n_swa(model);
-  j["n_layer_nextn"]  = llama_model_n_layer_nextn(model);
-  j["mtp_loaded"]     = m.mtp_loaded;
-  j["n_vocab"]        = llama_vocab_n_tokens(m.vocab);
-  j["is_recurrent"]   = llama_model_is_recurrent(model);
-  j["is_hybrid"]      = llama_model_is_hybrid(model);
-  j["has_encoder"]    = llama_model_has_encoder(model);
-  j["add_bos"]        = llama_vocab_get_add_bos(m.vocab);
+  j["n_vocab"]      = llama_vocab_n_tokens(m.vocab);
+  j["add_bos"]      = llama_vocab_get_add_bos(m.vocab);
+  // A vocab-only model has no layers: llama_model_n_head()/n_head_kv() index per-layer arrays and
+  // GGML_ABORT for il >= n_layer (src/llama-hparams.cpp:50-56), killing the process. Skip the shape.
+  if (!m.vocab_only) {
+    j["n_embd"]       = llama_model_n_embd(model);
+    j["n_layer"]      = llama_model_n_layer(model);
+    j["n_head"]       = llama_model_n_head(model);
+    const int32_t n_head_kv = llama_model_n_head_kv(model);
+    j["n_head_kv"]    = n_head_kv;
+    // head_dim must come from <arch>.attention.key_length: n_embd/n_head is wrong for Qwen3 (64 vs 128,
+    // R04 §6).
+    const int64_t n_head = std::max<int32_t>(1, llama_model_n_head(model));
+    const int64_t key_len = meta_int(model, arch + ".attention.key_length", llama_model_n_embd(model) / n_head);
+    const int64_t val_len = meta_int(model, arch + ".attention.value_length", key_len);
+    j["key_length"]     = key_len;
+    j["value_length"]   = val_len;
+    j["sliding_window"] = llama_model_n_swa(model);
+    j["n_layer_nextn"]  = llama_model_n_layer_nextn(model);
+    j["mtp_loaded"]     = m.mtp_loaded;
+    j["is_recurrent"]   = llama_model_is_recurrent(model);
+    j["is_hybrid"]      = llama_model_is_hybrid(model);
+    j["has_encoder"]    = llama_model_has_encoder(model);
 
-  // KV bytes per token, plain formula (UI hint only: SWA/MLA/recurrent/per-layer head counts differ;
-  // se_estimate_memory runs the real dry run).
-  {
-    common_json kv = common_json::object();
-    const int64_t n_layer = llama_model_n_layer(model);
-    for (ggml_type t : {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
-      const uint64_t per = (uint64_t) n_layer * (kv_row_bytes(t, n_head_kv * key_len) + kv_row_bytes(t, n_head_kv * val_len));
-      kv[ggml_type_name(t)] = per;
+    // KV bytes per token, plain formula (UI hint only: SWA/MLA/recurrent/per-layer head counts differ;
+    // se_estimate_memory runs the real dry run).
+    {
+      common_json kv = common_json::object();
+      const int64_t n_layer = llama_model_n_layer(model);
+      for (ggml_type t : {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+        const uint64_t per = (uint64_t) n_layer * (kv_row_bytes(t, n_head_kv * key_len) + kv_row_bytes(t, n_head_kv * val_len));
+        kv[ggml_type_name(t)] = per;
+      }
+      j["kv_bytes_per_token"] = kv;
     }
-    j["kv_bytes_per_token"] = kv;
   }
 
   // End-of-generation tokens.
@@ -259,7 +267,7 @@ std::string build_model_info(ModelImpl & m) {
 #endif
     j["mmproj"] = mm;
   }
-  return j.dump();
+  return j.dump_safe();  // GGUF metadata strings are untrusted: replace bad UTF-8 instead of throwing
 }
 
 namespace {
@@ -295,6 +303,11 @@ llama_model_params to_llama_params(const se_model_params & mp) {
   lp.check_tensors   = mp.check_tensors != 0;
   lp.vocab_only      = mp.vocab_only != 0;
   lp.load_mtp        = mp.load_mtp != 0;
+#if defined(TARGET_OS_SIMULATOR) && TARGET_OS_SIMULATOR
+  // The iOS simulator's Metal is not a usable inference GPU; upstream's llama.swiftui forces n_gpu_layers
+  // = 0 there too (examples/llama.swiftui LibLlama.swift:66-69, R05 §5.1).
+  lp.n_gpu_layers = 0;
+#endif
   return lp;
 }
 

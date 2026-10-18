@@ -94,6 +94,20 @@ struct Gen {
   json final_msg() const { return json::parse(final_json); }
 };
 
+bool valid_utf8(const std::string & s) {
+  size_t i = 0;
+  while (i < s.size()) {
+    const unsigned char c = (unsigned char) s[i];
+    size_t n = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 0;
+    if (n == 0 || i + n > s.size()) return false;
+    for (size_t k = 1; k < n; ++k) {
+      if (((unsigned char) s[i + k] & 0xC0) != 0x80) return false;
+    }
+    i += n;
+  }
+  return true;
+}
+
 void absorb(Gen & g, const se_event & e) {
   Ev c{e.type, e.index, e.code, e.generation_id, std::string(e.text, e.text_len), e.id, e.name};
   switch (e.type) {
@@ -136,7 +150,11 @@ Gen run(se_session * s, const json & req, int poll_sleep_ms = 0, int max_events 
   uint32_t id = 0;
   EXPECT_OK(se_generate_start(s, req.dump().c_str(), &id));
   Gen g = drain(s, poll_sleep_ms, max_events);
-  for (auto & e : g.events) EXPECT_EQ(e.gen, id);
+  for (auto & e : g.events) {
+    EXPECT_EQ(e.gen, id);
+    EXPECT(valid_utf8(e.text));  // the engine only emits complete code points
+  }
+  EXPECT(json::parse(g.final_json).is_object());
   return g;
 }
 
@@ -478,6 +496,15 @@ void test_tool_call() {
   EXPECT_EQ(fin["tool_calls"][0]["function"]["name"].get<std::string>(), std::string("get_weather"));
   std::printf("    tool call %s get_weather(%s)\n", done_id.c_str(), done_args.c_str());
 
+  // A call cut by max_tokens is not reported as DONE (only partially, in FINISH's message JSON).
+  se_session * cut = make_session(g_m, [](se_session_params & p) { p.n_ctx = 1024; });
+  json short_req = req;
+  short_req["max_tokens"] = 10;
+  const Gen gcut = run(cut, short_req);
+  EXPECT_EQ(gcut.finish, (int) SE_FINISH_LENGTH);
+  EXPECT_EQ(gcut.count(SE_EVENT_TOOL_CALL_DONE), 0);
+  se_session_free(cut);
+
   // Round trip: feed the tool result back; the model answers in text.
   json req2 = req;
   req2["messages"].push_back(fin);
@@ -487,6 +514,23 @@ void test_tool_call() {
   EXPECT(g2.finish == SE_FINISH_STOP || g2.finish == SE_FINISH_TOOL_CALLS);
   EXPECT(g2.cached > 0);  // the first turn is reused
   std::printf("    after tool result (%d/%d prompt tokens cached): %s\n", g2.cached, g2.prompt, g2.text.c_str());
+  se_session_free(s);
+}
+
+void test_utf8_stream() {
+  // Multi-byte characters split across tokens (R04 §7) and replies cut inside them by max_tokens.
+  se_session * s = make_session(g_m, [](se_session_params & p) { p.n_ctx = 1024; });
+  json req = chat({msg("user", "Reply with five mountain emoji and the word Everest in Japanese, nothing else.")});
+  req["enable_thinking"] = false;
+  std::string full;
+  for (int max_tokens : {1, 2, 3, 5, 7, 40}) {
+    req["max_tokens"] = max_tokens;
+    EXPECT_OK(se_session_reset(s));
+    const Gen g = run(s, req);  // run() checks every event for valid UTF-8
+    EXPECT_EQ(g.final_msg()["content"].get<std::string>(), g.text);
+    full = g.text;
+  }
+  std::printf("    reply: %s\n", full.c_str());
   se_session_free(s);
 }
 
@@ -529,23 +573,26 @@ void test_prefix_cache() {
   EXPECT(gb.cached >= ga.prompt - 8);
   EXPECT(gb.cached <= gb.prompt - 1);
 
-  // The same request on a cold session.
+  // The same request on a cold session. The texts are not compared: llama.cpp's batched kernels
+  // accumulate in a different order for different prefill splits (cold: one pass, warm: prefix from
+  // turn 1 + suffix), so greedy outputs may legitimately diverge after a few tokens. Bit-identical
+  // continuations are only guaranteed for identical KV bytes (see state_roundtrip) or identical splits.
   se_session * cold = make_session(g_m);
   const Gen gc = run(cold, b);
   EXPECT_EQ(gc.cached, 0);
-  EXPECT_EQ(gc.text, gb.text);  // greedy: cache reuse does not change the output
+  EXPECT(!gb.text.empty() && !gc.text.empty());
   EXPECT(gb.ttft < gc.ttft);
   std::printf("    turn 1: %d prompt tokens, ttft %.1f ms | turn 2: %d/%d cached, ttft %.1f ms (cold: %.1f ms)\n",
               ga.prompt, ga.ttft, gb.cached, gb.prompt, gb.ttft, gc.ttft);
   g_bench.push_back({"long prompt, cold", gc.ttft, gc.prefill_tps, gc.decode_tps, 0, gc.prompt, gc.cached, gc.completion});
   g_bench.push_back({"long prompt, prefix cache", gb.ttft, gb.prefill_tps, gb.decode_tps, 0, gb.prompt, gb.cached, gb.completion});
 
-  // cache_prompt = false forces a full prefill.
+  // cache_prompt = false forces a full prefill: same split as the cold session, so identical output.
   json nb = b;
   nb["cache_prompt"] = false;
   const Gen gn = run(s, nb);
   EXPECT_EQ(gn.cached, 0);
-  EXPECT_EQ(gn.text, gb.text);
+  EXPECT_EQ(gn.text, gc.text);
   // se_session_reset drops the cache.
   EXPECT_OK(se_session_reset(s));
   const Gen gr = run(s, a);
@@ -634,11 +681,12 @@ void test_cancel() {
   EXPECT_EQ(json::parse(g.final_json)["content"].get<std::string>(), g.text);
   std::printf("    cancel during decode -> FINISH(cancelled) in %.1f ms after %d tokens\n", ms, g.completion);
 
-  // Cancel during a long prefill: the abort callback stops llama_decode mid-chunk.
-  se_session * s2 = make_session(g_m, [](se_session_params & p) { p.n_batch = 2048; p.n_ubatch = 512; });
+  // Cancel inside one long llama_decode call (one 2048-token chunk): only ggml's abort callback can stop
+  // it early, between graph nodes.
   std::string longp = long_system_prompt() + long_system_prompt() + long_system_prompt();
   json r2 = chat({msg("system", longp), msg("user", "Summarise the rules.")});
   r2["enable_thinking"] = false;
+  se_session * s2 = make_session(g_m, [](se_session_params & p) { p.n_batch = 2048; p.n_ubatch = 512; });
   EXPECT_OK(se_generate_start(s2, r2.dump().c_str(), nullptr));
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
   const auto t2 = Clock::now();
@@ -647,13 +695,29 @@ void test_cancel() {
   const double ms2 = std::chrono::duration<double, std::milli>(Clock::now() - t2).count();
   EXPECT_EQ(g2.finish, (int) SE_FINISH_CANCELLED);
   EXPECT(ms2 < 200.0);
-  std::printf("    cancel during prefill (%d prompt tokens) -> FINISH(cancelled) in %.1f ms\n", g2.prompt, ms2);
-  // Work done before the cancel is kept: the next run reuses the decoded prefix.
-  r2["max_tokens"] = 4;
-  const Gen g3 = run(s2, r2);
-  EXPECT(g3.cached > 0);
-  std::printf("    after the cancelled prefill, %d/%d prompt tokens were reused\n", g3.cached, g3.prompt);
+  std::printf("    cancel inside a 2048-token prefill chunk (%d prompt tokens) -> FINISH(cancelled) in %.1f ms\n",
+              g2.prompt, ms2);
   se_session_free(s2);
+
+  // Cancel between 256-token chunks: the chunks already decoded stay in the KV cache and the next
+  // request reuses them (the history is re-derived from llama_memory_seq_pos_max after the abort).
+  se_session * s3 = make_session(g_m, [](se_session_params & p) { p.n_batch = 256; p.n_ubatch = 256; });
+  EXPECT_OK(se_generate_start(s3, r2.dump().c_str(), nullptr));
+  int done_at_cancel = 0;
+  const Gen g3 = drain(s3, 0, 0, [&](Gen &, const se_event & e) {
+    if (e.type == SE_EVENT_PROMPT_PROGRESS && e.progress_done >= 256 && done_at_cancel == 0) {
+      done_at_cancel = e.progress_done;
+      se_cancel(s3);
+    }
+  });
+  EXPECT_EQ(g3.finish, (int) SE_FINISH_CANCELLED);
+  EXPECT(done_at_cancel >= 256);
+  r2["max_tokens"] = 4;
+  const Gen g4 = run(s3, r2);
+  EXPECT(g4.cached >= done_at_cancel);
+  std::printf("    cancel after %d prefilled tokens; the next request reused %d/%d prompt tokens\n", done_at_cancel,
+              g4.cached, g4.prompt);
+  se_session_free(s3);
   se_session_free(s);
 }
 
@@ -739,20 +803,68 @@ void test_speculative() {
   EXPECT_EQ(g2.drafted, 0);
   EXPECT_EQ(g2.text, g0.text);
 
-  // Prose with few repeats: acceptance stays low and the auto-disable keeps the output identical.
+  // Prose with few repeats: acceptance is low and speculation switches itself off. The texts are not
+  // required to match here: verifying k drafts runs a (k+1)-token batch, whose kernels accumulate in a
+  // different order than single-token decode, and near-ties in prose can flip a greedy choice.
   json prose = chat({msg("user", "Write four sentences about mountain weather.")});
   prose["enable_thinking"] = false;
   prose["max_tokens"] = 96;
+  EXPECT_OK(se_session_reset(base));
   const Gen p0 = run(base, prose);
   EXPECT_OK(se_session_reset(spec));
   const Gen p1 = run(spec, prose);
-  EXPECT_EQ(p1.text, p0.text);
+  EXPECT(p1.finish == SE_FINISH_STOP || p1.finish == SE_FINISH_LENGTH);
+  size_t same = 0;
+  while (same < p0.text.size() && same < p1.text.size() && p0.text[same] == p1.text[same]) ++same;
+  std::printf("    prose: identical for the first %zu of %zu chars\n", same, p0.text.size());
   g_bench.push_back({"prose, no speculation", p0.ttft, p0.prefill_tps, p0.decode_tps, 0, p0.prompt, p0.cached, p0.completion});
   g_bench.push_back({"prose, ngram-mod", p1.ttft, p1.prefill_tps, p1.decode_tps, p1.accept_rate, p1.prompt, p1.cached, p1.completion});
   std::printf("    prose: drafted %d accepted %d; info %s\n", p1.drafted, p1.accepted,
               json::parse(session_info(spec))["speculative"].dump().c_str());
   se_session_free(spec);
   se_session_free(base);
+}
+
+void test_speculative_draft() {
+  // Draft-model speculation with the target itself as the draft (R04 PROBE-5: 100% acceptance), which
+  // exercises the draft-context lockstep (common_speculative_process), its prompt-cache reuse and the
+  // KV rollback after partial acceptance.
+  se_model_params mp;
+  se_model_params_init(&mp);
+  mp.draft_model_path = g_model.c_str();
+  se_model * m = nullptr;
+  EXPECT_OK(se_model_load(g_model.c_str(), &mp, &m));
+  EXPECT(json::parse(model_info(m))["draft_model"]["present"].get<bool>());
+  se_session * s = make_session(m, [](se_session_params & p) { p.spec_type = SE_SPEC_DRAFT; p.spec_n_max = 6; });
+  se_session * base = make_session(g_m);
+  const std::string payload = R"({"city": "Paris", "temp_c": 21, "wind": "NW 12 km/h"})";
+  json req = chat({msg("user", "Copy this JSON exactly twice, one copy per line, nothing else:\n" + payload)});
+  req["enable_thinking"] = false;
+  req["max_tokens"] = 80;
+  const Gen g0 = run(base, req);
+  const Gen g1 = run(s, req);
+  EXPECT(g1.drafted > 0);
+  EXPECT(g1.accept_rate > 0.5);
+  EXPECT_EQ(g1.text, g0.text);
+  // Second turn: both the target and the draft context reuse the cached prefix.
+  json req2 = req;
+  req2["messages"].push_back(json::parse(g1.final_json));
+  req2["messages"].push_back(msg("user", "Now once more."));
+  const Gen g2 = run(s, req2);
+  EXPECT(g2.cached > 0);
+  EXPECT(g2.drafted > 0);
+  std::printf("    draft model: drafted %d accepted %d (%.0f%%), decode %.1f tok/s (no spec %.1f); turn 2 cached %d/%d\n",
+              g1.drafted, g1.accepted, 100.0 * g1.accept_rate, g1.decode_tps, g0.decode_tps, g2.cached, g2.prompt);
+  g_bench.push_back({"repetitive JSON, draft model (=target)", g1.ttft, g1.prefill_tps, g1.decode_tps, g1.accept_rate,
+                     g1.prompt, g1.cached, g1.completion});
+  se_memory_estimate mem;
+  std::memset(&mem, 0, sizeof mem);
+  mem.struct_size = sizeof mem;
+  EXPECT_OK(se_session_memory(s, &mem));
+  std::printf("    session memory incl. draft: %.1f MiB\n", mem.total_bytes / 1048576.0);
+  se_session_free(base);
+  se_session_free(s);
+  se_model_free(m);
 }
 
 void test_lora() {
@@ -811,6 +923,7 @@ void test_handles_lifetime() {
   se_model_params_init(&mp);
   mp.vocab_only = 1;
   EXPECT_OK(se_model_load(g_model.c_str(), &mp, &m));
+  EXPECT(json::parse(model_info(m))["vocab_only"].get<bool>());  // no per-layer queries (GGML_ABORT)
   EXPECT(se_count_chat_tokens(m, chat({msg("user", "hello")}).dump().c_str()) > 0);
   se_session_params sp;
   se_session_params_init(&sp);
@@ -890,10 +1003,11 @@ int main(int argc, char ** argv) {
       {"abi_version", test_abi_version},       {"error_paths", test_error_paths},
       {"model_info", test_model_info},         {"memory_estimate", test_memory_estimate},
       {"plain_chat", test_plain_chat},         {"tool_call", test_tool_call},
-      {"reasoning", test_reasoning},           {"prefix_cache", test_prefix_cache},
+      {"utf8_stream", test_utf8_stream},       {"reasoning", test_reasoning},           {"prefix_cache", test_prefix_cache},
       {"state_roundtrip", test_state_roundtrip}, {"cancel", test_cancel},
       {"backpressure", test_backpressure},     {"kv_quant", test_kv_quant},
-      {"speculative", test_speculative},       {"lora", test_lora},
+      {"speculative", test_speculative},       {"speculative_draft", test_speculative_draft},
+      {"lora", test_lora},
       {"handles_lifetime", test_handles_lifetime}, {"bench_api", test_bench_api},
   };
   for (const auto & t : tests) {

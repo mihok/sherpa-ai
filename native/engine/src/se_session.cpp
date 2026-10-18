@@ -417,14 +417,17 @@ std::string SessionImpl::info_json(bool idle) {
   j["type_v"]          = ggml_type_label(params.type_v);
   j["flash_attn"]      = flash_attn_resolved;
   j["swa_full"]        = params.swa_full != 0;
+  // "prefix": LCP reuse of the KV cache; "full_only": recurrent/hybrid memory cannot drop a suffix, so a
+  // changed prompt is re-prefilled (no PARTIAL_ONLY checkpoints yet, R04 §17).
+  j["prompt_cache"]    = can_partial_rm ? "prefix" : "full_only";
   j["backend"]         = backend_label();
   common_json sp = common_json::object();
   sp["type"] = spec_type == SE_SPEC_NGRAM_MOD ? "ngram-mod" : spec_type == SE_SPEC_DRAFT ? "draft"
              : spec_type == SE_SPEC_MTP ? "mtp" : "none";
   sp["n_max"]          = n_draft_max;
-  sp["n_drafted"]      = spec_stats.n_drafted;
-  sp["n_accepted"]     = spec_stats.n_accepted;
-  sp["auto_disabled"]  = spec_stats.n_auto_disabled;
+  sp["n_drafted"]      = spec_stats.n_drafted.load();
+  sp["n_accepted"]     = spec_stats.n_accepted.load();
+  sp["auto_disabled"]  = spec_stats.n_auto_disabled.load();
   j["speculative"] = sp;
   common_json lo = common_json::array();
   for (size_t i = 0; i < loras.size(); ++i) {
@@ -447,7 +450,7 @@ std::string SessionImpl::info_json(bool idle) {
     mj["total_bytes"]   = m.total_bytes;
     j["memory"] = mj;
   }
-  return j.dump();
+  return j.dump_safe();
 }
 
 }  // namespace se
