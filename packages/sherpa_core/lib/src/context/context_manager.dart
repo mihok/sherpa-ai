@@ -9,6 +9,7 @@ import '../provider/model_provider.dart';
 import '../session/plan.dart';
 import 'budget.dart';
 import 'overlay.dart';
+import 'window_profile.dart';
 
 @immutable
 final class ContextSettings {
@@ -21,8 +22,21 @@ final class ContextSettings {
     this.staleAfterTurns = 2,
     this.autoCompact = true,
     this.autoHandoff = false,
+    this.profile,
+    this.uncalibratedSafetyFraction = 0.20,
+    this.keepRecentToolCalls = 3,
+    this.smallErrorResultTokens = 300,
+    this.largeToolInputTokens = 1000,
+    this.excludedTools = const <String>{},
+    this.maxSummaryTokens = 1024,
+    this.elideKeepLines = 5,
+    this.handoffAfterCompactions = 3,
+    this.minCompactionGain = 0.20,
+    this.maxPostCompactionRatio = 0.60,
   });
 
+  /// Used by `PassthroughContextManager`. `LadderContextManager` derives
+  /// window-scaled thresholds instead (R11 §9.2) unless [profile] is set.
   final ContextThresholds thresholds;
 
   /// Most recent user turns (and everything after the oldest of them) kept
@@ -42,6 +56,49 @@ final class ContextSettings {
 
   /// When false the manager proposes a handoff instead of performing it.
   final bool autoHandoff;
+
+  /// Overrides the window-scaled ladder parameters (thresholds, kept user
+  /// turns, kept-tail cap) that `LadderContextManager` would derive from
+  /// the R11 §9.2 table. Null = derive from the model window.
+  final WindowProfile? profile;
+
+  /// Margin while a heuristic counter has fewer than 3 calibrations or the
+  /// context is > 25% dense script; [estimateSafetyFraction] applies after.
+  final double uncalibratedSafetyFraction;
+
+  /// Results of this many most recent tool calls are never elided
+  /// (Anthropic `keep=3`, Gemini `RECENT_TURNS_PROTECTED=3`).
+  final int keepRecentToolCalls;
+
+  /// Error results smaller than this are never elided: they are cheap and
+  /// tell the model what not to try again.
+  final int smallErrorResultTokens;
+
+  /// Tool-call arguments above this size (e.g. file-write bodies) are
+  /// cleared in stage 2, keeping keys and `argsDigest`.
+  final int largeToolInputTokens;
+
+  /// Tools whose results are never elided or truncated before compaction
+  /// (by analogy with Gemini's retrieval-tool exemption). Pinning a message
+  /// protects it from everything.
+  final Set<String> excludedTools;
+
+  /// Output budget of a model-written summary; also enters the compact
+  /// trigger formula.
+  final int maxSummaryTokens;
+
+  /// Lines kept at each end of an elided tool result.
+  final int elideKeepLines;
+
+  /// Recommend a handoff once this many compactions accumulated (summaries
+  /// lose detail each time; Codex warns after repeated compaction).
+  final int handoffAfterCompactions;
+
+  /// Recommend a handoff when a compaction frees less than this share of W.
+  final double minCompactionGain;
+
+  /// Recommend a handoff when the ratio after compaction is above this.
+  final double maxPostCompactionRatio;
 }
 
 /// Everything the context manager needs for one model call.
@@ -59,6 +116,8 @@ final class ContextRequest {
     this.memory = MemoryState.unknown,
     this.settings = const ContextSettings(),
     this.cancel,
+    this.boundaryNonce,
+    this.location,
   });
 
   final String sessionId;
@@ -79,6 +138,15 @@ final class ContextRequest {
   final MemoryState memory;
   final ContextSettings settings;
   final CancellationToken? cancel;
+
+  /// Per-session random nonce for the untrusted-data wrapper in summaries
+  /// (R11 §9.7). Null lets the context manager pick one per session; it is
+  /// then persisted inside the summary it renders.
+  final String? boundaryNonce;
+
+  /// Where the model runs; memory pressure only shrinks on-device windows.
+  /// Null falls back to the context manager's configured location.
+  final ExecutionLocation? location;
 }
 
 /// What the model should be sent, plus how we got there.

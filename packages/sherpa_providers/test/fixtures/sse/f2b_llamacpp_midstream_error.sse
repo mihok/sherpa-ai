@@ -1,0 +1,6 @@
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1760780001,"id":"chatcmpl-F2llama","model":"qwen3-8b","system_fingerprint":"b7000-abc1234","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"reasoning_content":"Need weather and time; call both."}}],"created":1760780001,"id":"chatcmpl-F2llama","model":"qwen3-8b","system_fingerprint":"b7000-abc1234","object":"chat.completion.chunk"}
+
+data: {"error":{"code":500,"message":"slot 0 crashed while decoding","type":"server_error"}}
+

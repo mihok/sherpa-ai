@@ -1,0 +1,6 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-OR1","provider":"Anthropic","model":"anthropic/claude-sonnet-5.5","object":"chat.completion.chunk","created":1760780003,"choices":[{"index":0,"delta":{"role":"assistant","content":"Partial"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-OR1","provider":"Anthropic","model":"anthropic/claude-sonnet-5.5","object":"chat.completion.chunk","created":1760780003,"error":{"code":502,"message":"Provider returned error","metadata":{"error_type":"provider_error"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}
+

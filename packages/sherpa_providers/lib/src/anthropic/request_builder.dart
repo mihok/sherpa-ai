@@ -172,13 +172,13 @@ final class AnthropicRequestBuilder {
       'model': request.modelId,
       'max_tokens': maxTokens,
       if (stream) 'stream': true,
-      if (system != null) 'system': system,
+      'system': ?system,
       'messages': [
         for (final turn in turns) {'role': turn.role, 'content': turn.blocks},
       ],
       if (toolsJson.isNotEmpty) 'tools': toolsJson,
-      if (toolChoice != null) 'tool_choice': toolChoice,
-      if (thinking != null) 'thinking': thinking,
+      'tool_choice': ?toolChoice,
+      'thinking': ?thinking,
       if (outputConfig.isNotEmpty) 'output_config': outputConfig,
       if (params.stop.isNotEmpty) 'stop_sequences': params.stop,
       ...sampling,
@@ -345,7 +345,7 @@ final class AnthropicRequestBuilder {
 
   /// Maps one user-side content part to Anthropic blocks (shared by user
   /// turns and tool results).
-  static List<JsonMap> userBlocks(ContentPart p, List<ProviderNotice> notices, {bool inToolResult = false}) {
+  static List<JsonMap> userBlocks(ContentPart p, List<ProviderNotice> notices) {
     switch (p) {
       case TextPart(:final text):
         return text.isEmpty ? const [] : [_text(text)];
@@ -358,9 +358,14 @@ final class AnthropicRequestBuilder {
           data: {'mimeType': p.mimeType},
         ));
         return [_text('[image omitted: ${p.mimeType} ${p.uri ?? ''}]'.trim())];
-      case AudioPart():
-        notices.add(const ProviderNotice('anthropic.content_omitted', 'Audio is not supported by Anthropic models.'));
-        return [_text('[audio omitted: ${p.mimeType}]')];
+      case MediaPart(:final mimeType):
+        // Audio and any future media kind: Anthropic accepts neither.
+        notices.add(ProviderNotice(
+          'anthropic.content_omitted',
+          'An attachment ($mimeType) is not supported by Anthropic models and was replaced by a note.',
+          data: {'mimeType': mimeType},
+        ));
+        return [_text('[attachment omitted: $mimeType]')];
       case ResourceLinkPart(:final uri, :final name, :final title):
         return [_text('[resource: ${title ?? name ?? uri} <$uri>]')];
       case EmbeddedResourcePart(:final uri, :final mimeType, :final text, :final blob):
@@ -555,14 +560,14 @@ final class _MessageRenderer {
     }
     return [
       for (final id in _pending)
-        if (byId[id] case final r?) ...[_answer(id, r)],
+        if (byId[id] case final r?) _answer(id, r),
     ];
   }
 
   JsonMap _answer(String id, ToolResultPart r) {
     _answered.add(id);
     final blocks = [
-      for (final p in r.content) ...AnthropicRequestBuilder.userBlocks(p, notices, inToolResult: true),
+      for (final p in r.content) ...AnthropicRequestBuilder.userBlocks(p, notices),
     ];
     if (blocks.isEmpty && r.structured != null) {
       blocks.add({'type': 'text', 'text': jsonEncode(r.structured)});
@@ -575,7 +580,7 @@ final class _MessageRenderer {
     return {
       'type': 'tool_result',
       'tool_use_id': id,
-      if (content != null) 'content': content,
+      'content': ?content,
       if (r.isError) 'is_error': true,
     };
   }

@@ -1,0 +1,6 @@
+tags:
+  # Pixel goldens: generated and compared on Linux only (fonts and the
+  # software rasterizer differ across hosts).
+  golden: {}
+  # Timing assertions; run alone for stable numbers.
+  benchmark: {}

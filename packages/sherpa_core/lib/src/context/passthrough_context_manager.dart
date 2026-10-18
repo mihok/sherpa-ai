@@ -6,8 +6,10 @@ import '../model/tool.dart';
 import '../provider/capabilities.dart';
 import 'budget.dart';
 import 'context_manager.dart';
+import 'digest.dart';
 import 'overlay.dart';
 import 'part_rewrite.dart';
+import 'turns.dart';
 
 /// The minimal context manager: applies already-recorded overlays, measures
 /// the budget and refuses to overflow. It never creates new overlays; the
@@ -45,19 +47,14 @@ final class PassthroughContextManager implements ContextManager {
 
   /// FNV-1a 64 over the canonical prefix. Not a security hash: it only
   /// detects that the system prompt, tool schemas or overlays changed.
-  static String prefixKeyOf(String? system, List<ToolDefinition> tools, List<ContextOverlay> overlays) {
-    final canonical = jsonEncode({
-      's': system ?? '',
-      't': [for (final t in tools) if (t.modelVisible) [t.name, t.description, t.inputSchema]],
-      'o': [for (final o in overlays) o.id],
-    });
-    var h = 0xcbf29ce484222325;
-    for (final b in utf8.encode(canonical)) {
-      h ^= b;
-      h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF;
-    }
-    return h.toUnsigned(64).toRadixString(16).padLeft(16, '0');
-  }
+  /// Overlay ids are sorted so a store that lists overlays in a different
+  /// order does not look like a rewrite (which would drop reasoning).
+  static String prefixKeyOf(String? system, List<ToolDefinition> tools, List<ContextOverlay> overlays) =>
+      Digest.fnv64(jsonEncode({
+        's': system ?? '',
+        't': [for (final t in tools) if (t.modelVisible) [t.name, t.description, t.inputSchema]],
+        'o': [for (final o in overlays) o.id]..sort(),
+      }));
 
   /// Drops reasoning produced under a different prefix. Providers that bind
   /// thinking to the prefix reject replays after any rewrite; reasoning is
@@ -103,17 +100,12 @@ final class PassthroughContextManager implements ContextManager {
 
   /// Applies elisions, truncations and compactions to the transcript path.
   /// Compacted ranges are replaced by one summary message placed where the
-  /// range started; ranges not on this path are ignored.
+  /// range started; ranges not on this path are ignored. Compaction is
+  /// rolling, so several ranges may share a start: the widest one wins and a
+  /// range that starts inside an applied one is shadowed by it.
   static List<Message> applyOverlays(List<Message> path, List<ContextOverlay> overlays) {
     if (overlays.isEmpty) return path;
-    final index = {for (final (i, m) in path.indexed) m.id: i};
-    final replaceRange = <int, (int, CompactedRange)>{};
-    for (final o in overlays.whereType<CompactedRange>()) {
-      final from = index[o.fromMessageId];
-      final to = index[o.toMessageId];
-      if (from == null || to == null || to < from) continue;
-      replaceRange[from] = (to, o);
-    }
+    final replaceRange = {for (final r in activeCompactions(path, overlays)) r.from: r};
     final elided = {
       for (final o in overlays.whereType<ToolOutputElided>()) '${o.messageId}/${o.callId}': o,
     };
@@ -126,21 +118,18 @@ final class PassthroughContextManager implements ContextManager {
     while (i < path.length) {
       final range = replaceRange[i];
       if (range != null) {
-        final (to, overlay) = range;
-        final first = path[i];
-        out.add(Message(
-          id: 'summary:${overlay.id}',
-          parentId: first.parentId,
-          role: Role.user,
-          kind: MessageKind.summary,
-          pinned: true,
-          createdAt: overlay.createdAt,
-          content: [TextPart(overlay.summary.render())],
-          metadata: {'overlayId': overlay.id},
-        ));
-        // Pinned messages inside a compacted range survive verbatim.
-        for (var k = i; k <= to; k++) {
-          if (path[k].pinned) out.add(path[k]);
+        final (:to, :overlay, from: _) = range;
+        out.add(summaryMessage(overlay, parentId: path[i].parentId));
+        // Pinned messages inside a compacted range survive verbatim, with
+        // the other half of their tool call/result pair.
+        for (final k in compactionSurvivors(path, i, to)) {
+          out.add(path[k].pinned ? path[k] : _applyPartOverlays(path[k], elided, truncated));
+        }
+        // Strict-alternation chat templates reject user→user; a fixed ack
+        // keeps roles alternating (Gemini CLI does the same, R11 §9.3).
+        final next = to + 1 < path.length ? path[to + 1] : null;
+        if (out.last.role == Role.user && (next == null || next.role == Role.user)) {
+          out.add(summaryAck(overlay));
         }
         i = to + 1;
         continue;
@@ -150,6 +139,33 @@ final class PassthroughContextManager implements ContextManager {
     }
     return out;
   }
+
+  /// The synthetic, pinned user message standing in for a compacted range.
+  static Message summaryMessage(CompactedRange overlay, {String? parentId}) => Message(
+        id: 'summary:${overlay.id}',
+        parentId: parentId,
+        role: Role.user,
+        kind: MessageKind.summary,
+        pinned: true,
+        createdAt: overlay.createdAt,
+        content: [TextPart(overlay.summary.render())],
+        metadata: {'overlayId': overlay.id},
+      );
+
+  /// Fixed assistant acknowledgement placed after a summary when the next
+  /// message is a user turn.
+  static Message summaryAck(CompactedRange overlay) => Message(
+        id: 'summary:${overlay.id}:ack',
+        parentId: 'summary:${overlay.id}',
+        role: Role.assistant,
+        kind: MessageKind.summary,
+        pinned: true,
+        createdAt: overlay.createdAt,
+        content: const [TextPart(summaryAckText)],
+        metadata: {'overlayId': overlay.id, 'ack': true},
+      );
+
+  static const String summaryAckText = 'Understood. I will continue from this summary.';
 
   static Message _applyPartOverlays(
     Message m,

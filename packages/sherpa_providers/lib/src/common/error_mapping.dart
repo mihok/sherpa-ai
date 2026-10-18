@@ -46,7 +46,7 @@ final class ErrorDetails {
       extra: {
         if (e['n_prompt_tokens'] != null) 'n_prompt_tokens': e['n_prompt_tokens'],
         if (e['n_ctx'] != null) 'n_ctx': e['n_ctx'],
-        if (metadata?.str('error_type') case final t?) 'error_type': t,
+        'error_type': ?metadata?.str('error_type'),
       },
     );
   }
@@ -106,7 +106,7 @@ const Set<String> _contextLabels = {
 /// Exact overflow messages are UNVERIFIED for OpenAI and Anthropic (R10
 /// §10), so match the phrasings servers are known to use, loosely.
 final RegExp _contextMessage = RegExp(
-  r"context[ _-]?(length|window|size)|maximum context|prompt is too long|too many (input |prompt )?tokens"
+  r'context[ _-]?(length|window|size)|maximum context|prompt is too long|too many (input |prompt )?tokens'
   r"|exceeds? (the )?(available |maximum |model'?s? )?context|input (is )?too long|reduce the length of the (messages|prompt)",
   caseSensitive: false,
 );
@@ -200,7 +200,8 @@ String _describe(ErrorDetails d) {
     if (d.extra['n_prompt_tokens'] != null) 'prompt_tokens=${d.extra['n_prompt_tokens']}',
     if (d.extra['n_ctx'] != null) 'n_ctx=${d.extra['n_ctx']}',
   ];
-  final msg = d.message?.trim() ?? '';
+  var msg = d.message?.trim() ?? '';
+  if (msg.length > 500) msg = '${msg.substring(0, 500)}…';
   return [if (msg.isNotEmpty) msg, if (tags.isNotEmpty) '(${tags.join(', ')})'].join(' ');
 }
 

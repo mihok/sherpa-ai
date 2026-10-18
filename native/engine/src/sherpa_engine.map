@@ -1,0 +1,8 @@
+/* ELF version script: libsherpa_engine.so exports exactly the C ABI. Everything else (common/, the static
+ * llama/ggml archives on the host, libstdc++ inlines) stays local so the library has no accidental C++ ABI. */
+{
+  global:
+    se_*;
+  local:
+    *;
+};

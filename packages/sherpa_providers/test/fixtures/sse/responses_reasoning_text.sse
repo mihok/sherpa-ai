@@ -1,0 +1,39 @@
+event: response.created
+data: {"sequence_number":0,"response":{"id":"resp_T1","object":"response","status":"in_progress","model":"gpt-6-astra","output":[]},"type":"response.created"}
+
+event: response.output_item.added
+data: {"sequence_number":1,"output_index":0,"item":{"type":"reasoning","id":"rs_T1","summary":[]},"type":"response.output_item.added"}
+
+event: response.reasoning_summary_part.added
+data: {"sequence_number":2,"item_id":"rs_T1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""},"type":"response.reasoning_summary_part.added"}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":3,"item_id":"rs_T1","output_index":0,"summary_index":0,"delta":"Plan the answer.","type":"response.reasoning_summary_text.delta"}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":4,"item_id":"rs_T1","output_index":0,"summary_index":1,"delta":"Keep it short.","type":"response.reasoning_summary_text.delta"}
+
+event: response.output_item.done
+data: {"sequence_number":5,"output_index":0,"item":{"type":"reasoning","id":"rs_T1","summary":[{"type":"summary_text","text":"Plan the answer."},{"type":"summary_text","text":"Keep it short."}],"encrypted_content":"gAAAAABoT1enc"},"type":"response.output_item.done"}
+
+event: response.output_item.added
+data: {"sequence_number":6,"output_index":1,"item":{"type":"message","id":"msg_T1","role":"assistant","status":"in_progress","content":[]},"type":"response.output_item.added"}
+
+event: response.content_part.added
+data: {"sequence_number":7,"item_id":"msg_T1","output_index":1,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]},"type":"response.content_part.added"}
+
+event: response.output_text.delta
+data: {"sequence_number":8,"item_id":"msg_T1","output_index":1,"content_index":0,"delta":"Hello","type":"response.output_text.delta"}
+
+event: response.output_text.delta
+data: {"sequence_number":9,"item_id":"msg_T1","output_index":1,"content_index":0,"delta":" there.","type":"response.output_text.delta"}
+
+event: response.output_text.done
+data: {"sequence_number":10,"item_id":"msg_T1","output_index":1,"content_index":0,"text":"Hello there.","type":"response.output_text.done"}
+
+event: response.output_item.done
+data: {"sequence_number":11,"output_index":1,"item":{"type":"message","id":"msg_T1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hello there.","annotations":[]}]},"type":"response.output_item.done"}
+
+event: response.completed
+data: {"sequence_number":12,"response":{"id":"resp_T1","object":"response","status":"completed","model":"gpt-6-astra","usage":{"input_tokens":50,"input_tokens_details":{"cached_tokens":20},"output_tokens":30,"output_tokens_details":{"reasoning_tokens":18},"total_tokens":80}},"type":"response.completed"}
+

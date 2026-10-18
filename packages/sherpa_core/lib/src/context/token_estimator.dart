@@ -17,12 +17,17 @@ const Map<String, double> _charsPerToken = {
   'gemma': 3.5,
   'mistral': 3.4,
   'phi': 3.8,
+  'lfm2': 3.6,
+  'granite': 3.8,
   'default': 3.3,
 };
 
 /// Dense scripts (CJK, Hangul, Kana, emoji) measured at 0.46–1.24 tokens
 /// per character; count the high end.
 const double _denseTokensPerChar = 1.25;
+
+/// First code point counted as dense script (CJK Radicals Supplement).
+const int _denseStart = 0x2E80;
 
 /// Fixed per-message cost for role markers / chat-template scaffolding.
 const int _perMessageOverhead = 6;
@@ -39,7 +44,26 @@ final class HeuristicTokenCounter implements TokenCounter {
       : _ratio = _charsPerToken[family] ?? _charsPerToken['default']!;
 
   double _ratio;
+  int _calibrations = 0;
   double get charsPerToken => _ratio;
+
+  /// How many usage reports have corrected the ratio. The context manager
+  /// keeps a 20% safety margin until this reaches 3 (R11 §9.2).
+  int get calibrationCount => _calibrations;
+
+  /// Share of characters in [text] that are dense-script (CJK, Hangul,
+  /// Kana, emoji). Above 25% the estimate is unreliable and the context
+  /// manager widens its margin (R11 §9.2: 0.46–1.24 tokens per CJK char).
+  static double denseShare(String text) {
+    if (text.isEmpty) return 0;
+    var dense = 0;
+    var total = 0;
+    for (final r in text.runes) {
+      total++;
+      if (r >= _denseStart) dense++;
+    }
+    return dense / total;
+  }
 
   @override
   bool get isExact => false;
@@ -50,7 +74,7 @@ final class HeuristicTokenCounter implements TokenCounter {
     var dense = 0;
     for (final r in text.runes) {
       // CJK, Hangul, Kana and emoji usually cost ≥ 1 token each.
-      if (r >= 0x2E80) dense++;
+      if (r >= _denseStart) dense++;
     }
     final sparse = text.length - dense;
     return (sparse / _ratio).ceil() + (dense * _denseTokensPerChar).ceil();
@@ -98,5 +122,6 @@ final class HeuristicTokenCounter implements TokenCounter {
     // Exponential moving average, clamped to sane bounds so one odd
     // request (e.g. a huge image) can't wreck the estimator.
     _ratio = (_ratio * 0.7 + observed * 0.3).clamp(2.0, 5.0);
+    _calibrations++;
   }
 }

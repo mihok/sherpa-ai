@@ -42,6 +42,9 @@ Stream<ModelEvent> guardModelStream(
   CancellationToken? cancel,
 }) {
   late final StreamController<ModelEvent> out;
+  // Cancelled in detachInner (on token cancel or subscription cancel) or
+  // dropped once the body completes.
+  // ignore: cancel_subscriptions
   StreamSubscription<ModelEvent>? inner;
   final abort = AbortSignal();
   var finished = false;
@@ -52,7 +55,9 @@ Stream<ModelEvent> guardModelStream(
     inner = null;
     // Not awaited: the body may be parked on a socket read that only ends
     // once the abort propagates, and stream consumers must not hang on it.
-    if (s != null) unawaited(s.cancel());
+    // Errors raised while it unwinds (the abort itself) have no listener
+    // left and are dropped.
+    s?.cancel().ignore();
   }
 
   void endCancelled() {
@@ -70,7 +75,11 @@ Stream<ModelEvent> guardModelStream(
         endCancelled();
         return;
       }
-      unawaited(token?.whenCancelled.then((_) => endCancelled()));
+      // `CancellationToken.none` never fires; registering on it would pin
+      // this closure for the life of the process.
+      if (token != null && !identical(token, CancellationToken.none)) {
+        unawaited(token.whenCancelled.then((_) => endCancelled()));
+      }
       inner = body(abort).listen(
         (e) {
           if (!finished) out.add(e);

@@ -76,14 +76,6 @@ final class OpenedResponse {
     return utf8.decode(bytes, allowMalformed: true);
   }
 
-  /// Releases the connection without reading the body.
-  Future<void> discard() async {
-    try {
-      await _body.listen(null).cancel();
-    } on Object {
-      // Already listened to or closed: nothing to release.
-    }
-  }
 }
 
 /// A fully read small response (discovery, model lists).
@@ -117,6 +109,10 @@ final class ProviderHttp {
   /// failures and [CancelledException] when aborted; HTTP error statuses
   /// are returned, not thrown, so callers can inspect the body (e.g. to
   /// retry without an optional parameter the server rejected).
+  ///
+  /// Redirects are not followed by default: model APIs do not redirect, and
+  /// following one would carry the request (and its credential) to a host
+  /// the URL policy never checked.
   Future<OpenedResponse> send({
     required String method,
     required Uri url,
@@ -124,7 +120,7 @@ final class ProviderHttp {
     String? body,
     AbortSignal? abort,
     Duration? headersTimeout,
-    bool followRedirects = true,
+    bool followRedirects = false,
   }) async {
     final signal = abort ?? AbortSignal();
     if (signal.isAborted) throw const CancelledException('request aborted');
@@ -168,9 +164,6 @@ final class ProviderHttp {
         body: body,
         abort: signal,
         headersTimeout: timeout,
-        // Discovery URLs are derived from a user-supplied base; refusing
-        // redirects keeps a hostile server from bouncing us onto the LAN.
-        followRedirects: false,
       );
       final text = await r.readText(maxBytes: maxBytes);
       return FetchedResponse(r.statusCode, r.headers, text);

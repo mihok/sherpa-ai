@@ -51,7 +51,7 @@ extension LenientJson on JsonMap {
   /// The map entries of a list field; non-map entries are skipped.
   List<JsonMap> maps(String key) => [
         for (final e in items(key) ?? const <Object?>[])
-          if (asJsonMap(e) case final m?) m,
+          ?asJsonMap(e),
       ];
 }
 

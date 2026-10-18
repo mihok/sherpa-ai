@@ -13,7 +13,7 @@ import 'dart:convert';
 /// same name on every request, so the same tool set must always produce the
 /// same wire names.
 final class AnthropicToolNames {
-  AnthropicToolNames._(this._toWire, this._fromWire);
+  const AnthropicToolNames._(this._toWire, this._fromWire);
 
   /// Builds the map for one request's tool list (in request order).
   factory AnthropicToolNames(Iterable<String> names) {

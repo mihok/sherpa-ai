@@ -1,3 +1,5 @@
+import 'hashing.dart';
+
 /// Reversible, collision-free mapping between Sherpa's model-facing tool
 /// names and the names a remote API accepts.
 ///
@@ -92,14 +94,5 @@ final class ToolNameMapper {
     return '${head}_$suffix';
   }
 
-  /// FNV-1a 32-bit as 8 hex chars: tiny, dependency-free and stable across
-  /// runs and platforms (unlike `String.hashCode`).
-  static String _hash(String s) {
-    var h = 0x811c9dc5;
-    for (final unit in s.codeUnits) {
-      h ^= unit;
-      h = (h * 0x01000193) & 0xffffffff;
-    }
-    return h.toRadixString(16).padLeft(8, '0');
-  }
+  static String _hash(String s) => fnv1a32Hex(s);
 }
