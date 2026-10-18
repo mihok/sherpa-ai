@@ -1,0 +1,29 @@
+import 'tables.dart';
+
+-- The audit trail is append-only. DELETE stays allowed because the rows
+-- must disappear when their session is deleted (ON DELETE CASCADE).
+CREATE TRIGGER audit_append_only BEFORE UPDATE ON audit
+BEGIN
+  SELECT RAISE(ABORT, 'audit is append-only');
+END;
+
+-- Ancestors of a leaf, leaf first (depth 0), following parent links.
+--
+-- Cycle guard: a path can never be longer than the number of messages in
+-- the session, so the recursion stops there. With a corrupt tree (a cycle
+-- through parent links) the result therefore holds a repeated id, which
+-- the store detects and reports; without the bound the query would never
+-- terminate. Bounding by count keeps the guard O(n) where tracking the
+-- visited set in a string would be O(n^2).
+messagePath(:session_id AS TEXT, :leaf_id AS TEXT):
+WITH RECURSIVE chain(id, parent_id, json, depth) AS (
+  SELECT id, parent_id, json, 0
+    FROM messages
+   WHERE session_id = :session_id AND id = :leaf_id
+  UNION ALL
+  SELECT m.id, m.parent_id, m.json, c.depth + 1
+    FROM chain c
+    JOIN messages m ON m.session_id = :session_id AND m.id = c.parent_id
+   WHERE c.depth < (SELECT count(*) FROM messages WHERE session_id = :session_id)
+)
+SELECT id, json FROM chain ORDER BY depth;

@@ -1,0 +1,20 @@
+targets:
+  $default:
+    builders:
+      drift_dev:
+        options:
+          # Sherpa always ships its own SQLite (3.54 via the sqlite3 build
+          # hook), so analysis may assume the newest dialect drift knows.
+          sql:
+            dialect: sqlite
+            options:
+              version: "3.53"
+          # The stores are the API; the manager layer would only add code.
+          generate_manager: false
+          fatal_warnings: true
+          # `dart run drift_dev make-migrations` snapshots each schema version
+          # into drift_schemas/ and writes migration tests to test/drift/.
+          databases:
+            sherpa: lib/src/database/database.dart
+          schema_dir: drift_schemas/
+          test_dir: test/drift/
