@@ -1,0 +1,3 @@
+tags:
+  # Real huggingface.co; every test in the suite skips unless SHERPA_LIVE_HUB=1.
+  live:

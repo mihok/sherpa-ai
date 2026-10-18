@@ -45,6 +45,38 @@ final class DeviceProfile {
     this.model,
   });
 
+  /// Builds a profile from the platform plugin's [MemoryState] (sherpa_core
+  /// `MemoryMonitor`), whose `availableBytes` is already
+  /// `os_proc_available_memory` / `availMem − threshold`.
+  factory DeviceProfile.fromMemoryState(
+    MemoryState state, {
+    required DevicePlatform platform,
+    required int totalRamBytes,
+    String? osVersion,
+    int? perProcessCapBytes,
+    int? freeStorageBytes,
+    CpuClass cpuClass = CpuClass.mid,
+    Set<String> cpuFeatures = const {},
+    Set<Accelerator> accelerators = const {},
+    bool increasedMemoryLimit = true,
+    String? model,
+  }) =>
+      DeviceProfile(
+        platform: platform,
+        totalRamBytes: state.totalBytes ?? totalRamBytes,
+        osVersion: osVersion,
+        availableRamBytes: state.availableBytes,
+        perProcessCapBytes: perProcessCapBytes,
+        freeStorageBytes: freeStorageBytes,
+        cpuClass: cpuClass,
+        cpuFeatures: cpuFeatures,
+        accelerators: accelerators,
+        thermal: state.thermal,
+        lowPowerMode: state.lowPowerMode,
+        increasedMemoryLimit: increasedMemoryLimit,
+        model: model,
+      );
+
   factory DeviceProfile.fromJson(JsonMap j) => DeviceProfile(
         platform: DevicePlatform.values.byName(j.req<String>('platform')),
         totalRamBytes: j.req<num>('totalRamBytes').toInt(),

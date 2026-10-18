@@ -272,7 +272,10 @@ RepoVariant? findVariant(List<RepoVariant> variants, String idOrQuant) {
 /// Deviations: bits come from the name parser (llama.cpp reads the last
 /// `[-.]TAG`, which yields 0 for `…-BF16-mmproj.gguf`), and when no sidecar
 /// shares an ancestor directory (unsloth keeps drafts in `MTP/`) the others
-/// are considered at the lowest priority instead of being ignored.
+/// are considered at the lowest priority instead of being ignored. On a
+/// full tie F16 beats other types (BF16, F32): the Adreno OpenCL backend
+/// has F16 but no BF16 kernels (R07 §1.7), while llama.cpp keeps whichever
+/// file is listed first.
 HubRepoFile? pairSidecar(
   String repo,
   RepoVariant model,
@@ -289,6 +292,7 @@ HubRepoFile? pairSidecar(
   var bestDepth = -2;
   var bestExact = false;
   var bestDiff = 1 << 30;
+  var bestF16 = false;
   for (final f in files) {
     if (f.isDirectory || !f.path.toLowerCase().endsWith('.gguf')) continue;
     final p = parseModelName(repo, fileName: f.path);
@@ -302,15 +306,18 @@ HubRepoFile? pairSidecar(
     }
     final exact = upperTag != null && f.path.toUpperCase().contains('-$upperTag.');
     final diff = ((p.quant?.value.bits ?? 0) - modelBits).abs();
+    final f16 = p.quant?.value.ggufType == QuantTypes.f16;
     final better = best == null ||
         depth > bestDepth ||
         (depth == bestDepth && exact && !bestExact) ||
-        (depth == bestDepth && exact == bestExact && diff < bestDiff);
+        (depth == bestDepth && exact == bestExact && diff < bestDiff) ||
+        (depth == bestDepth && exact == bestExact && diff == bestDiff && f16 && !bestF16);
     if (better) {
       best = f;
       bestDepth = depth;
       bestExact = exact;
       bestDiff = diff;
+      bestF16 = f16;
     }
   }
   return best;

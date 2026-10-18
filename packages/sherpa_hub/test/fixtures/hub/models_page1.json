@@ -1,0 +1,17 @@
+[
+ {"_id":"66f457ed2dc07e76a1bde8d6","id":"bartowski/Llama-3.2-1B-Instruct-GGUF","author":"bartowski","likes":184,
+  "trendingScore":0,"private":false,"downloads":155390,"gated":false,
+  "tags":["gguf","facebook","meta","llama","conversational","text-generation"],
+  "pipeline_tag":"text-generation","createdAt":"2024-09-25T18:35:25.000Z","lastModified":"2024-10-08T14:00:29.000Z",
+  "gguf":{"total":1235814432,"architecture":"llama","context_length":131072,
+          "chat_template":"{{- bos_token }}\n{%- if custom_tools is defined %}{%- set tools = custom_tools %}{%- endif %}...","bos_token":"<|begin_of_text|>","eos_token":"<|eot_id|>","totalFileSize":2479595360},
+  "siblings":[{"rfilename":".gitattributes"},{"rfilename":"Llama-3.2-1B-Instruct-IQ3_M.gguf"},{"rfilename":"Llama-3.2-1B-Instruct-Q4_K_M.gguf"}]},
+ {"_id":"6acce01c0fdd3575a646b079","id":"ggml-org/vllm-d3-mini-GGUF","author":"ggml-org",
+  "gated":false,"lastModified":"2026-10-12T13:27:04.000Z","trendingScore":8,"downloads":5499,"likes":3,
+  "gguf":{"total":4841450496,"architecture":"qwen35","context_length":262144,"causal":false,
+          "chat_template":"{%- set image_count = namespace(value=0) %}...","eos_token":"<|im_end|>",
+          "decision_type":"vllm-d3","totalFileSize":9695793600},
+  "pipeline_tag":"image-text-to-text","tags":["gguf","quantized","decision-model"],
+  "siblings":[{"rfilename":".gitattributes"},{"rfilename":".src_sha"},{"rfilename":"README.md"}],
+  "xetEnabled":true}
+]

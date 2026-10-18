@@ -1,0 +1,353 @@
+[
+ {
+  "type": "file",
+  "oid": "b051f4c2a2d5e9e0a1d1a2c8b8e8e2c5f0a1b2c3",
+  "size": 2842,
+  "path": ".gitattributes"
+ },
+ {
+  "type": "file",
+  "oid": "36293b6099200eb8aeb55ae2c01bca2ba46d80d0",
+  "size": 861,
+  "path": "README.md"
+ },
+ {
+  "type": "directory",
+  "oid": "03170ee52d8843bc8ccfb6afe6ebc10efd6b9429",
+  "size": 0,
+  "path": "BF16"
+ },
+ {
+  "type": "file",
+  "oid": "859de8f05f009129e3db803615e96f38eada4239",
+  "size": 49655154016,
+  "lfs": {
+   "oid": "813b462350c8482b74a06227ca6b537341e768e27c6e8f17e94cddeff8c1242c",
+   "size": 49655154016,
+   "pointerSize": 135
+  },
+  "path": "BF16/Qwen3.8-27B-BF16-00001-of-00002.gguf",
+  "xetHash": "80dbb3d3c228efe40dcba43c9496624f8fe1167668dd2ed2d46bdeba9eebcda6",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "12420170fc7cbabdeb2f3507a983a1e9aa1bbbef",
+  "size": 4440652032,
+  "lfs": {
+   "oid": "5ac18c7c7f036c0bba65c78a38de83bb02d2309b54259cfd879a89a57504e020",
+   "size": 4440652032,
+   "pointerSize": 135
+  },
+  "path": "BF16/Qwen3.8-27B-BF16-00002-of-00002.gguf",
+  "xetHash": "9319f0e9ec440a34332277e0703d7c8ce08467c2e0ade3f694dc41aae4f5c038",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "directory",
+  "oid": "13170ee52d8843bc8ccfb6afe6ebc10efd6b9429",
+  "size": 0,
+  "path": "MTP"
+ },
+ {
+  "type": "file",
+  "oid": "b1269565669d80dc028f41081d75cbd4aaa028c4",
+  "size": 903453952,
+  "lfs": {
+   "oid": "f43a0711733dfb3cf470f41fea22414f54611de9ca526b115828dc9945527944",
+   "size": 903453952,
+   "pointerSize": 135
+  },
+  "path": "MTP/mtp-Qwen3.8-27B-Q4_0.gguf",
+  "xetHash": "5e3d0371f4606483f4f2ae851488ec02ba7896fdee93e642b9e222f5ecc29d95",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "0c835f93b05dd9f5d8fa9265519f92067fb7d08b",
+  "size": 15440000000,
+  "lfs": {
+   "oid": "98827e789c8a217004c29a9c2d539f3baeb596de09ed5a7b89ff6f3de678d58e",
+   "size": 15440000000,
+   "pointerSize": 135
+  },
+  "path": "Qwen3.8-27B-Q4_0_4_4.gguf",
+  "xetHash": "56da0b01ec0394df1a689bfec37ce3ed3bc700d645a3a58133a8c5c49ecd6806",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "50329c551dd85b1347acd0c25eab0b7df2151d6d",
+  "size": 16470000000,
+  "lfs": {
+   "oid": "2fd523f171feea5c24da729ad0599539f6c5819aacd85788e31fab61839a9ee8",
+   "size": 16470000000,
+   "pointerSize": 135
+  },
+  "path": "Qwen3.8-27B-Q4_K_M.gguf",
+  "xetHash": "341b8af099cc868b0c2b40ca447c79887be999e2823be06954d00f05efecab77",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "97b4b93c1af2e0cdd460e3a33ffd72ff4117415a",
+  "size": 19230000000,
+  "lfs": {
+   "oid": "26f0205b2724b7a1c14a8b35c93691963bd7f66a536df77b9615b8c911051a16",
+   "size": 19230000000,
+   "pointerSize": 135
+  },
+  "path": "Qwen3.8-27B-Q5_K_M.gguf",
+  "xetHash": "c0d6d9d0d66d7e61fb8adf40a7111ee12d24b1d584b98f6dd4775affc49c13f6",
+  "securityFileStatus": {
+   "status": "unsafe",
+   "protectAiScan": {
+    "status": "unsafe",
+    "message": "This file is vulnerable to threat(s) PAIT-PYTCH-100.",
+    "reportLink": "https://insights-db.paloaltonetworks.com/..."
+   },
+   "avScan": {
+    "status": "unsafe",
+    "message": "Detected malware signatures: Py.Malware.CodeExec___builtin___eval_GLOBAL"
+   },
+   "pickleImportScan": {
+    "status": "unsafe",
+    "message": "This file contains imports that may be unsafe.",
+    "pickleImports": [
+     {
+      "module": "torch",
+      "name": "FloatStorage",
+      "safety": "innocuous"
+     },
+     {
+      "module": "__builtin__",
+      "name": "eval",
+      "safety": "dangerous"
+     }
+    ],
+    "version": "0.0.32"
+   },
+   "virusTotalScan": {
+    "status": "suspicious",
+    "message": "2/75 engines detect it as malicious."
+   },
+   "jFrogScan": {
+    "status": "unsafe",
+    "message": "Pickle-based model with embedded malicious code"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "b8f828927082ed62cd37eaada166b5079a9c4c90",
+  "size": 28710000000,
+  "lfs": {
+   "oid": "563d4b6516250cde17f3e3199bfbbce5796cc6b910ef24f2af15cc89e7c41223",
+   "size": 28710000000,
+   "pointerSize": 135
+  },
+  "path": "Qwen3.8-27B-Q8_0.gguf",
+  "xetHash": "43125af49bfbf48462f3e8c4e58a2dbed1b35bdc293c0010008d13d324e0539b",
+  "securityFileStatus": {
+   "status": "caution"
+  }
+ },
+ {
+  "type": "file",
+  "oid": "3204025607da8fd6469dbf3f8af9ad4a9d663700",
+  "size": 17120000000,
+  "lfs": {
+   "oid": "e4a108d100fae0a5e94928c8b39e90b39da8bbcd6d6e517cd64190a9be48e598",
+   "size": 17120000000,
+   "pointerSize": 135
+  },
+  "path": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+  "xetHash": "4dcc136fa073e6d4c6f72a7fd3e12544533962a9fb4989ae5eebf4427da8596e",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "directory",
+  "oid": "23170ee52d8843bc8ccfb6afe6ebc10efd6b9429",
+  "size": 0,
+  "path": "UD-IQ1_S"
+ },
+ {
+  "type": "file",
+  "oid": "f62c633500dda9d69193efc0506a3abb22870b04",
+  "size": 4900000000,
+  "lfs": {
+   "oid": "6fd81d7a1d2a3b360a9d9d507b9687eed7d9016cea9e494f1876af8eefec5cb6",
+   "size": 4900000000,
+   "pointerSize": 135
+  },
+  "path": "UD-IQ1_S/Qwen3.8-27B-UD-IQ1_S-00001-of-00002.gguf",
+  "xetHash": "b8821235732650a5dadf8a9ffee241f30f83400d5e120b434569c4107463d6d0",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "3a7a4e8b8c7ec798c041b6caa514f58643a3a9e2",
+  "size": 12345678,
+  "lfs": {
+   "oid": "64f147cdec22ccabe411fcf28cf7f20392f803fdb04e65b152d79d20d525868e",
+   "size": 12345678,
+   "pointerSize": 135
+  },
+  "path": "imatrix_unsloth.gguf",
+  "xetHash": "f96a7d996b9432a306db7733b7b3f974c4357c28bb971db312d657486f66d67a",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "a0b6286a82221cb4ea396fb69b202543394f5b7c",
+  "size": 931000000,
+  "lfs": {
+   "oid": "00f45cd696de1259526fd1804ecbcb5900ee92fc205a4a7eac1b5e6af4b37d33",
+   "size": 931000000,
+   "pointerSize": 135
+  },
+  "path": "mmproj-BF16.gguf",
+  "xetHash": "aa48f7d654cfea6820110f2caf28ef4772ef5f77919630bcd7419be05bb2f67d",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "38d0f9901632835c834290ad9d12d0631cc4830d",
+  "size": 931000000,
+  "lfs": {
+   "oid": "d8219ba087173a83612ae7a480b15545c2adeae0253519d7d256ecdb76dbf614",
+   "size": 931000000,
+   "pointerSize": 135
+  },
+  "path": "mmproj-F16.gguf",
+  "xetHash": "52c3fccc4f8e75718e5f66639652a910daa2f2f550793f39facd557667537687",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "85f473d2b3606d6ed0e71f3d1d26434b86d3b404",
+  "size": 1860000000,
+  "lfs": {
+   "oid": "2dbfaf67d5ce42bc07744686530b2e93e66cdb0c72106424f6ecf7dacdd82a13",
+   "size": 1860000000,
+   "pointerSize": 135
+  },
+  "path": "mmproj-F32.gguf",
+  "xetHash": "4c9aab428bafb04aad1197a82235727b27d65cf2733108fb80bfc68d903607ec",
+  "securityFileStatus": {
+   "status": "safe",
+   "jFrogScan": {
+    "status": "safe",
+    "message": "No issues found"
+   }
+  }
+ },
+ {
+  "type": "file",
+  "oid": "101f960554b8b9d7d2d0bb50033500df6f8d5cf1",
+  "size": 54000000000,
+  "lfs": {
+   "oid": "207cf36381de38287b382a74479482ca68b633cb8586b543f52d5e263cc0516f",
+   "size": 54000000000,
+   "pointerSize": 135
+  },
+  "path": "pytorch_model.bin",
+  "securityFileStatus": {
+   "status": "unsafe",
+   "protectAiScan": {
+    "status": "unsafe",
+    "message": "This file is vulnerable to threat(s) PAIT-PYTCH-100.",
+    "reportLink": "https://insights-db.paloaltonetworks.com/..."
+   },
+   "avScan": {
+    "status": "unsafe",
+    "message": "Detected malware signatures: Py.Malware.CodeExec___builtin___eval_GLOBAL"
+   },
+   "pickleImportScan": {
+    "status": "unsafe",
+    "message": "This file contains imports that may be unsafe.",
+    "pickleImports": [
+     {
+      "module": "torch",
+      "name": "FloatStorage",
+      "safety": "innocuous"
+     },
+     {
+      "module": "__builtin__",
+      "name": "eval",
+      "safety": "dangerous"
+     }
+    ],
+    "version": "0.0.32"
+   },
+   "virusTotalScan": {
+    "status": "suspicious",
+    "message": "2/75 engines detect it as malicious."
+   },
+   "jFrogScan": {
+    "status": "unsafe",
+    "message": "Pickle-based model with embedded malicious code"
+   }
+  }
+ }
+]
