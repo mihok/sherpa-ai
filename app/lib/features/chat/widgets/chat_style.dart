@@ -91,9 +91,14 @@ class ReadableWidth extends StatelessWidget {
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: kChatReadableWidth),
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: horizontalPadding ?? space.lg),
-          child: child,
+        // Full width up to the maximum, so end-aligned content (user
+        // bubbles) really sits at the end instead of shrink-wrapping.
+        child: SizedBox(
+          width: double.infinity,
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: horizontalPadding ?? space.lg),
+            child: child,
+          ),
         ),
       ),
     );

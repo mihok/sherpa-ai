@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/privacy_badge.dart';
 import 'model_picker_sheet.dart';
 import 'state/chat_controller.dart';
 import 'state/chat_dependencies.dart';
@@ -405,7 +406,7 @@ class _EmptyChat extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Flexible(child: PrivacyBadge(privacy: m.privacy)),
+                  Flexible(child: PrivacyBadge(location: m.location, host: m.host)),
                 ],
               ),
               SizedBox(height: tokens.space.xs),

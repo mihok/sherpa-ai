@@ -74,11 +74,15 @@ class AssistantTurnTile extends StatelessWidget {
                 duration: block.duration,
                 redacted: block.redacted,
               ),
-            TextBlock() => StreamingMarkdown(
-                text: block.text,
-                style: chatMarkdownStyle(context),
-                onLinkTap: callbacks.onLinkTap,
-                onCopyCode: callbacks.onCopyCode,
+            // One SelectionArea per block keeps selection geometry bounded
+            // in a lazily built list (docs/research/12 §1.9).
+            TextBlock() => SelectionArea(
+                child: StreamingMarkdown(
+                  text: block.text,
+                  style: chatMarkdownStyle(context),
+                  onLinkTap: callbacks.onLinkTap,
+                  onCopyCode: callbacks.onCopyCode,
+                ),
               ),
             ToolGroupBlock() => ToolGroupView(sessionId: sessionId, groupKey: block.key, calls: block.calls),
           },
@@ -219,38 +223,26 @@ class LiveDraftView extends ConsumerWidget {
   }
 }
 
-/// Streaming Markdown, safe for screen readers.
+/// The reply as it streams.
 ///
-/// The streaming text is never a live region (it would re-announce the
-/// whole message on every token). With TalkBack/VoiceOver on, the node only
-/// exposes text up to the last finished sentence, so a focused user doesn't
-/// hear it rewrite under them (docs/research/12 §1.8).
+/// Never a live region (it would re-announce the whole message on every
+/// token). `StreamingMarkdown` itself keeps the still-open block out of
+/// the semantics tree under TalkBack/VoiceOver, so a focused user never
+/// hears text rewrite underneath them; the turn-status node announces
+/// phases instead. Selection is off until the block is final.
 class _StreamingText extends StatelessWidget {
   const _StreamingText({required this.text, required this.callbacks});
 
   final String text;
   final AssistantTurnCallbacks callbacks;
 
-  static final RegExp _sentenceEnd = RegExp(r'[.!?…。！？](\s|$)|\n\n');
-
   @override
-  Widget build(BuildContext context) {
-    final markdown = StreamingMarkdown(
-      text: text,
-      streaming: true,
-      selectable: false,
-      style: chatMarkdownStyle(context),
-      onLinkTap: callbacks.onLinkTap,
-      onCopyCode: callbacks.onCopyCode,
-    );
-    if (!MediaQuery.accessibleNavigationOf(context)) return markdown;
-    var stable = 0;
-    for (final m in _sentenceEnd.allMatches(text)) {
-      stable = m.end;
-    }
-    return Semantics(
-      label: text.substring(0, stable).trim(),
-      child: ExcludeSemantics(child: markdown),
-    );
-  }
+  Widget build(BuildContext context) => StreamingMarkdown(
+        text: text,
+        streaming: true,
+        selectable: false,
+        style: chatMarkdownStyle(context),
+        onLinkTap: callbacks.onLinkTap,
+        onCopyCode: callbacks.onCopyCode,
+      );
 }

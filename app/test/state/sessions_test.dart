@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sherpa/state/sessions.dart';
 import 'package:sherpa/state/services.dart';
+import 'package:sherpa/state/sessions.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
 import '../support/harness.dart';

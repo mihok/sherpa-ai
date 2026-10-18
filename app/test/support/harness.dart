@@ -9,6 +9,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa/app.dart';
 import 'package:sherpa/bootstrap.dart' show noRetry;
 import 'package:sherpa/design/haptics.dart';
+import 'package:sherpa/design/widgets/privacy_badge.dart';
 import 'package:sherpa/routing/chat_route.dart';
 import 'package:sherpa/routing/router.dart';
 import 'package:sherpa/state/connectivity.dart';
@@ -80,7 +81,10 @@ final class Harness {
     ModelChoice? defaultModel,
     bool onboarded = true,
     DateTime? now,
+    UiSettings ui = const UiSettings(),
+    this.chat = FakeChatScreen.new,
   })  : clock = FakeClock(now ?? DateTime.utc(2026, 10, 18, 12)),
+        ui = InMemoryUiPreferencesStore(ui),
         prefs = InMemoryPreferencesStore(defaultModel: defaultModel, onboardingComplete: onboarded) {
     for (final e in keys.entries) {
       unawaited(secrets.write(e.key, e.value));
@@ -95,6 +99,9 @@ final class Harness {
     );
   }
 
+  /// What the chat route renders (the real feature or [FakeChatScreen]).
+  final ChatScreenBuilder chat;
+
   /// Behaviour per base URL host.
   final Map<String, FakeEndpoint> endpoints;
   final FakeClock clock;
@@ -103,7 +110,9 @@ final class Harness {
   final ObservableSessionStore store = ObservableSessionStore(InMemorySessionStore());
   late final InMemoryProviderRegistry registry;
   final InMemoryPreferencesStore prefs;
-  final InMemoryUiPreferencesStore ui = InMemoryUiPreferencesStore();
+  final InMemoryUiPreferencesStore ui;
+  // Lives as long as the test isolate; closing it would end the app's stream.
+  // ignore: close_sinks
   final StreamController<List<ConnectivityResult>> connectivity = StreamController.broadcast();
   final RecordingHaptics haptics = RecordingHaptics();
   final Map<String, String?> apiKeysSeen = {};
@@ -118,10 +127,11 @@ final class Harness {
         uiPreferencesStoreProvider.overrideWithValue(ui),
         connectivityStreamProvider.overrideWithValue(connectivity.stream),
         hapticsDriverProvider.overrideWithValue(haptics),
-        chatScreenBuilderProvider.overrideWithValue(FakeChatScreen.new),
+        chatScreenBuilderProvider.overrideWithValue(chat),
       ];
 
   Widget app() => ProviderScope(overrides: overrides, retry: noRetry, child: const SherpaApp());
+
 
   Future<SessionRecord> addSession(String title, {String? providerId, String? modelId, Duration age = Duration.zero}) {
     final at = clock.now().subtract(age);
@@ -219,3 +229,8 @@ Future<void> tapText(WidgetTester tester, String text, {int index = 0}) async {
   await tester.tap(f.at(index));
   await tester.pumpAndSettle();
 }
+
+/// A privacy badge pointing at [host].
+Finder findBadge(String host, {ExecutionLocation? location}) => find.byWidgetPredicate(
+      (w) => w is PrivacyBadge && w.host == host && (location == null || w.location == location),
+    );

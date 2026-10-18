@@ -9,6 +9,17 @@ memory pressure, and is a full **MCP** host: tools, resources, prompts, elicitat
 > architecture, decisions and risks, and [docs/research/](docs/research/) for the verified research it is
 > based on.
 
+## Milestones
+
+| Milestone | Scope | Status |
+|---|---|---|
+| [M1](docs/milestones/M1.md) | Core agent loop, remote providers, chat UI | **Done** |
+| M2 | Hugging Face directory, device fit, downloads, on-device inference + optimization | In progress (Hub client, name parser and device-fit engine landed) |
+| M3 | Context manager: pruning, compaction, handoff, memory monitor | Core ladder landed; UI and memory plugin pending |
+| M4 | MCP client, OAuth, approvals, tool budget | Planned |
+| M5 | MCP Apps host, elicitation, sampling | Planned |
+| M6 | Polish, accessibility, background execution, perf budgets, evals | Planned |
+
 ## Repository layout
 
 | Path | What it is |
@@ -18,7 +29,7 @@ memory pressure, and is a full **MCP** host: tools, resources, prompts, elicitat
 | `packages/sherpa_providers` | Remote providers: Anthropic, OpenAI Chat (+ server quirk profiles), OpenAI Responses |
 | `packages/sherpa_data` | Encrypted Drift/SQLite persistence |
 | `packages/sherpa_markdown` | Incremental streaming Markdown renderer |
-| `packages/sherpa_hub` | Hugging Face Hub client, model-name parser, device-fit engine |
+| `packages/sherpa_hub` | Hugging Face Hub client, model-name parser, device-fit engine, download planner |
 | `app/` | The Flutter app |
 | `native/` | `sherpa_engine` (C ABI over llama.cpp) and pinned build scripts |
 | `docs/` | Plan, research digests, milestone notes |

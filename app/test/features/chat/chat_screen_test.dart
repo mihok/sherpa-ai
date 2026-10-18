@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:sherpa/features/chat/model_picker_sheet.dart';
 import 'package:sherpa/features/chat/state/chat_dependencies.dart';
 import 'package:sherpa/features/chat/state/chat_view_state.dart';
 import 'package:sherpa/features/chat/widgets/assistant_turn.dart';
@@ -36,24 +37,28 @@ void main() {
   tearDown(() => h.dispose());
 
   testWidgets('send → the streamed reply appears; Stop is visible during the run', (tester) async {
-    h = ChatHarness(
-      turns: [ScriptedTurn.text('The tide follows the moon.')],
-      eventDelay: const Duration(milliseconds: 20),
-    );
+    final p = ManualProvider();
+    h = ChatHarness(provider: p);
     await h.createSession();
     await pumpChatScreen(tester, h);
     expect(find.text('What are we working on?'), findsOneWidget);
 
     await typeAndSend(tester, 'Why are there tides?');
-    expect(find.text('Why are there tides?'), findsOneWidget, reason: 'shown immediately');
+    expect(find.descendant(of: find.byType(UserBubble), matching: find.text('Why are there tides?')), findsOneWidget,
+        reason: 'shown immediately');
+    await tester.pump(const Duration(milliseconds: 300)); // past the send→stop transition
     expect(find.byTooltip('Stop (Esc)'), findsOneWidget);
     expect(find.byTooltip('Send'), findsNothing);
+    expect(find.text('Thinking…'), findsOneWidget, reason: 'before the first token');
 
-    await stream(tester, frames: 4);
+    p.emit(const TextDelta('The tide '));
+    await stream(tester, frames: 2);
     expect(find.textContaining('The tide'), findsOneWidget, reason: 'partial text while streaming');
     expect(find.byTooltip('Stop (Esc)'), findsOneWidget);
 
-    await stream(tester, frames: 60);
+    p.emit(const TextDelta('follows the moon.'));
+    await p.finish();
+    await stream(tester, frames: 5);
     await tester.pumpAndSettle();
     expect(find.text('The tide follows the moon.'), findsOneWidget);
     expect(find.byTooltip('Stop (Esc)'), findsNothing);
@@ -70,15 +75,9 @@ void main() {
     p.emit(const TextDelta('Once upon'));
     await stream(tester, frames: 3);
     expect(find.textContaining('Once upon'), findsOneWidget);
-    // ignore: avoid_print
-    print('before stop: ${h.state.status} running=${h.controller.isRunning}');
     await tester.tap(find.byTooltip('Stop (Esc)'));
-    // ignore: avoid_print
-    print('after tap: ${h.state.status} cancelled=${p.cancelled}');
     await stream(tester, frames: 5);
     await tester.pumpAndSettle();
-    // ignore: avoid_print
-    print('after: ${h.state.status} notices=${h.state.notices.map((n) => n.code)} items=${h.state.items.length}');
     expect(find.text('You stopped this response.'), findsOneWidget);
     expect(find.byTooltip('Send'), findsOneWidget);
     expect(h.state.status, ChatRunStatus.cancelled);
@@ -235,7 +234,7 @@ void main() {
     await tester.pumpAndSettle();
     h.clock.advance(const Duration(seconds: 3));
 
-    await tester.longPress(find.text('Capital of France?'));
+    await tester.longPress(find.descendant(of: find.byType(UserBubble), matching: find.text('Capital of France?')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Edit message'));
     await tester.pumpAndSettle();
@@ -408,10 +407,15 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.bySemanticsLabel(RegExp('^Model: ')));
     await tester.pumpAndSettle();
-    expect(find.text('Test Cloud'), findsWidgets);
-    expect(find.text('→ api.example.com'), findsOneWidget);
-    expect(find.text('On device'), findsOneWidget);
-    await tester.tap(find.bySemanticsLabel(RegExp('^Scripted model.*Runs on this device')));
+    final sheet = find.byType(ModelPickerSheet);
+    expect(find.descendant(of: sheet, matching: find.text('Test Cloud')), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.text('api.example.com')), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.text('On device')), findsOneWidget);
+    // Both providers offer "Scripted model"; the phone server is listed second.
+    final localRow = find.descendant(of: sheet, matching: find.text('Scripted model', skipOffstage: false)).last;
+    await tester.ensureVisible(localRow);
+    await tester.pumpAndSettle();
+    await tester.tap(localRow);
     await tester.pumpAndSettle();
     final s = await h.store.getSession(kSession);
     expect(s!.providerId, 'phone');

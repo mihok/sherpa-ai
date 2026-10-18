@@ -215,24 +215,31 @@ class _ChatComposerState extends State<ChatComposer> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: tokens.space.sm),
-                    child: Focus(
-                      canRequestFocus: false,
-                      skipTraversal: true,
-                      onKeyEvent: _onKey,
-                      child: TextField(
-                        controller: widget.controller,
-                        focusNode: widget.focusNode,
-                        minLines: 1,
-                        maxLines: 6,
-                        keyboardType: TextInputType.multiline,
-                        textInputAction: TextInputAction.newline,
-                        textCapitalization: TextCapitalization.sentences,
-                        style: theme.textTheme.bodyLarge,
-                        decoration: InputDecoration.collapsed(
-                          hintText: widget.hintText,
-                          hintStyle: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  child: Focus(
+                    canRequestFocus: false,
+                    skipTraversal: true,
+                    onKeyEvent: _onKey,
+                    // The field's own padding (not an outer Padding) makes the
+                    // whole 48dp row tappable and focusable.
+                    child: TextField(
+                      controller: widget.controller,
+                      focusNode: widget.focusNode,
+                      minLines: 1,
+                      maxLines: 6,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      textCapitalization: TextCapitalization.sentences,
+                      style: theme.textTheme.bodyLarge,
+                      decoration: InputDecoration(
+                        isCollapsed: true,
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(vertical: tokens.space.md),
+                        constraints: BoxConstraints(minHeight: tokens.space.minTouchTarget),
+                        hintText: widget.hintText,
+                        hintMaxLines: 1,
+                        hintStyle: theme.textTheme.bodyLarge?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ),

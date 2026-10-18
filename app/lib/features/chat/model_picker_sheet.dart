@@ -7,12 +7,12 @@ import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/privacy_badge.dart';
 import '../../state/providers.dart';
 import '../../state/services.dart';
 import 'state/chat_dependencies.dart';
 import 'state/model_selection.dart';
 import 'widgets/chat_style.dart';
-import 'widgets/model_chip.dart';
 
 /// Lists every configured provider's models, each section labelled with
 /// where messages go (on device, local network, or which remote host), and
@@ -192,7 +192,7 @@ class _ProviderSection extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Semantics(headingLevel: 3, child: Text(config.displayName, style: theme.textTheme.titleSmall)),
-                PrivacyBadge(privacy: privacy),
+                PrivacyBadge(location: privacy.location, host: privacy.host),
               ],
             ),
           ),

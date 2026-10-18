@@ -49,26 +49,41 @@ class _SessionSearchFieldState extends ConsumerState<SessionSearchField> with Re
       padding: EdgeInsets.fromLTRB(t.space.lg, t.space.xs, t.space.lg, t.space.sm),
       child: ValueListenableBuilder<TextEditingValue>(
         valueListenable: _controller.value,
-        builder: (context, value, _) => SearchBar(
-          controller: _controller.value,
-          hintText: 'Search chats',
-          elevation: const WidgetStatePropertyAll(0),
-          backgroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.surfaceContainerHigh),
-          leading: const Icon(Icons.search),
-          textInputAction: TextInputAction.search,
-          onChanged: (q) => ref.read(sessionQueryProvider.notifier).set(q),
-          trailing: [
-            if (value.text.isNotEmpty)
-              IconButton(
-                tooltip: 'Clear search',
-                icon: const Icon(Icons.close),
-                onPressed: () {
-                  _controller.value.clear();
-                  ref.read(sessionQueryProvider.notifier).set('');
-                },
-              ),
-          ],
-        ),
+        // A plain TextField rather than SearchBar: SearchBar's inner field is
+        // only 24dp tall, which fails the 48dp tap-target guideline for
+        // screen-reader and switch users even though the bar looks bigger.
+        builder: (context, value, _) {
+          final scheme = Theme.of(context).colorScheme;
+          final pill = OutlineInputBorder(
+            borderRadius: BorderRadius.circular(t.radius.pill),
+            borderSide: BorderSide.none,
+          );
+          return TextField(
+            controller: _controller.value,
+            textInputAction: TextInputAction.search,
+            onChanged: (q) => ref.read(sessionQueryProvider.notifier).set(q),
+            decoration: InputDecoration(
+              hintText: 'Search chats',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: value.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear search',
+                      icon: const Icon(Icons.close),
+                      onPressed: () {
+                        _controller.value.clear();
+                        ref.read(sessionQueryProvider.notifier).set('');
+                      },
+                    ),
+              filled: true,
+              fillColor: scheme.surfaceContainerHigh,
+              border: pill,
+              enabledBorder: pill,
+              focusedBorder: pill.copyWith(borderSide: BorderSide(color: scheme.primary, width: 2)),
+              contentPadding: EdgeInsets.symmetric(horizontal: t.space.lg, vertical: t.space.md),
+            ),
+          );
+        },
       ),
     );
   }

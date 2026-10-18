@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
 import '../../../design/tokens.dart';
+import '../../../state/providers.dart';
 import '../state/chat_controller.dart';
 import '../state/chat_dependencies.dart';
 import '../state/transcript_model.dart';
@@ -138,7 +139,7 @@ class _ToolCallCardState extends ConsumerState<ToolCallCard> {
     final theme = Theme.of(context);
     final motion = chatMotionOf(context);
     final status = widget.draftArgs != null ? ToolRunStatus.preparing : (exec?.status ?? ToolRunStatus.pending);
-    final name = exec?.displayName ?? widget.toolName;
+    final name = exec?.displayName ?? ref.read(toolRouterProvider).lookup(widget.toolName)?.displayName ?? widget.toolName;
     final running = status == ToolRunStatus.running;
     final progress = exec?.progress;
 

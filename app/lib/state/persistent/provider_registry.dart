@@ -83,7 +83,11 @@ final class DocumentProviderRegistry implements ProviderRegistry {
     final c = _configs.remove(providerId);
     if (c == null) return;
     await _docs.delete(_collection, providerId);
-    await _secrets.delete(c.secretKey);
+    // Every secret a provider owns (API key now, OAuth tokens later) lives
+    // under its prefix.
+    for (final key in await _secrets.keys(prefix: 'provider/$providerId/')) {
+      await _secrets.delete(key);
+    }
     _invalidate(providerId);
     _emit();
   }

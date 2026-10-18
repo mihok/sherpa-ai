@@ -251,7 +251,22 @@ class ChatController extends Notifier<ChatViewState> {
       _pendingUser = pendingUser;
     }
 
+    void rollback(ChatError? error) {
+      _runActive = false;
+      _stopping = false;
+      _pendingUser = null;
+      _setPath(previousPath);
+      final restored = _buildItems();
+      _flush(base: state.copyWith(
+        status: ChatRunStatus.idle,
+        items: restored,
+        historyCount: math.min(state.historyCount, restored.length),
+        error: error,
+      ));
+    }
+
     _runActive = true;
+    _stopping = false;
     applyOptimistic();
     final items = _buildItems();
     _flush(base: state.copyWith(
@@ -273,19 +288,15 @@ class ChatController extends Notifier<ChatViewState> {
     } on Object catch (e, st) {
       debugPrint('chat[$sessionId]: $e\n$st');
       if (_disposed) return;
-      _runActive = false;
-      _pendingUser = null;
-      _setPath(previousPath);
-      final restored = _buildItems();
-      _flush(base: state.copyWith(
-        status: ChatRunStatus.idle,
-        items: restored,
-        historyCount: math.min(state.historyCount, restored.length),
-        error: chatErrorFrom(e, model: state.model),
-      ));
+      rollback(chatErrorFrom(e, model: state.model));
       return;
     }
     if (_disposed) return;
+    if (_stopping) {
+      // Stop was tapped before the run even started.
+      rollback(null);
+      return;
+    }
     await _run(open(runner), anchorAt: anchorAt);
   }
 
@@ -648,7 +659,6 @@ class ChatController extends Notifier<ChatViewState> {
     _runDone = done;
     _runActive = true;
     _finishing = false;
-    _stopping = false;
     _keepAlive ??= ref.keepAlive();
     _draft = null;
     _pendingUserId = null;
@@ -685,8 +695,6 @@ class ChatController extends Notifier<ChatViewState> {
   }
 
   void _onEvent(AgentEvent e) {
-    // ignore: avoid_print
-    print("EVT ${e.runtimeType} ${e is Checkpointed ? e.checkpoint.phase : ""}");
     if (_disposed) return;
     switch (e) {
       case RunStarted():

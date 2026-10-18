@@ -122,7 +122,9 @@ class SettingsScreen extends ConsumerWidget {
           leading: const Icon(Icons.restart_alt),
           title: const Text('Run setup again'),
           subtitle: const Text('Connect another model with the guided setup'),
-          onTap: () => context.go(Routes.onboarding),
+          // Pushed, not `go`: onboarding lives outside the shell, so back
+          // must return here rather than leave the app.
+          onTap: () => unawaited(context.push<void>(Routes.onboarding)),
         ),
       ],
     );

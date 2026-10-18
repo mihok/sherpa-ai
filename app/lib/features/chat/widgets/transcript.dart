@@ -153,6 +153,19 @@ class ChatTranscriptState extends ConsumerState<ChatTranscript> {
   ScrollController get scrollController => _scroll;
 
   @override
+  void initState() {
+    super.initState();
+    // The very first layout of a scroll position never goes through
+    // adjustPositionForNewDimensions; if the chat is opened mid-run (live
+    // items below the center), pin to the end once laid out.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _follow.pinned && _scroll.hasClients) {
+        _scroll.position.jumpTo(_scroll.position.maxScrollExtent);
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _scroll.dispose();
     _follow.dispose();
@@ -243,7 +256,10 @@ class ChatTranscriptState extends ConsumerState<ChatTranscript> {
     ref.listen(provider.select((s) => (s.items, s.draft?.contentLength ?? 0)), (_, _) => _follow.markUnread());
 
     final tokens = SherpaTokens.of(context);
-    if (!loading && items.isEmpty && notices.isEmpty && error == null) return widget.emptyState;
+    // The scroll view always exists (the empty state is an overlay): a
+    // position that already has dimensions pins to the first message in
+    // the same layout pass instead of starting below it.
+    final empty = !loading && items.isEmpty && notices.isEmpty && error == null;
 
     // Rebuild the identity cache from the current items so it never grows.
     final previous = _cache;
@@ -313,6 +329,7 @@ class ChatTranscriptState extends ConsumerState<ChatTranscript> {
                   ],
                 ),
               ),
+              if (empty) Positioned.fill(child: widget.emptyState),
               PositionedDirectional(
                 end: tokens.space.lg,
                 bottom: tokens.space.md,

@@ -182,7 +182,11 @@ final class ManualProvider implements ModelProvider {
   Stream<ModelEvent> stream(ModelRequest request, {CancellationToken? cancel}) {
     requests.add(request);
     late final StreamController<ModelEvent> c;
-    c = StreamController<ModelEvent>(onCancel: () => cancelled = true);
+    // onCancel must return a Future: a void onCancel makes
+    // `subscription.cancel()` return the SDK's root-zone null future, whose
+    // continuation never runs under FakeAsync (widget tests), so the runner
+    // would hang on `await sub.cancel()` after Stop.
+    c = StreamController<ModelEvent>(onCancel: () async => cancelled = true);
     _current = c;
     cancel?.whenCancelled.then((_) {
       if (c.isClosed) return;

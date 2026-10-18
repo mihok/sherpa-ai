@@ -43,25 +43,59 @@ class ContextRing extends StatelessWidget {
     final label = b == null
         ? 'Context usage not measured yet'
         : 'Context ${estimate ? 'about ' : ''}$percent% used of ${formatTokenCount(b.usableInput)} tokens, $words';
+    final theme = Theme.of(context);
     return Semantics(
       button: true,
       label: label,
       hint: 'Show details',
       excludeSemantics: true,
-      child: IconButton(
-        tooltip: b == null ? 'Context' : 'Context: $percent% used',
-        onPressed: onTap,
-        icon: SizedBox.square(
-          dimension: tokens.space.xl,
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(end: ratio),
-            duration: chatMotionOf(context).medium,
-            builder: (context, value, _) => CustomPaint(
-              painter: _RingPainter(
-                value: value,
-                color: color,
-                track: color.withValues(alpha: 0.18),
-                stroke: tokens.space.xs - 1,
+      child: Tooltip(
+        message: b == null ? 'Context' : 'Context: $percent% used',
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const StadiumBorder(),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: tokens.space.minTouchTarget,
+              minWidth: tokens.space.minTouchTarget,
+            ),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: tokens.space.sm),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox.square(
+                    dimension: tokens.space.lg + tokens.space.xxs,
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween(end: ratio),
+                      duration: chatMotionOf(context).medium,
+                      builder: (context, value, _) => CustomPaint(
+                        painter: _RingPainter(
+                          value: value,
+                          color: color,
+                          track: color.withValues(alpha: 0.18),
+                          stroke: tokens.space.xs - 1,
+                        ),
+                      ),
+                    ),
+                  ),
+                  // A number next to the ring: a nearly empty ring alone
+                  // reads like a loading spinner.
+                  if (percent != null) ...[
+                    SizedBox(width: tokens.space.xs),
+                    MediaQuery.withClampedTextScaling(
+                      maxScaleFactor: kChromeMaxTextScale,
+                      child: Text(
+                        '$percent%',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ),
@@ -88,9 +122,7 @@ class _RingPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
     canvas.drawArc(rect, 0, math.pi * 2, false, paint..color = track);
     if (value > 0) {
-      // A sliver of arc even at 1% so "almost empty" still reads as measured.
-      final sweep = math.max(value, 0.02) * math.pi * 2;
-      canvas.drawArc(rect, -math.pi / 2, sweep, false, paint..color = color);
+      canvas.drawArc(rect, -math.pi / 2, value * math.pi * 2, false, paint..color = color);
     }
   }
 

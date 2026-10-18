@@ -1,17 +1,29 @@
-import 'dart:async';
+import 'dart:io';
 
+import 'package:cupertino_http/cupertino_http.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show Ref;
 import 'package:flutter_riverpod/misc.dart' show Override;
+import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_data/sherpa_data.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
+import 'features/chat/state/chat_dependencies.dart';
 import 'routing/chat_route.dart';
 import 'routing/chat_screen_binding.dart';
 import 'state/in_memory/in_memory_preferences_store.dart';
 import 'state/in_memory/in_memory_provider_registry.dart';
 import 'state/observable_session_store.dart';
+import 'state/persistent/preferences_store.dart';
+import 'state/persistent/provider_registry.dart';
+import 'state/persistent/ui_preferences_store.dart';
 import 'state/providers.dart';
+import 'state/secure_secret_store.dart';
 import 'state/ui_preferences.dart';
 
 /// Riverpod's automatic retry is off app-wide: failed network calls belong to
@@ -19,31 +31,29 @@ import 'state/ui_preferences.dart';
 /// 429), not to a silent UI-layer retry. Pass as `ProviderScope(retry:)`.
 Duration? noRetry(int retryCount, Object error) => null;
 
+/// Where the encrypted database lives inside the app's support directory.
+const String databaseFileName = 'sherpa.db';
+
 /// Wires the app's services and returns them as `ProviderScope` overrides.
 ///
-/// INTEGRATOR: this is the one place to swap implementations. Replace each
-/// in-memory store with its persisted counterpart, keeping the
-/// [ObservableSessionStore] wrapper (it is what keeps the sessions list
-/// live):
-///
-/// | Root provider                | now                         | target                                  |
-/// |------------------------------|-----------------------------|-----------------------------------------|
-/// | `secretStoreProvider`        | `InMemorySecretStore`       | `SecureSecretStore()` (this app)        |
-/// | `sessionStoreProvider`       | `InMemorySessionStore`      | sherpa_data Drift store                 |
-/// | `providerRegistryProvider`   | `InMemoryProviderRegistry`  | Drift-backed registry (same factory)    |
-/// | `preferencesProvider`        | `InMemoryPreferencesStore`  | Drift/settings-backed store             |
-/// | `uiPreferencesStoreProvider` | `InMemoryUiPreferencesStore`| Drift/settings-backed store             |
-///
-/// and pass the real adapters as [providerFactory].
-Future<List<Override>> bootstrap({ModelProviderFactory? providerFactory}) async {
+/// Production wiring: secrets in the Keychain / Android Keystore, sessions
+/// and documents in the SQLite3MultipleCiphers database whose key lives in
+/// that secret store, and real remote providers over the platform HTTP
+/// stack. [inMemory] swaps everything for volatile fakes (integration
+/// tests, screenshots).
+Future<List<Override>> bootstrap({bool inMemory = false}) async {
   WidgetsFlutterBinding.ensureInitialized();
   _installErrorHandlers();
+  if (inMemory) return _inMemoryOverrides();
 
-  final secrets = InMemorySecretStore();
-  final sessions = ObservableSessionStore(InMemorySessionStore());
-  final registry = InMemoryProviderRegistry(secrets: secrets, factory: providerFactory ?? unwiredProviderFactory);
-  final prefs = InMemoryPreferencesStore();
-  final ui = InMemoryUiPreferencesStore();
+  final secrets = SecureSecretStore();
+  final db = await _openDatabase(secrets);
+  final docs = JsonDocumentStore(db);
+  final sessions = ObservableSessionStore(DriftSessionStore(db));
+  final registry = DocumentProviderRegistry(documents: docs, secrets: secrets, client: _httpClient());
+  final prefs = DocumentPreferencesStore(docs);
+  final ui = DocumentUiPreferencesStore(docs);
+  await Future.wait([registry.load(), prefs.load(), ui.load()]);
 
   return [
     secretStoreProvider.overrideWithValue(secrets),
@@ -52,6 +62,69 @@ Future<List<Override>> bootstrap({ModelProviderFactory? providerFactory}) async 
     preferencesProvider.overrideWithValue(prefs),
     uiPreferencesStoreProvider.overrideWithValue(ui),
     chatScreenBuilderProvider.overrideWithValue(buildChatScreen),
+    chatContextManagerProvider.overrideWith(_contextManager),
+  ];
+}
+
+/// The escalation ladder (prune → truncate → compact → handoff → hard stop).
+/// Summaries are extractive for now: deterministic, offline and free; a
+/// model-written summarizer needs the session's own provider and arrives
+/// with the context inspector UI.
+ContextManager _contextManager(Ref ref) => LadderContextManager(
+      strategy: const ExtractiveContextStrategy(),
+      toolLookup: ref.watch(toolRouterProvider).lookup,
+    );
+
+/// Opens the encrypted database, never falling back to plaintext.
+///
+/// The key is device-only (`first_unlock_this_device`), so a database
+/// restored from a backup onto another device cannot be decrypted. Rather
+/// than failing every launch, that file is moved aside (kept, in case the
+/// key reappears) and a fresh database is created.
+Future<SherpaDatabase> _openDatabase(SecretStore secrets) async {
+  final dir = await getApplicationSupportDirectory();
+  await dir.create(recursive: true);
+  final path = p.join(dir.path, databaseFileName);
+  try {
+    final key = await loadOrCreateDatabaseKey(secrets, databasePath: path);
+    return await openSherpaDatabase(path: path, key: key);
+  } on DatabaseEncryptionException catch (e) {
+    if (e.failure != EncryptionFailure.keyMissing && e.failure != EncryptionFailure.keyRejected) rethrow;
+    final stamp = DateTime.now().toUtc().millisecondsSinceEpoch;
+    for (final suffix in ['', '-wal', '-shm']) {
+      final f = File('$path$suffix');
+      if (f.existsSync()) await f.rename('$path.unreadable-$stamp$suffix');
+    }
+    // Keep a rejected key next to the quarantined file instead of losing it.
+    final oldKey = await secrets.read(databaseKeySecretName);
+    if (oldKey != null) await secrets.write('$databaseKeySecretName.unreadable-$stamp', oldKey);
+    await secrets.delete(databaseKeySecretName);
+    final key = await loadOrCreateDatabaseKey(secrets, databasePath: path);
+    return openSherpaDatabase(path: path, key: key);
+  }
+}
+
+/// The platform HTTP stack: URLSession on iOS (proxy settings, HTTP/2,
+/// system trust), dart:io elsewhere. Both honour `AbortableRequest`.
+http.Client _httpClient() {
+  if (Platform.isIOS || Platform.isMacOS) return CupertinoClient.defaultSessionConfiguration();
+  return IOClient(HttpClient()..connectionTimeout = const Duration(seconds: 20));
+}
+
+List<Override> _inMemoryOverrides() {
+  final secrets = InMemorySecretStore();
+  final client = _httpClient();
+  return [
+    secretStoreProvider.overrideWithValue(secrets),
+    sessionStoreProvider.overrideWithValue(ObservableSessionStore(InMemorySessionStore())),
+    providerRegistryProvider.overrideWithValue(InMemoryProviderRegistry(
+      secrets: secrets,
+      factory: (config, apiKey) => createProvider(config, apiKey: apiKey, client: client),
+    )),
+    preferencesProvider.overrideWithValue(InMemoryPreferencesStore()),
+    uiPreferencesStoreProvider.overrideWithValue(InMemoryUiPreferencesStore()),
+    chatScreenBuilderProvider.overrideWithValue(buildChatScreen),
+    chatContextManagerProvider.overrideWith(_contextManager),
   ];
 }
 
@@ -70,40 +143,4 @@ void _installErrorHandlers() {
     debugPrint('Uncaught ${error.runtimeType}');
     return true;
   };
-}
-
-/// Stand-in until the sherpa_providers adapters are wired in: every call
-/// fails with a clear, non-retryable error, so the UI shows a real error
-/// state instead of pretending to connect.
-FutureOr<ModelProvider> unwiredProviderFactory(ProviderConfig config, String? apiKey) =>
-    _UnwiredProvider(config);
-
-final class _UnwiredProvider implements ModelProvider {
-  _UnwiredProvider(this._config);
-
-  final ProviderConfig _config;
-
-  ProviderException get _error => ProviderException(
-        ProviderErrorKind.unsupported,
-        'Remote model adapters are not wired into this build yet.',
-        providerId: _config.id,
-      );
-
-  @override
-  ProviderInfo get info => ProviderInfo(
-        id: _config.id,
-        kind: _config.flavor == ApiFlavor.anthropic ? ProviderKind.anthropic : ProviderKind.openAiCompatible,
-        displayName: _config.displayName,
-        location: ExecutionLocation.remote,
-        baseUrl: _config.baseUrl,
-      );
-
-  @override
-  Future<List<ModelDescriptor>> listModels() async => throw _error;
-
-  @override
-  Future<ModelCapabilities> capabilities(String modelId) async => throw _error;
-
-  @override
-  Stream<ModelEvent> stream(ModelRequest request, {CancellationToken? cancel}) => Stream.error(_error);
 }

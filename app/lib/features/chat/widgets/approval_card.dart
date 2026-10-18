@@ -54,13 +54,24 @@ enum AlwaysAllowExpiry {
 /// chat (session scope) and Always allow (with an expiry). "Always" is not
 /// offered for destructive tools. Y / N answer from a hardware keyboard.
 class ApprovalCard extends ConsumerWidget {
-  const ApprovalCard({super.key, required this.sessionId, required this.approval, this.inSheet = false, this.onAnswered});
+  const ApprovalCard({
+    super.key,
+    required this.sessionId,
+    required this.approval,
+    this.inSheet = false,
+    this.showActions = true,
+    this.onAnswered,
+  });
 
   final String sessionId;
   final PendingApproval approval;
 
   /// In the compact-screen sheet, which also carries its own Stop.
   final bool inSheet;
+
+  /// False when the host pins [ApprovalActions] outside a scroll view so the
+  /// decision is always on screen, however long the arguments are.
+  final bool showActions;
   final VoidCallback? onAnswered;
 
   void _respond(WidgetRef ref, ApprovalResponse r) {
@@ -75,13 +86,6 @@ class ApprovalCard extends ConsumerWidget {
     final risk = riskCopy(context, approval);
     final destructive = approval.risk == RiskLevel.destructive;
     final title = 'Allow “${approval.toolDisplayName}”?';
-
-    final allowOnceStyle = destructive
-        ? FilledButton.styleFrom(
-            backgroundColor: tokens.semantic.danger,
-            foregroundColor: theme.colorScheme.surface,
-          )
-        : null;
 
     return Focus(
       autofocus: true,
@@ -177,61 +181,98 @@ class ApprovalCard extends ConsumerWidget {
               copyLabel: 'Copy arguments',
               onCopy: (json) => ref.read(chatPlatformProvider).copyText(json),
             ),
-            SizedBox(height: tokens.space.md),
-            Wrap(
-              spacing: tokens.space.sm,
-              runSpacing: tokens.space.sm,
-              alignment: WrapAlignment.end,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                OutlinedButton(
-                  onPressed: () => _respond(ref, const ApprovalResponse(UserDecision.deny)),
-                  child: const Text('Deny'),
-                ),
-                TextButton(
-                  onPressed: () => _respond(
-                    ref,
-                    const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.session),
-                  ),
-                  child: const Text('Allow for this chat'),
-                ),
-                if (approval.allowsAlways)
-                  MenuAnchor(
-                    builder: (context, controller, _) => TextButton.icon(
-                      onPressed: () => controller.isOpen ? controller.close() : controller.open(),
-                      icon: const Icon(Icons.expand_more_rounded),
-                      label: const Text('Always allow'),
-                    ),
-                    menuChildren: [
-                      for (final e in AlwaysAllowExpiry.values)
-                        MenuItemButton(
-                          onPressed: () => _respond(
-                            ref,
-                            ApprovalResponse(UserDecision.approve, scope: ApprovalScope.always, expiresIn: e.duration),
-                          ),
-                          child: Text(e.label),
-                        ),
-                    ],
-                  ),
-                FilledButton(
-                  style: allowOnceStyle,
-                  onPressed: () => _respond(ref, const ApprovalResponse(UserDecision.approve)),
-                  child: const Text('Allow once'),
-                ),
-              ],
-            ),
-            if (!approval.allowsAlways)
-              Padding(
-                padding: EdgeInsets.only(top: tokens.space.sm),
-                child: Text(
-                  'Actions that can delete data always ask first.',
-                  textAlign: TextAlign.end,
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                ),
-              ),
+            if (showActions) ...[
+              SizedBox(height: tokens.space.md),
+              ApprovalActions(sessionId: sessionId, approval: approval, onAnswered: onAnswered),
+            ],
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Deny · Allow for this chat · Always allow ▾ · Allow once.
+class ApprovalActions extends ConsumerWidget {
+  const ApprovalActions({super.key, required this.sessionId, required this.approval, this.onAnswered});
+
+  final String sessionId;
+  final PendingApproval approval;
+  final VoidCallback? onAnswered;
+
+  void _respond(WidgetRef ref, ApprovalResponse r) {
+    ref.read(chatControllerProvider(sessionId).notifier).respondToApproval(r);
+    onAnswered?.call();
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tokens = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    final destructive = approval.risk == RiskLevel.destructive;
+    final allowOnceStyle = destructive
+        ? FilledButton.styleFrom(
+            backgroundColor: tokens.semantic.danger,
+            foregroundColor: theme.colorScheme.surface,
+          )
+        : null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Wrap(
+          spacing: tokens.space.sm,
+          runSpacing: tokens.space.sm,
+          alignment: WrapAlignment.end,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            OutlinedButton(
+              onPressed: () => _respond(ref, const ApprovalResponse(UserDecision.deny)),
+              child: const Text('Deny'),
+            ),
+            TextButton(
+              onPressed: () => _respond(
+                ref,
+                const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.session),
+              ),
+              child: const Text('Allow for this chat'),
+            ),
+            if (approval.allowsAlways)
+              MenuAnchor(
+                builder: (context, controller, _) => TextButton.icon(
+                  onPressed: () => controller.isOpen ? controller.close() : controller.open(),
+                  iconAlignment: IconAlignment.end,
+                  icon: const Icon(Icons.expand_more_rounded),
+                  label: const Text('Always allow'),
+                ),
+                menuChildren: [
+                  for (final e in AlwaysAllowExpiry.values)
+                    MenuItemButton(
+                      onPressed: () => _respond(
+                        ref,
+                        ApprovalResponse(UserDecision.approve, scope: ApprovalScope.always, expiresIn: e.duration),
+                      ),
+                      child: Text(e.label),
+                    ),
+                ],
+              ),
+            FilledButton(
+              style: allowOnceStyle,
+              onPressed: () => _respond(ref, const ApprovalResponse(UserDecision.approve)),
+              child: const Text('Allow once'),
+            ),
+          ],
+        ),
+        if (!approval.allowsAlways)
+          Padding(
+            padding: EdgeInsets.only(top: tokens.space.sm),
+            child: Text(
+              'Actions that can delete data always ask first.',
+              textAlign: TextAlign.end,
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -256,9 +297,26 @@ class DockedApprovalCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(tokens.radius.lg),
           border: Border.all(color: risk.color.withValues(alpha: 0.6)),
         ),
-        child: SingleChildScrollView(
-          padding: EdgeInsets.all(tokens.space.lg),
-          child: ApprovalCard(key: ValueKey(approval.call.id), sessionId: sessionId, approval: approval),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(tokens.space.lg, tokens.space.lg, tokens.space.lg, tokens.space.sm),
+                child: ApprovalCard(
+                  key: ValueKey(approval.call.id),
+                  sessionId: sessionId,
+                  approval: approval,
+                  showActions: false,
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.fromLTRB(tokens.space.lg, 0, tokens.space.lg, tokens.space.lg),
+              child: ApprovalActions(sessionId: sessionId, approval: approval),
+            ),
+          ],
         ),
       ),
     );
@@ -333,14 +391,27 @@ class ApprovalSheet extends ConsumerWidget {
       });
       return const SizedBox.shrink();
     }
-    return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(tokens.space.xl, 0, tokens.space.xl, tokens.space.xl),
-      child: ApprovalCard(
-        key: ValueKey(pending.call.id),
-        sessionId: sessionId,
-        approval: pending,
-        inSheet: true,
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Flexible(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(tokens.space.xl, 0, tokens.space.xl, tokens.space.sm),
+            child: ApprovalCard(
+              key: ValueKey(pending.call.id),
+              sessionId: sessionId,
+              approval: pending,
+              inSheet: true,
+              showActions: false,
+            ),
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(tokens.space.xl, tokens.space.sm, tokens.space.xl, tokens.space.xl),
+          child: ApprovalActions(sessionId: sessionId, approval: pending),
+        ),
+      ],
     );
   }
 }

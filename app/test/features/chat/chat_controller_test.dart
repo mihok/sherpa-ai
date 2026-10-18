@@ -10,6 +10,7 @@ import 'package:sherpa/features/chat/state/transcript_model.dart';
 import 'package:sherpa/state/services.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_core/testing.dart';
+import 'package:sherpa_providers/sherpa_providers.dart';
 
 import 'support/fakes.dart';
 import 'support/harness.dart';
@@ -320,6 +321,23 @@ void main() {
     });
   });
 
+  group('stop before start', () {
+    test('Stop right after Send cancels before the run starts', () async {
+      h = ChatHarness(turns: [ScriptedTurn.text('never')]);
+      await h.createSession();
+      final c = await h.open();
+      final done = c.send('Oops');
+      expect(h.state.isRunActive, isTrue, reason: 'optimistic run state is immediate');
+      c.stop();
+      await done;
+      expect(h.state.isRunActive, isFalse);
+      expect(h.state.items, isEmpty);
+      expect(h.state.pendingUserText, isNull);
+      expect(h.scripted.requests, isEmpty, reason: 'nothing was sent to the model');
+      expect(await h.activePath(), isEmpty);
+    });
+  });
+
   group('branches', () {
     test('retry creates a sibling and the switcher shows 2/2', () async {
       h = ChatHarness(turns: [ScriptedTurn.text('First answer'), ScriptedTurn.text('Second answer')]);
@@ -587,12 +605,19 @@ void main() {
   });
 
   group('helpers', () {
-    test('privacy classification by host', () {
-      expect(privacyForUrl(Uri.parse('http://localhost:8080')).location, ExecutionLocation.onDevice);
-      expect(privacyForUrl(Uri.parse('http://192.168.1.20:11434')).location, ExecutionLocation.localNetwork);
-      expect(privacyForUrl(Uri.parse('http://mac-mini.local:1234')).location, ExecutionLocation.localNetwork);
-      expect(privacyForUrl(Uri.parse('https://api.anthropic.com')).location, ExecutionLocation.remote);
-      expect(privacyForUrl(Uri.parse('https://api.anthropic.com')).shortLabel, '→ api.anthropic.com');
+    test('privacy classification follows the app-wide rules', () {
+      PrivacyBadgeData of(String url) => privacyForConfig(ProviderConfig(
+            id: 'x',
+            flavor: ApiFlavor.openAiChat,
+            displayName: 'X',
+            baseUrl: Uri.parse(url),
+          ));
+      expect(of('http://localhost:8080').location, ExecutionLocation.onDevice);
+      expect(of('http://192.168.1.20:11434').location, ExecutionLocation.localNetwork);
+      expect(of('http://192.168.1.20:11434').host, '192.168.1.20:11434', reason: 'port tells LAN servers apart');
+      expect(of('http://mac-mini.local:1234').location, ExecutionLocation.localNetwork);
+      expect(of('https://api.anthropic.com').location, ExecutionLocation.remote);
+      expect(of('https://api.anthropic.com').shortLabel, '→ api.anthropic.com');
     });
 
     test('token counts', () {

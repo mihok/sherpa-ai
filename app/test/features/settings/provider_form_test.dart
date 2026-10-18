@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:sherpa/routing/routes.dart';
+import 'package:sherpa_core/sherpa_core.dart';
 
 import '../../support/harness.dart';
 
@@ -19,7 +19,8 @@ void main() {
 
     await tapText(tester, 'This is a server on my own network');
     expect(find.textContaining('Tick "This is a server'), findsNothing);
-    expect(find.text('Leaves device → 192.168.1.20:11434'), findsOneWidget, reason: 'live privacy preview');
+    expect(findBadge('192.168.1.20:11434', location: ExecutionLocation.localNetwork), findsOneWidget,
+        reason: 'live privacy preview');
     await tapText(tester, 'Save', index: 1);
 
     final saved = h.registry.configs.single;
@@ -99,8 +100,8 @@ void main() {
     );
     await pumpApp(tester, h);
     await goTo(tester, Routes.providers);
-    expect(find.text('Leaves device → api.openai.com'), findsOneWidget);
-    expect(find.text('Leaves device → 192.168.1.20:11434'), findsOneWidget);
+    expect(findBadge('api.openai.com', location: ExecutionLocation.remote), findsOneWidget);
+    expect(findBadge('192.168.1.20:11434', location: ExecutionLocation.localNetwork), findsOneWidget);
     expect(find.text('Connected'), findsNWidgets(2));
 
     await tester.drag(find.text('OpenAI'), const Offset(-600, 0));

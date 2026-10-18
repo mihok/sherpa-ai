@@ -147,7 +147,9 @@ final class ScriptedProvider implements ModelProvider {
 
     controller = StreamController<ModelEvent>(
       onListen: () => unawaited(run()),
-      onCancel: () {
+      // Returning a future matters: under fake async (widget tests) a void
+      // onCancel leaves the runner's `await sub.cancel()` pending forever.
+      onCancel: () async {
         if (!controller.isClosed) cancelledStreams++;
         cancelled = true;
       },

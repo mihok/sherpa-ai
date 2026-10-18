@@ -132,4 +132,15 @@ void main() {
     await tapText(tester, 'Use a server on my network');
     expect(find.text('Connect Ollama'), findsOneWidget);
   });
+
+  testWidgets('"Run setup again" from settings returns to settings on back', (tester) async {
+    final h = Harness();
+    await pumpApp(tester, h);
+    await goTo(tester, '/settings');
+    await tapText(tester, 'Run setup again');
+    expect(find.text('Meet Sherpa'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Model providers'), findsOneWidget);
+  });
 }
