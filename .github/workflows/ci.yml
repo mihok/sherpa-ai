@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.47.7
+
+jobs:
+  core:
+    name: Analyze + pure-Dart tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - run: dart analyze --fatal-infos
+      - run: tools/test_all.sh --dart
+
+  flutter-tests:
+    name: Widget + golden tests (Linux only)
+    needs: core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - name: flutter test (packages + app)
+        run: |
+          for dir in packages/sherpa_markdown app; do
+            (cd "$dir" && flutter test --reporter=compact)
+          done
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: golden-failures
+          path: '**/test/**/failures/'
+
+  android:
+    name: Android debug build + 16 KB alignment gate
+    needs: core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - name: Build APK
+        working-directory: app
+        run: flutter build apk --debug --target-platform android-arm64
+      - name: 16 KB page alignment
+        run: |
+          zipalign=$(ls "$ANDROID_HOME"/build-tools/*/zipalign | sort -V | tail -1)
+          "$zipalign" -c -P 16 -v 4 app/build/app/outputs/flutter-apk/app-debug.apk | tail -3
+
+  ios:
+    name: iOS build (no codesign)
+    needs: core
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - name: Build iOS
+        working-directory: app
+        run: flutter build ios --debug --no-codesign
