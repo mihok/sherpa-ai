@@ -1,0 +1,15 @@
+name: sherpa_workspace
+description: Monorepo root for the Sherpa mobile agent harness (pub workspace).
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+# Pub workspaces (Dart >= 3.6) give one lockfile and one resolution for every
+# package, which keeps the core packages and the app on identical versions
+# without melos. Members must declare `resolution: workspace`.
+workspace:
+  - packages/sherpa_core
+
+dev_dependencies:
+  lints: ^6.0.0
