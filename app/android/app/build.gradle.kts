@@ -6,21 +6,27 @@ plugins {
 
 android {
     namespace = "io.github.mihok.sherpa"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // compileSdk 37: required by receive_sharing_intent / permission_handler
+    // (docs/research/09). NDK r29 matches the pinned llama.cpp build.
+    compileSdk = 37
+    ndkVersion = "29.0.14206865"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "io.github.mihok.sherpa"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // API 29+: on-device LLMs need ARMv8.2-class CPUs and modern memory
+        // signals; newer APIs (ADPF 31, user-initiated jobs 34) are gated at runtime.
+        minSdk = 29
+        targetSdk = 36
+        ndk {
+            // Local inference ships arm64-v8a only (docs/research/05).
+            abiFilters += listOf("arm64-v8a")
+        }
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
         // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
@@ -46,4 +52,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }

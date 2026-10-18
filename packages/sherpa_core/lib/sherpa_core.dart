@@ -13,6 +13,7 @@ export 'src/common/cancellation.dart';
 export 'src/common/clock.dart';
 export 'src/common/ids.dart';
 export 'src/common/json.dart';
+export 'src/common/secrets.dart';
 export 'src/context/budget.dart';
 export 'src/context/compaction.dart';
 export 'src/context/context_manager.dart';
