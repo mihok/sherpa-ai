@@ -346,7 +346,10 @@ final class AgentRunner {
         modelId: _modelId,
       );
       try {
-        final message = await _streamOnce(run, request, acc);
+        final streamed = await _streamOnce(run, request, acc);
+        final message = prepared.prefixKey == null
+            ? streamed
+            : streamed.copyWith(metadata: {...streamed.metadata, 'prefixKey': prepared.prefixKey});
         await _store.putMessage(sid, message);
         await _setLeaf(sid, message.id);
         _calibrate(prepared.budget.inputTokens, message.usage);

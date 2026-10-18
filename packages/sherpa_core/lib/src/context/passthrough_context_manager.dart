@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import '../model/content.dart';
 import '../model/message.dart';
+import '../model/tool.dart';
+import '../provider/capabilities.dart';
 import 'budget.dart';
 import 'context_manager.dart';
 import 'overlay.dart';
@@ -13,8 +17,12 @@ final class PassthroughContextManager implements ContextManager {
 
   @override
   Future<PreparedContext> prepare(ContextRequest request) async {
-    final system = _systemWithPlan(request);
-    final messages = applyOverlays(request.path, request.overlays);
+    final system = request.systemPrompt;
+    final key = prefixKeyOf(system, request.tools, request.overlays);
+    var messages = applyOverlays(request.path, request.overlays);
+    if (request.capabilities.historyPolicy == HistoryPolicy.appendOnly) {
+      messages = stripStaleReasoning(messages, key);
+    }
     final budget = measure(request, system, messages);
     final level = budget.levelFor(request.settings.thresholds);
     if (!budget.fits) {
@@ -31,15 +39,36 @@ final class PassthroughContextManager implements ContextManager {
       tools: request.tools,
       budget: budget,
       level: level,
+      prefixKey: key,
     );
   }
 
-  static String? _systemWithPlan(ContextRequest r) {
-    final plan = r.plan;
-    if (plan == null || plan.isEmpty) return r.systemPrompt;
-    final base = r.systemPrompt ?? '';
-    return base.isEmpty ? plan.render() : '$base\n\n${plan.render()}';
+  /// FNV-1a 64 over the canonical prefix. Not a security hash: it only
+  /// detects that the system prompt, tool schemas or overlays changed.
+  static String prefixKeyOf(String? system, List<ToolDefinition> tools, List<ContextOverlay> overlays) {
+    final canonical = jsonEncode({
+      's': system ?? '',
+      't': [for (final t in tools) if (t.modelVisible) [t.name, t.description, t.inputSchema]],
+      'o': [for (final o in overlays) o.id],
+    });
+    var h = 0xcbf29ce484222325;
+    for (final b in utf8.encode(canonical)) {
+      h ^= b;
+      h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF;
+    }
+    return h.toUnsigned(64).toRadixString(16).padLeft(16, '0');
   }
+
+  /// Drops reasoning produced under a different prefix. Providers that bind
+  /// thinking to the prefix reject replays after any rewrite; reasoning is
+  /// optional context, so dropping it is always safe.
+  static List<Message> stripStaleReasoning(List<Message> messages, String key) => [
+        for (final m in messages)
+          if (m.role == Role.assistant && m.metadata['prefixKey'] != key && m.content.any((p) => p is ReasoningPart))
+            m.copyWith(content: m.content.where((p) => p is! ReasoningPart).toList())
+          else
+            m,
+      ];
 
   /// Computes the budget for [messages] as they would be sent.
   static ContextBudget measure(ContextRequest r, String? system, List<Message> messages) {

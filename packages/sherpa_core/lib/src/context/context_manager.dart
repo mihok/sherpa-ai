@@ -92,6 +92,7 @@ final class PreparedContext {
     this.systemPrompt,
     this.newOverlays = const [],
     this.recommendation,
+    this.prefixKey,
   });
 
   final String? systemPrompt;
@@ -105,6 +106,12 @@ final class PreparedContext {
 
   /// Set when the manager could not make the call fit by itself.
   final ContextRecommendation? recommendation;
+
+  /// Fingerprint of everything before the conversation messages (system
+  /// prompt, tool schemas, applied overlays). The runner stamps it on the
+  /// assistant reply so reasoning can later be replayed only under the
+  /// same prefix.
+  final String? prefixKey;
 }
 
 enum ContextRecommendationKind { handoff, hardStop }

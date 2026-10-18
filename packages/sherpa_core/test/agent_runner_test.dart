@@ -363,8 +363,11 @@ void main() {
     expect(finished(events).outcome, RunOutcome.completed);
     final plan = await h.store.getPlan('s1');
     expect(plan!.items.map((i) => i.status), [PlanStatus.done, PlanStatus.inProgress]);
-    expect(h.provider.requests[1].systemPrompt, contains('[x] Outline'));
-    expect(h.provider.requests[1].systemPrompt, contains('[~] Draft'));
+    final planResult = h.provider.requests[1].messages.last.toolResults.single.text;
+    expect(planResult, contains('[x] Outline'));
+    expect(planResult, contains('[~] Draft'));
+    expect(h.provider.requests[1].systemPrompt, isNot(contains('Outline')),
+        reason: 'plan updates must not rewrite the system prompt');
   });
 
   test('overflowing context stops with needsUserAction instead of truncating', () async {
@@ -531,6 +534,38 @@ void main() {
     final first = h.runner.send('s1', [const TextPart('a')]).toList();
     expect(() => h.runner.send('s1', [const TextPart('b')]), throwsStateError);
     await first;
+  });
+
+  test('append-only models never see reasoning from an older prefix', () async {
+    final h = Harness([
+      ScriptedTurn([
+        const ReasoningDelta('thinking hard'),
+        const ReasoningSignature(signature: 'sig-1'),
+        const TextDelta('answer one'),
+        const Finish(FinishReason.stop),
+      ]),
+      ScriptedTurn.text('answer two'),
+      ScriptedTurn.text('answer three'),
+    ], caps: const ModelCapabilities(contextLength: 32768, historyPolicy: HistoryPolicy.appendOnly));
+    await h.send('q1');
+    await h.send('q2');
+    // Same prefix: the signed reasoning is replayed verbatim.
+    final replayed = h.provider.requests[1].messages[1].reasoning.single;
+    expect(replayed.signature, 'sig-1');
+    // A context rewrite (new overlay) changes the prefix: reasoning is dropped.
+    final first = (await h.activePath()).first;
+    await h.store.putOverlay('s1', CompactedRange(
+      id: 'ov1',
+      createdAt: h.clock.now(),
+      reason: 'test',
+      tokensSaved: 1,
+      fromMessageId: first.id,
+      toMessageId: first.id,
+      strategyId: 'test',
+      summary: const CompactionSummary(goal: 'g'),
+    ));
+    await h.send('q3');
+    expect(h.provider.requests[2].messages.expand((m) => m.reasoning), isEmpty);
   });
 
   test('remote providers record a data-egress audit entry', () async {

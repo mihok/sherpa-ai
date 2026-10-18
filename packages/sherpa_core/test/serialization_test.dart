@@ -159,7 +159,7 @@ void main() {
     test('counts dense scripts per character', () {
       final c = HeuristicTokenCounter();
       expect(c.countText(''), 0);
-      expect(c.countText('日本語'), 3);
+      expect(c.countText('日本語'), 4);
       expect(c.countText('hello world'), greaterThan(2));
     });
 

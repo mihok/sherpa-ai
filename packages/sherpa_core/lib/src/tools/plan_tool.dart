@@ -80,8 +80,10 @@ final class UpdatePlanTool implements LocalTool {
     );
     await store.putPlan(context.sessionId, plan);
     onUpdated?.call(context.sessionId, plan);
+    // The rendered plan goes into the transcript via this result rather than
+    // the system prompt, so updating it never rewrites the cached prefix.
     final done = items.where((i) => i.status == PlanStatus.done).length;
-    return ToolResult.text('Plan updated ($done/${items.length} done).');
+    return ToolResult.text('Plan updated ($done/${items.length} done).\n\n${plan.render()}');
   }
 
   /// Small models often say "in_progress", "completed", "todo"…

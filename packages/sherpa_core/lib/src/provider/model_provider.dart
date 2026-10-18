@@ -54,7 +54,8 @@ final class ToolChoiceSpecific extends ToolChoice {
 }
 
 /// Reasoning effort request. Providers map it to their own knobs
-/// (Anthropic budget_tokens, OpenAI reasoning_effort, Qwen /think switch).
+/// (Anthropic `output_config.effort`, OpenAI `reasoning.effort`, the
+/// `enable_thinking` template switch for local models).
 enum ReasoningEffort { off, low, medium, high }
 
 @immutable
@@ -219,6 +220,9 @@ enum ProviderErrorKind {
   timeout,
   auth,
   rateLimited,
+
+  /// Spend cap / insufficient quota: a 429 that must NOT be retried.
+  quotaExceeded,
   contextOverflow,
   invalidRequest,
   server,

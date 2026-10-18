@@ -21,6 +21,15 @@ enum ToolCallFormat {
 
 enum ReasoningSupport { none, optional, always }
 
+/// Whether earlier context may be rewritten between requests.
+///
+/// Some providers bind replayed reasoning to the exact conversation prefix
+/// (Anthropic "preserved thinking" rejects a request when anything before a
+/// replayed thinking block changed). For those, the context manager only
+/// rewrites at user-turn boundaries and drops reasoning generated under an
+/// older prefix. Local runtimes also prefer append-only for KV-cache reuse.
+enum HistoryPolicy { mutable, appendOnly }
+
 /// Where inference physically happens. Drives the "data leaves device"
 /// indicator and the privacy dashboard.
 enum ExecutionLocation { onDevice, localNetwork, remote }
@@ -44,6 +53,7 @@ final class ModelCapabilities {
     this.tokenizerFamily,
     this.supportsSystemRole = true,
     this.supportsPromptCache = false,
+    this.historyPolicy = HistoryPolicy.mutable,
   });
 
   factory ModelCapabilities.fromJson(JsonMap j) => ModelCapabilities(
@@ -61,6 +71,7 @@ final class ModelCapabilities {
         tokenizerFamily: j.opt<String>('tokenizerFamily'),
         supportsSystemRole: j.opt<bool>('supportsSystemRole') ?? true,
         supportsPromptCache: j.opt<bool>('supportsPromptCache') ?? false,
+        historyPolicy: HistoryPolicy.values.byName(j.opt<String>('historyPolicy') ?? 'mutable'),
       );
 
   /// Conservative default for unknown remote models.
@@ -81,6 +92,7 @@ final class ModelCapabilities {
   final String? tokenizerFamily;
   final bool supportsSystemRole;
   final bool supportsPromptCache;
+  final HistoryPolicy historyPolicy;
 
   bool get canCallTools => toolCallFormat != ToolCallFormat.none;
 
@@ -105,6 +117,7 @@ final class ModelCapabilities {
         tokenizerFamily: tokenizerFamily,
         supportsSystemRole: supportsSystemRole,
         supportsPromptCache: supportsPromptCache,
+        historyPolicy: historyPolicy,
       );
 
   JsonMap toJson() => compact({
@@ -121,6 +134,7 @@ final class ModelCapabilities {
         'tokenizerFamily': tokenizerFamily,
         'supportsSystemRole': supportsSystemRole,
         'supportsPromptCache': supportsPromptCache,
+        'historyPolicy': historyPolicy.name,
       });
 }
 

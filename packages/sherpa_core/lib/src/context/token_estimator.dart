@@ -5,20 +5,24 @@ import '../model/message.dart';
 import '../model/tool.dart';
 import '../provider/model_provider.dart';
 
-/// Calibrated chars-per-token ratios by tokenizer family. Values are
-/// deliberately on the low (pessimistic) side of measured English/code
-/// averages; CJK and other dense scripts are counted per code unit.
+/// Chars-per-token ratios by tokenizer family, on the pessimistic side of
+/// the measurements in docs/research/11 (English 3.8–4.4, code 3.85–5.0).
+/// Newer Claude tokenizers produce ~30% more tokens than older ones.
 const Map<String, double> _charsPerToken = {
   'cl100k': 3.8,
   'o200k': 4.0,
-  'claude': 3.5,
+  'claude': 2.6,
   'llama3': 3.8,
   'qwen': 3.6,
-  'gemma': 3.9,
+  'gemma': 3.5,
   'mistral': 3.4,
-  'phi': 3.6,
+  'phi': 3.8,
   'default': 3.3,
 };
+
+/// Dense scripts (CJK, Hangul, Kana, emoji) measured at 0.46–1.24 tokens
+/// per character; count the high end.
+const double _denseTokensPerChar = 1.25;
 
 /// Fixed per-message cost for role markers / chat-template scaffolding.
 const int _perMessageOverhead = 6;
@@ -49,7 +53,7 @@ final class HeuristicTokenCounter implements TokenCounter {
       if (r >= 0x2E80) dense++;
     }
     final sparse = text.length - dense;
-    return (sparse / _ratio).ceil() + dense;
+    return (sparse / _ratio).ceil() + (dense * _denseTokensPerChar).ceil();
   }
 
   @override
