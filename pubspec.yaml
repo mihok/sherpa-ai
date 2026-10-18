@@ -12,6 +12,7 @@ workspace:
   - app
   - packages/sherpa_core
   - packages/sherpa_data
+  - packages/sherpa_hub
   - packages/sherpa_markdown
   - packages/sherpa_net
   - packages/sherpa_providers
