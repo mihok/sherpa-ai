@@ -38,7 +38,9 @@ void main() {
     });
 
     test('a single tilde means "approximately", not strikethrough', () {
-      expect(inlinesOf('~5 min to ~10 min'), const [MdText('~5 min to ~10 min')]);
+      expect(inlinesOf('~5 min to ~10 min'), const [
+        MdText('~5 min to ~10 min'),
+      ]);
     });
   });
 
@@ -81,9 +83,12 @@ void main() {
       ]);
     });
 
-    test('reference-style links stay literal (no definitions across blocks)', () {
-      expect(plain(inlinesOf('[text][ref]')), '[text][ref]');
-    });
+    test(
+      'reference-style links stay literal (no definitions across blocks)',
+      () {
+        expect(plain(inlinesOf('[text][ref]')), '[text][ref]');
+      },
+    );
   });
 
   group('inline math', () {
@@ -211,7 +216,10 @@ void main() {
 
     test('a bare URL at the very end is not tappable yet', () {
       final inlines = streamingInlines('go https://example.com/a');
-      expect(inlines.last, isA<MdLink>().having((l) => l.pending, 'pending', isTrue));
+      expect(
+        inlines.last,
+        isA<MdLink>().having((l) => l.pending, 'pending', isTrue),
+      );
       final trailing = streamingInlines('go https://example.com/a_');
       expect(trailing.whereType<MdLink>().single.pending, isTrue);
       final done = streamingInlines('go https://example.com/a now');
@@ -235,14 +243,18 @@ void main() {
 
     test('headings and table cells being typed are repaired too', () {
       final heading = IncrementalMarkdownParser().update('# **Bo').single.node;
-      expect(heading, const MdHeading(1, [
-        MdStrong([MdText('Bo')]),
-      ]));
-      final table = IncrementalMarkdownParser()
-              .update('| a | b |\n|---|---|\n| 1 | **tw')
-              .single
-              .node
-          as MdTable;
+      expect(
+        heading,
+        const MdHeading(1, [
+          MdStrong([MdText('Bo')]),
+        ]),
+      );
+      final table =
+          IncrementalMarkdownParser()
+                  .update('| a | b |\n|---|---|\n| 1 | **tw')
+                  .single
+                  .node
+              as MdTable;
       expect(table.rows.single[1], const [
         MdStrong([MdText('tw')]),
       ]);

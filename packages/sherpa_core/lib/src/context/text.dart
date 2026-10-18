@@ -29,9 +29,9 @@ String firstLine(String s) {
 
 /// Splits prose into sentences (and lines), dropping empties.
 List<String> sentences(String s) => [
-      for (final part in s.split(_sentenceBreak))
-        if (squash(part).isNotEmpty) squash(part),
-    ];
+  for (final part in s.split(_sentenceBreak))
+    if (squash(part).isNotEmpty) squash(part),
+];
 final RegExp _sentenceBreak = RegExp(r'(?<=[.!?])\s+|\n+');
 
 /// Dedupe key for list items: provenance tag and case/whitespace ignored.

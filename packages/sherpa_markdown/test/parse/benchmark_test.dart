@@ -21,7 +21,9 @@ List<String> _tokens() {
   final pattern = RegExp(r'\s*\S{1,6}');
   while (tokens.length < _tokenCount) {
     buffer
-      ..write(sampleDocument.replaceFirst('# Streaming Markdown', '# Part ${part++}'))
+      ..write(
+        sampleDocument.replaceFirst('# Streaming Markdown', '# Part ${part++}'),
+      )
       ..write('\n');
     tokens
       ..clear()
@@ -49,23 +51,36 @@ void main() {
       warm.update(p);
     }
 
-    final parser = IncrementalMarkdownParser();
-    final micros = <int>[];
+    // Three identical runs; each step's minimum filters out GC pauses and
+    // CPU contention (flutter test runs suites in parallel), leaving the
+    // parser's own cost. The raw first run is printed too.
+    const runs = 3;
+    late IncrementalMarkdownParser parser;
+    final raw = <int>[];
+    final micros = List<int>.filled(_tokenCount, 1 << 30);
     final watch = Stopwatch();
-    for (final p in prefixes) {
-      watch
-        ..reset()
-        ..start();
-      parser.update(p);
-      watch.stop();
-      micros.add(watch.elapsedMicroseconds);
+    for (var run = 0; run < runs; run++) {
+      parser = IncrementalMarkdownParser();
+      for (var i = 0; i < _tokenCount; i++) {
+        watch
+          ..reset()
+          ..start();
+        parser.update(prefixes[i]);
+        watch.stop();
+        final us = watch.elapsedMicroseconds;
+        if (run == 0) raw.add(us);
+        if (us < micros[i]) micros[i] = us;
+      }
     }
     parser.update(prefixes.last, complete: true);
 
     final total = micros.fold<int>(0, (a, b) => a + b);
+    final rawTotal = raw.fold<int>(0, (a, b) => a + b);
     final sorted = [...micros]..sort();
+    final rawSorted = [...raw]..sort();
     final quarter = _tokenCount ~/ 4;
-    double mean(Iterable<int> xs) => xs.fold<int>(0, (a, b) => a + b) / xs.length;
+    double mean(Iterable<int> xs) =>
+        xs.fold<int>(0, (a, b) => a + b) / xs.length;
     final firstQuarter = mean(micros.take(quarter));
     final lastQuarter = mean(micros.skip(_tokenCount - quarter));
 
@@ -79,10 +94,12 @@ void main() {
       'sherpa_markdown benchmark: $_tokenCount tokens, '
       '${prefixes.last.length} chars, ${parser.blocks.length} blocks, '
       '${parser.parseCount} block parses\n'
-      '  total ${(total / 1000).toStringAsFixed(1)} ms, '
+      '  per-step min of $runs runs: total ${(total / 1000).toStringAsFixed(1)} ms, '
       'mean ${(total / _tokenCount).toStringAsFixed(1)} µs/token, '
       'p50 ${_percentile(sorted, .5)} µs, p95 ${_percentile(sorted, .95)} µs, '
       'p99 ${_percentile(sorted, .99)} µs, max ${sorted.last} µs\n'
+      '  raw first run: total ${(rawTotal / 1000).toStringAsFixed(1)} ms, '
+      'p99 ${_percentile(rawSorted, .99)} µs, max ${rawSorted.last} µs\n'
       '  first quarter mean ${firstQuarter.toStringAsFixed(1)} µs, '
       'last quarter mean ${lastQuarter.toStringAsFixed(1)} µs\n'
       '  one full re-parse of the final text: ${scratch.elapsedMicroseconds} µs '
@@ -90,8 +107,8 @@ void main() {
     );
 
     // No single token may cost more than a few milliseconds…
-    expect(sorted.last, lessThan(8000), reason: 'max step µs');
-    expect(_percentile(sorted, .99), lessThan(2000), reason: 'p99 step µs');
+    expect(sorted.last, lessThan(5000), reason: 'max step µs');
+    expect(_percentile(sorted, .99), lessThan(1500), reason: 'p99 step µs');
     // …and the per-token cost must not grow with the document: the last
     // quarter (≈12 KB in) costs about what the first quarter did.
     expect(lastQuarter, lessThan(firstQuarter * 3 + 50));

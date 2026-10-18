@@ -21,12 +21,12 @@ abstract final class Digest {
   static String canonicalJson(Object? value) => jsonEncode(_canonical(value));
 
   static Object? _canonical(Object? v) => switch (v) {
-        Map<Object?, Object?>() => {
-            for (final k in (v.keys.map((k) => k.toString()).toList()..sort())) k: _canonical(v[k]),
-          },
-        List<Object?>() => [for (final e in v) _canonical(e)],
-        _ => v,
-      };
+    Map<Object?, Object?>() => {
+      for (final k in (v.keys.map((k) => k.toString()).toList()..sort())) k: _canonical(v[k]),
+    },
+    List<Object?>() => [for (final e in v) _canonical(e)],
+    _ => v,
+  };
 
   /// Digest of tool-call arguments (R11 §9.1 `argsDigest`).
   static String args(Map<String, Object?> arguments) => fnv64(canonicalJson(arguments));

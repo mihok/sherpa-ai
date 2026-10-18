@@ -9,12 +9,13 @@ import 'helpers.dart';
 LadderContextManager ladder({
   ContextStrategy strategy = const ExtractiveContextStrategy(),
   ContextStrategy fallback = const ExtractiveContextStrategy(),
-}) =>
-    LadderContextManager(strategy: strategy, fallbackStrategy: fallback, clock: FakeClock());
+}) => LadderContextManager(strategy: strategy, fallbackStrategy: fallback, clock: FakeClock());
 
 /// Persists [prepared] overlays onto [overlays] (what the runner does).
-List<ContextOverlay> persisted(List<ContextOverlay> overlays, PreparedContext prepared) =>
-    [...overlays, ...prepared.newOverlays];
+List<ContextOverlay> persisted(List<ContextOverlay> overlays, PreparedContext prepared) => [
+  ...overlays,
+  ...prepared.newOverlays,
+];
 
 void main() {
   group('stage 1: elide stale tool results', () {
@@ -94,11 +95,13 @@ void main() {
 
     test('only eligible results are elided, even when every stage runs', () async {
       final c = conversation();
-      final p = await ladder().prepare(req(
-        c.messages,
-        window: 32768,
-        settings: ContextSettings(profile: pruneEverything, excludedTools: const {'search'}),
-      ));
+      final p = await ladder().prepare(
+        req(
+          c.messages,
+          window: 32768,
+          settings: ContextSettings(profile: pruneEverything, excludedTools: const {'search'}),
+        ),
+      );
       final elided = p.newOverlays.whereType<ToolOutputElided>().map((o) => o.callId).toSet();
       expect(elided, {'c1', 'c2', 'c4'});
       expectProviderInvariants(p.messages);
@@ -108,16 +111,18 @@ void main() {
 
     test('keepRecentToolCalls and smallErrorResultTokens are settings', () async {
       final c = conversation();
-      final p = await ladder().prepare(req(
-        c.messages,
-        window: 32768,
-        settings: ContextSettings(
-          profile: pruneEverything,
-          keepRecentToolCalls: 1,
-          smallErrorResultTokens: 0,
-          excludedTools: const {'search'},
+      final p = await ladder().prepare(
+        req(
+          c.messages,
+          window: 32768,
+          settings: ContextSettings(
+            profile: pruneEverything,
+            keepRecentToolCalls: 1,
+            smallErrorResultTokens: 0,
+            excludedTools: const {'search'},
+          ),
         ),
-      ));
+      );
       final elided = p.newOverlays.whereType<ToolOutputElided>().map((o) => o.callId).toSet();
       expect(elided, containsAll(['c3', 'c9']));
       expect(elided, isNot(contains('c10')));
@@ -224,7 +229,9 @@ void main() {
         c.assistant('ok');
       }
       c.user('done?');
-      final m = ladder(strategy: ModelContextStrategy(provider: provider, modelId: 'tiny'));
+      final m = ladder(
+        strategy: ModelContextStrategy(provider: provider, modelId: 'tiny'),
+      );
       final p = await m.prepare(req(c.messages, window: 4096, maxOutput: 256));
       final o = p.newOverlays.whereType<CompactedRange>().single;
       expect(o.strategyId, 'extractive');
@@ -279,7 +286,9 @@ void main() {
 
     test('JSON results keep their shape when truncated', () async {
       final c = Conv()..user('list');
-      final items = [for (var i = 0; i < 400; i++) {'id': 'item-$i', 'body': 'b' * 200}];
+      final items = [
+        for (var i = 0; i < 400; i++) {'id': 'item-$i', 'body': 'b' * 200},
+      ];
       c.toolTurn('c1', 'list_items', const {}, jsonEncode({'items': items, 'next_cursor': 'abc'}));
       final p = await ladder().prepare(req(c.messages));
       final text = p.messages.last.toolResults.single.text;
@@ -306,7 +315,8 @@ void main() {
         c.user('Turn $i ${'word ' * 600}');
         c.assistant('ok');
       }
-      Future<ContextRecommendation?> run(ContextSettings s) async => (await ladder().prepare(req(c.messages, settings: s))).recommendation;
+      Future<ContextRecommendation?> run(ContextSettings s) async =>
+          (await ladder().prepare(req(c.messages, settings: s))).recommendation;
       expect(await run(const ContextSettings()), isNull);
       expect((await run(const ContextSettings(handoffAfterCompactions: 1)))!.message, contains('summarized 1 times'));
       expect((await run(const ContextSettings(minCompactionGain: 0.99)))!.message, contains('freed only'));
@@ -362,9 +372,17 @@ void main() {
       final c = Conv()..user('start');
       const system = 'You are a test assistant.';
       final oldKey = PassthroughContextManager.prefixKeyOf(system, const [], const []);
-      c.assistant('', calls: [const ToolCall(id: 'c1', name: 'read_file', arguments: {'path': '/a'})],
-          reasoning: 'think 1', prefixKey: oldKey);
-      c.results([ToolResultPart(callId: 'c1', toolName: 'read_file', content: [TextPart(lines(400))])]);
+      c.assistant(
+        '',
+        calls: [
+          const ToolCall(id: 'c1', name: 'read_file', arguments: {'path': '/a'}),
+        ],
+        reasoning: 'think 1',
+        prefixKey: oldKey,
+      );
+      c.results([
+        ToolResultPart(callId: 'c1', toolName: 'read_file', content: [TextPart(lines(400))]),
+      ]);
       for (final id in ['c2', 'c3', 'c4']) {
         c.toolTurn(id, 'read_file', {'path': '/$id'}, 'small');
       }
@@ -400,8 +418,10 @@ void main() {
       final second = await m.prepare(req(c.messages, overlays: overlays));
       expect(second.newOverlays, isEmpty);
       expect(second.prefixKey, first.prefixKey);
-      expect(jsonEncode([for (final x in second.messages) x.toJson()]),
-          jsonEncode([for (final x in first.messages) x.toJson()]));
+      expect(
+        jsonEncode([for (final x in second.messages) x.toJson()]),
+        jsonEncode([for (final x in first.messages) x.toJson()]),
+      );
       // Overlay ids are deterministic: a re-run without persistence
       // produces the same ids, so a racing double-write cannot duplicate.
       final again = await m.prepare(req(c.messages));

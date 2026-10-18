@@ -27,7 +27,10 @@ class TableBlockView extends StatelessWidget {
           children: [
             for (var c = 0; c < table.columnCount; c++)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 child: InlineText(
                   c < cells.length ? cells[c] : const [],
                   style: style,

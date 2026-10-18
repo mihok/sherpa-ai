@@ -54,7 +54,8 @@ class _MarkdownImageState extends State<MarkdownImage> {
       );
     }
     if (uri.scheme == 'data') return _dataImage(context, src!);
-    final web = (uri.scheme == 'http' || uri.scheme == 'https') && uri.host.isNotEmpty;
+    final web =
+        (uri.scheme == 'http' || uri.scheme == 'https') && uri.host.isNotEmpty;
     if (!web) {
       return _Chip(
         icon: Icons.hide_image_outlined,
@@ -81,7 +82,11 @@ class _MarkdownImageState extends State<MarkdownImage> {
         semanticLabel: widget.image.alt.isEmpty ? label : widget.image.alt,
         loadingBuilder: (context, child, progress) => progress == null
             ? child
-            : _Chip(icon: Icons.downloading_outlined, label: label, hint: 'Loading…'),
+            : _Chip(
+                icon: Icons.downloading_outlined,
+                label: label,
+                hint: 'Loading…',
+              ),
         errorBuilder: (context, error, stack) => _Chip(
           icon: Icons.broken_image_outlined,
           label: "Couldn't load image from ${uri.host}",

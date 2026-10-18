@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/painting.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -29,21 +28,21 @@ List<MethodCall> mockPlatform(WidgetTester tester) {
 
 void main() {
   group('copy button', () {
-    testWidgets('copies, buzzes, reports, then resets its icon', (tester) async {
+    testWidgets('copies, buzzes, reports, then resets its icon', (
+      tester,
+    ) async {
       final calls = mockPlatform(tester);
       final copied = <String>[];
-      await pumpMarkdown(
-        tester,
-        '```sh\necho hi\n```',
-        onCopyCode: copied.add,
-      );
+      await pumpMarkdown(tester, '```sh\necho hi\n```', onCopyCode: copied.add);
       await tester.tap(find.byIcon(Icons.content_copy_rounded));
       await tester.pump();
 
       final setData = calls.singleWhere((c) => c.method == 'Clipboard.setData');
       expect((setData.arguments as Map)['text'], 'echo hi');
       expect(
-        calls.where((c) => c.method == 'HapticFeedback.vibrate').map((c) => c.arguments),
+        calls
+            .where((c) => c.method == 'HapticFeedback.vibrate')
+            .map((c) => c.arguments),
         ['HapticFeedbackType.lightImpact'],
       );
       expect(copied, ['echo hi']);
@@ -76,7 +75,11 @@ void main() {
 
     testWidgets('autolinks are tappable', (tester) async {
       final taps = <Uri>[];
-      await pumpMarkdown(tester, 'see https://sherpa.example.org/x ok', onLinkTap: taps.add);
+      await pumpMarkdown(
+        tester,
+        'see https://sherpa.example.org/x ok',
+        onLinkTap: taps.add,
+      );
       await tester.tapOnText(find.textRange.ofSubstring('sherpa.example'));
       expect(taps.single.host, 'sherpa.example.org');
     });
@@ -105,11 +108,21 @@ void main() {
       expect(taps, isEmpty);
     });
 
-    testWidgets('the newest callback is used even for frozen blocks', (tester) async {
+    testWidgets('the newest callback is used even for frozen blocks', (
+      tester,
+    ) async {
       final first = <Uri>[];
       final second = <Uri>[];
-      await pumpMarkdown(tester, '[a](https://a.io)\n\nmore', onLinkTap: first.add);
-      await pumpMarkdown(tester, '[a](https://a.io)\n\nmore', onLinkTap: second.add);
+      await pumpMarkdown(
+        tester,
+        '[a](https://a.io)\n\nmore',
+        onLinkTap: first.add,
+      );
+      await pumpMarkdown(
+        tester,
+        '[a](https://a.io)\n\nmore',
+        onLinkTap: second.add,
+      );
       await tester.tapOnText(find.textRange.ofSubstring('a'));
       expect(first, isEmpty);
       expect(second, hasLength(1));
@@ -129,7 +142,7 @@ void main() {
         expect(find.byType(Image), findsNothing);
         expect(
           tester.getSemantics(find.text('Image from images.example.net')),
-          containsSemantics(isButton: true, hint: 'Tap to load'),
+          isSemantics(isButton: true, hint: 'Tap to load'),
         );
 
         // Nothing is requested on rebuilds or as the message grows.
@@ -141,8 +154,13 @@ void main() {
         await tester.pump();
         await tester.pump();
         final image = tester.widget<Image>(find.byType(Image));
-        expect((image.image as NetworkImage).url, 'https://images.example.net/d.png');
-        expect(client.requested, [Uri.parse('https://images.example.net/d.png')]);
+        expect(
+          (image.image as NetworkImage).url,
+          'https://images.example.net/d.png',
+        );
+        expect(client.requested, [
+          Uri.parse('https://images.example.net/d.png'),
+        ]);
         // The failed fetch shows a retry chip, not a broken layout.
         await tester.pump();
         expect(find.textContaining("Couldn't load image"), findsOneWidget);
@@ -153,12 +171,17 @@ void main() {
     });
 
     testWidgets('inline images in text are placeholders too', (tester) async {
-      await pumpMarkdown(tester, 'Look: ![x](http://cdn.example.com/x.gif) here');
+      await pumpMarkdown(
+        tester,
+        'Look: ![x](http://cdn.example.com/x.gif) here',
+      );
       expect(find.text('Image from cdn.example.com'), findsOneWidget);
       expect(find.byType(Image), findsNothing);
     });
 
-    testWidgets('data: URIs render directly; oversized and SVG ones do not', (tester) async {
+    testWidgets('data: URIs render directly; oversized and SVG ones do not', (
+      tester,
+    ) async {
       // 1×1 transparent PNG.
       const png =
           'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -166,7 +189,9 @@ void main() {
       final image = tester.widget<Image>(find.byType(Image));
       expect(image.image, isA<ResizeImage>());
 
-      final svg = base64.encode(utf8.encode('<svg xmlns="http://www.w3.org/2000/svg"/>'));
+      final svg = base64.encode(
+        utf8.encode('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+      );
       await pumpMarkdown(tester, '![v](data:image/svg+xml;base64,$svg)');
       expect(find.byType(Image), findsNothing);
       expect(find.text('Unsupported image'), findsOneWidget);
@@ -178,12 +203,17 @@ void main() {
     });
 
     testWidgets('relative and file: sources are never loaded', (tester) async {
-      await pumpMarkdown(tester, '![a](img/a.png)\n\n![b](file:///sdcard/b.png)');
+      await pumpMarkdown(
+        tester,
+        '![a](img/a.png)\n\n![b](file:///sdcard/b.png)',
+      );
       expect(find.byType(Image), findsNothing);
       expect(find.text('Image not loaded'), findsNWidgets(2));
     });
 
-    testWidgets('a streaming image (no URL yet) is a disabled placeholder', (tester) async {
+    testWidgets('a streaming image (no URL yet) is a disabled placeholder', (
+      tester,
+    ) async {
       await pumpMarkdown(tester, '![chart](https://img', streaming: true);
       expect(find.text('Image'), findsOneWidget);
       await tester.tap(find.text('Image'));

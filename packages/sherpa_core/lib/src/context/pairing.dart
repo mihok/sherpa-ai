@@ -87,19 +87,23 @@ abstract final class ToolPairing {
         for (final r in next.toolResults.where((r) => !owned.contains(r.callId))) {
           issues.add(PairingIssue(PairingIssueKind.orphanResult, messageId: next.id, callId: r.callId));
         }
-        final byId = {for (final r in [...next.toolResults, ...synthesized]) r.callId: r};
+        final byId = {
+          for (final r in [...next.toolResults, ...synthesized]) r.callId: r,
+        };
         final ordered = [for (final c in m.toolCalls) byId[c.id]!];
         final other = next.content.where((p) => p is! ToolResultPart);
         src[i + 1] = next.copyWith(content: [...ordered, ...other]);
       } else {
-        out.add(Message(
-          id: 'synthetic:results:${m.id}',
-          parentId: m.id,
-          role: Role.tool,
-          createdAt: m.createdAt,
-          content: synthesized,
-          metadata: const {'synthetic': true},
-        ));
+        out.add(
+          Message(
+            id: 'synthetic:results:${m.id}',
+            parentId: m.id,
+            role: Role.tool,
+            createdAt: m.createdAt,
+            content: synthesized,
+            metadata: const {'synthetic': true},
+          ),
+        );
       }
     }
     // An intact view is returned as the same list, so callers can tell.

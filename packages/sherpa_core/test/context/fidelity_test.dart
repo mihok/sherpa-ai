@@ -39,7 +39,10 @@ void main() {
     }
     if (t % 10 == 4) {
       final k = t ~/ 10;
-      c.toolTurn('cart$k', 'cart_create', {'owner': 'me', 'label': 'cart $k'}, '{"basket_id": "${handles[k]}", "items": []}');
+      c.toolTurn('cart$k', 'cart_create', {
+        'owner': 'me',
+        'label': 'cart $k',
+      }, '{"basket_id": "${handles[k]}", "items": []}');
       c.toolTurn('mail$k', 'send_email', {'to': 'team@example.com', 'subject': 'cart $k'}, 'sent');
     }
     c.assistant('Turn $t done. ${'notes ' * 40}');
@@ -55,7 +58,9 @@ void main() {
       if (!compactAt.contains(t + 1)) continue;
       // Compact at the boundary before turn t+1's user message.
       c.user('Turn ${t + 1} is next.');
-      final outcome = await manager.compactNow(req(c.messages, overlays: overlays, tools: tools, settings: settings, window: 65536));
+      final outcome = await manager.compactNow(
+        req(c.messages, overlays: overlays, tools: tools, settings: settings, window: 65536),
+      );
       expect(outcome.compacted, isTrue, reason: 'compaction before turn ${t + 1}: ${outcome.skippedReason}');
       overlays.add(outcome.overlay!);
     }
@@ -102,8 +107,8 @@ void main() {
       expect(rendered, contains('do not repeat them'));
 
       // The latest user turn stays verbatim after the summary.
-      final p = await LadderContextManager(clock: FakeClock()).prepare(
-          req(conv.messages, overlays: ranges, tools: tools, window: 65536));
+      final p = await LadderContextManager(clock: FakeClock())
+          .prepare(req(conv.messages, overlays: ranges, tools: tools, window: 65536));
       expect(p.messages.first.kind, MessageKind.summary);
       expect(p.messages.last.text, 'Turn 40 is next.');
       expectProviderInvariants(p.messages);

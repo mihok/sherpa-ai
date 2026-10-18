@@ -54,8 +54,7 @@ InlineRepair repairTrailingInline(String input) {
     head = text.substring(0, code.openAt);
     final content = text.substring(code.openAt + code.runLength);
     if (content.trim().isNotEmpty) {
-      codeTail =
-          '${text.substring(code.openAt)}${'`' * code.runLength}';
+      codeTail = '${text.substring(code.openAt)}${'`' * code.runLength}';
     }
   }
 

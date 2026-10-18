@@ -128,7 +128,9 @@ class _StreamingMarkdownState extends State<StreamingMarkdown> {
       spacing: theme.blockSpacing,
       children: children,
     );
-    if (!widget.selectable) content = SelectionContainer.disabled(child: content);
+    if (!widget.selectable) {
+      content = SelectionContainer.disabled(child: content);
+    }
     return MarkdownScope(
       theme: theme,
       callbacks: _callbacks,

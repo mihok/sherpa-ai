@@ -22,7 +22,8 @@ abstract final class PayloadShrink {
     int keepLines = 5,
     int maxLineChars = 160,
   }) {
-    final head = '[tool result elided: $toolName, ${groupDigits(tokens)} tokens, call $callId; '
+    final head =
+        '[tool result elided: $toolName, ${groupDigits(tokens)} tokens, call $callId; '
         'call the tool again if needed]';
     final excerpt = headTailLines(text, keepLines: keepLines, maxLineChars: maxLineChars);
     return excerpt.isEmpty ? head : '$head\n$excerpt';
@@ -31,7 +32,10 @@ abstract final class PayloadShrink {
   /// First and last [keepLines] non-empty lines with a marker between them;
   /// the whole text (lines clipped) when it is short.
   static String headTailLines(String text, {int keepLines = 5, int maxLineChars = 160}) {
-    final lines = [for (final l in text.split('\n')) if (l.trim().isNotEmpty) clipText(l.trimRight(), maxLineChars)];
+    final lines = [
+      for (final l in text.split('\n'))
+        if (l.trim().isNotEmpty) clipText(l.trimRight(), maxLineChars),
+    ];
     if (lines.length <= keepLines * 2) return lines.join('\n');
     final omitted = lines.length - keepLines * 2;
     return [
@@ -64,7 +68,8 @@ abstract final class PayloadShrink {
       switch (v) {
         case String() when v.length > maxStringChars:
           final keep = (maxStringChars ~/ 2).clamp(8, 1 << 20);
-          return '${clipText(v, keep)} [${groupDigits(v.length)} chars elided, digest ${Digest.fnv64(v).substring(0, 8)}]';
+          final digest = Digest.fnv64(v).substring(0, 8);
+          return '${clipText(v, keep)} [${groupDigits(v.length)} chars elided, digest $digest]';
         case Map<Object?, Object?>():
           if (depth >= maxDepth) return '[object with ${v.length} keys elided]';
           return {for (final e in v.entries) e.key.toString(): walk(e.value, depth + 1)};
@@ -117,7 +122,8 @@ abstract final class PayloadShrink {
     JsonMap? structured,
     required int maxChars,
   }) {
-    final marker = '[tool result truncated: $toolName, ${groupDigits(tokens)} tokens, call $callId; '
+    final marker =
+        '[tool result truncated: $toolName, ${groupDigits(tokens)} tokens, call $callId; '
         'call the tool again with a narrower request if you need the rest]';
     final budget = (maxChars - marker.length - 1).clamp(64, 1 << 30);
     final json = structured ?? _jsonOrNull(text);

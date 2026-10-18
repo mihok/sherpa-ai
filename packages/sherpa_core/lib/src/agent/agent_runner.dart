@@ -303,6 +303,8 @@ final class AgentRunner {
       memory: _memory?.current ?? MemoryState.unknown,
       settings: _config.contextSettings,
       cancel: run.token,
+      location: _provider.info.location,
+      boundaryNonce: session.settings.opt<String>('boundaryNonce'),
     ));
     for (final o in prepared.newOverlays) {
       await _store.putOverlay(sid, o);
@@ -314,7 +316,10 @@ final class AgentRunner {
       if (rec.kind == ContextRecommendationKind.hardStop) {
         throw ContextOverflowException(prepared.budget, rec.message);
       }
-      run.emit(RunNotice('handoff_recommended', rec.message));
+      if (!run.handoffNoticed) {
+        run.handoffNoticed = true;
+        run.emit(RunNotice('handoff_recommended', rec.message));
+      }
     }
 
     final id = draftId ?? _ids.next('msg');
@@ -422,7 +427,7 @@ final class AgentRunner {
     return done.future.then((m) async {
       await run.serial(() async {});
       return m;
-    });
+    }).whenComplete(providerToken.detach);
   }
 
   void _calibrate(int estimatedInput, Usage? usage) {
@@ -623,6 +628,7 @@ final class AgentRunner {
     } on Object catch (e) {
       result = ToolResult.error('"${c.name}" failed: $e');
     }
+    token.detach();
     final ms = _clock.now().difference(started).inMilliseconds;
     await _audit(run, AuditKind.toolCall, '${c.name}${result.isError ? ' (error)' : ''}', {
       'callId': c.id,
@@ -726,6 +732,7 @@ final class _Run {
   int step = 0;
   String? leafId;
   bool finished = false;
+  bool handoffNoticed = false;
   Future<void> _tail = Future.value();
 
   void emit(AgentEvent e) {
@@ -809,7 +816,11 @@ final class _Accumulator {
 
   void _appendText(String text, {required bool reasoning}) {
     final last = _segments.lastOrNull;
-    if (last != null && last.call == null && last.reasoning == reasoning && last.signature == null) {
+    if (last != null &&
+        last.call == null &&
+        last.reasoning == reasoning &&
+        last.signature == null &&
+        last.redacted == null) {
       last.text.write(text);
     } else {
       _segments.add(_Segment(reasoning: reasoning)..text.write(text));
@@ -858,6 +869,11 @@ final class _Accumulator {
       )));
     }
     var reason = finishReason;
+    if (reason == FinishReason.refusal.name) {
+      // A refused turn's tool calls must never execute, even if some were
+      // streamed before the refusal arrived.
+      parts.removeWhere((p) => p is ToolCallPart);
+    }
     if (reason == FinishReason.toolCalls.name && !parts.any((p) => p is ToolCallPart)) {
       reason = FinishReason.stop.name;
     }

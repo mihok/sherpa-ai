@@ -113,11 +113,7 @@ class _CodeBlockViewState extends State<CodeBlockView> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _CodeHeader(
-            label: label,
-            copied: _copied,
-            onCopy: _copy,
-          ),
+          _CodeHeader(label: label, copied: _copied, onCopy: _copy),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
@@ -161,7 +157,11 @@ class _CodeHeader extends StatelessWidget {
     );
     // A tooltip needs an Overlay; hosts may render messages outside one.
     if (Overlay.maybeOf(context) != null) {
-      button = Tooltip(message: tooltip, excludeFromSemantics: true, child: button);
+      button = Tooltip(
+        message: tooltip,
+        excludeFromSemantics: true,
+        child: button,
+      );
     }
     return Padding(
       padding: const EdgeInsetsDirectional.only(start: 14, end: 2),

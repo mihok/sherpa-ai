@@ -109,7 +109,10 @@ void main() {
 
   test('inspect is pure: no model calls, nothing created', () async {
     final provider = ScriptedProvider(const []);
-    final m = LadderContextManager(strategy: ModelContextStrategy(provider: provider, modelId: 'x'), clock: FakeClock());
+    final m = LadderContextManager(
+      strategy: ModelContextStrategy(provider: provider, modelId: 'x'),
+      clock: FakeClock(),
+    );
     final c = conversation();
     final i = m.inspect(req(c.messages, settings: settings));
     expect(provider.requests, isEmpty);

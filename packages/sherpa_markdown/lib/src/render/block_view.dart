@@ -14,7 +14,11 @@ import 'table_view.dart';
 /// Rendering context passed down through containers.
 @immutable
 final class NodeContext {
-  const NodeContext({this.listDepth = 0, this.tight = false, this.quoted = false});
+  const NodeContext({
+    this.listDepth = 0,
+    this.tight = false,
+    this.quoted = false,
+  });
 
   /// Nesting depth of lists (selects the bullet glyph).
   final int listDepth;
@@ -25,11 +29,12 @@ final class NodeContext {
   /// Inside a block quote: text is dimmed.
   final bool quoted;
 
-  NodeContext copyWith({int? listDepth, bool? tight, bool? quoted}) => NodeContext(
-    listDepth: listDepth ?? this.listDepth,
-    tight: tight ?? this.tight,
-    quoted: quoted ?? this.quoted,
-  );
+  NodeContext copyWith({int? listDepth, bool? tight, bool? quoted}) =>
+      NodeContext(
+        listDepth: listDepth ?? this.listDepth,
+        tight: tight ?? this.tight,
+        quoted: quoted ?? this.quoted,
+      );
 
   TextStyle bodyStyle(MarkdownTheme theme) =>
       quoted ? theme.body.copyWith(color: theme.quoteText) : theme.body;
@@ -75,11 +80,15 @@ class BlockChildren extends StatelessWidget {
   @override
   Widget build(BuildContext buildContext) {
     final theme = MarkdownScope.of(buildContext).theme;
-    if (nodes.length == 1) return MdNodeView(node: nodes.single, context: context);
+    if (nodes.length == 1) {
+      return MdNodeView(node: nodes.single, context: context);
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
-      spacing: spacing ?? (context.tight ? theme.blockSpacing * 0.25 : theme.blockSpacing),
+      spacing:
+          spacing ??
+          (context.tight ? theme.blockSpacing * 0.25 : theme.blockSpacing),
       children: [for (final n in nodes) MdNodeView(node: n, context: context)],
     );
   }
@@ -101,7 +110,9 @@ class MdNodeView extends StatelessWidget {
         container: true,
         headingLevel: level,
         child: Padding(
-          padding: EdgeInsets.only(top: level <= 2 ? theme.blockSpacing * 0.5 : 0),
+          padding: EdgeInsets.only(
+            top: level <= 2 ? theme.blockSpacing * 0.5 : 0,
+          ),
           child: InlineText(inlines, style: context.headingStyle(theme, level)),
         ),
       ),

@@ -31,12 +31,7 @@ enum ContextItemSource {
 /// One message exactly as the model would see it.
 @immutable
 final class InspectedItem {
-  const InspectedItem({
-    required this.message,
-    required this.tokens,
-    required this.source,
-    this.overlayIds = const [],
-  });
+  const InspectedItem({required this.message, required this.tokens, required this.source, this.overlayIds = const []});
 
   final Message message;
   final int tokens;
@@ -182,10 +177,26 @@ abstract final class ContextDiffs {
     return [
       for (final o in overlays)
         switch (o) {
-          ToolOutputElided() => _partDiff(o, path, index, counter, coveringRange,
-              kind: ContextDiffKind.elision, callId: o.callId, replacement: o.stub),
-          PayloadTruncated() => _partDiff(o, path, index, counter, coveringRange,
-              kind: ContextDiffKind.truncation, partIndex: o.partIndex, replacement: o.replacement),
+          ToolOutputElided() => _partDiff(
+            o,
+            path,
+            index,
+            counter,
+            coveringRange,
+            kind: ContextDiffKind.elision,
+            callId: o.callId,
+            replacement: o.stub,
+          ),
+          PayloadTruncated() => _partDiff(
+            o,
+            path,
+            index,
+            counter,
+            coveringRange,
+            kind: ContextDiffKind.truncation,
+            partIndex: o.partIndex,
+            replacement: o.replacement,
+          ),
           CompactedRange() => _rangeDiff(o, path, index, counter, active, overlays),
         },
     ];
@@ -247,7 +258,12 @@ abstract final class ContextDiffs {
     final to = index[o.toMessageId];
     final onPath = from != null && to != null && to >= from;
     final kept = onPath ? compactionSurvivors(path, from, to).toSet() : const <int>{};
-    final dropped = onPath ? [for (var k = from; k <= to; k++) if (!kept.contains(k)) path[k]] : const <Message>[];
+    final dropped = onPath
+        ? [
+            for (var k = from; k <= to; k++)
+              if (!kept.contains(k)) path[k],
+          ]
+        : const <Message>[];
     final isActive = active.any((r) => r.overlay.id == o.id);
     final covering = !onPath || isActive
         ? null
@@ -285,15 +301,17 @@ abstract final class ContextDiffs {
 
   /// Tokens [part] adds to [message].
   static int partTokens(TokenCounter counter, Message message, ContentPart part) =>
-      counter.countMessage(message.copyWith(content: [part])) - counter.countMessage(message.copyWith(content: const []));
+      counter.countMessage(message.copyWith(content: [part])) -
+      counter.countMessage(message.copyWith(content: const []));
 
   /// Human-readable payload of a part (diff "before" side).
   static String payloadText(ContentPart part) => switch (part) {
-        ToolResultPart() => part.structured == null || part.structured!.isEmpty
-            ? part.text
-            : '${part.text}\n${jsonEncode(part.structured)}'.trim(),
-        ToolCallPart(:final call) => jsonEncode(call.arguments),
-        TextPart(:final text) => text,
-        _ => jsonEncode(part.toJson()),
-      };
+    ToolResultPart() =>
+      part.structured == null || part.structured!.isEmpty
+          ? part.text
+          : '${part.text}\n${jsonEncode(part.structured)}'.trim(),
+    ToolCallPart(:final call) => jsonEncode(call.arguments),
+    TextPart(:final text) => text,
+    _ => jsonEncode(part.toJson()),
+  };
 }

@@ -294,7 +294,9 @@ String atxContent(String line) {
   return s;
 }
 
-final _thematicBreak = RegExp(r'^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$');
+final _thematicBreak = RegExp(
+  r'^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$',
+);
 
 /// `***`, `- - -`, `___` … (three or more of the same char, spaces allowed).
 bool isThematicBreak(String line) {
@@ -521,8 +523,14 @@ String? mathCloseContent(String line, MathOpen open) {
 // HTML blocks (CommonMark types 1–7)
 // ---------------------------------------------------------------------------
 
-final _html1 = RegExp(r'^<(?:script|pre|style|textarea)(?:[ \t>]|$)', caseSensitive: false);
-final _html1End = RegExp(r'</(?:script|pre|style|textarea)>', caseSensitive: false);
+final _html1 = RegExp(
+  r'^<(?:script|pre|style|textarea)(?:[ \t>]|$)',
+  caseSensitive: false,
+);
+final _html1End = RegExp(
+  r'</(?:script|pre|style|textarea)>',
+  caseSensitive: false,
+);
 final _html6 = RegExp(
   r'^</?(?:address|article|aside|base|basefont|blockquote|body|caption|center|'
   r'col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|'
@@ -564,7 +572,8 @@ bool htmlBlockEnds(int type, String line) => switch (type) {
   _ => false,
 };
 
-bool _isAsciiLetter(int c) => (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A);
+bool _isAsciiLetter(int c) =>
+    (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A);
 
 // ---------------------------------------------------------------------------
 // GFM tables

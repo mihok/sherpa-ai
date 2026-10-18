@@ -25,6 +25,10 @@ enum MessageKind {
   notice,
 }
 
+/// Token accounting for one model call, normalized across providers:
+/// [inputTokens] counts uncached prompt tokens (including tokens written
+/// to a prompt cache) and [cacheReadTokens] the prompt tokens served from
+/// cache, so the full prompt is `inputTokens + cacheReadTokens`.
 @immutable
 final class Usage {
   const Usage({

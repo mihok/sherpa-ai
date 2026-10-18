@@ -81,20 +81,25 @@ void main() {
       expect(node.language, 'python');
     });
 
-    test('an unclosed fence is an open, incomplete code block while streaming', () {
-      final blocks = IncrementalMarkdownParser().update('```py\nprint(1)\n');
-      expect(blocks.single.frozen, isFalse);
-      expect(
-        blocks.single.node,
-        const MdCodeBlock('print(1)', language: 'py', info: 'py', complete: false),
-      );
-    });
+    test(
+      'an unclosed fence is an open, incomplete code block while streaming',
+      () {
+        final blocks = IncrementalMarkdownParser().update('```py\nprint(1)\n');
+        expect(blocks.single.frozen, isFalse);
+        expect(
+          blocks.single.node,
+          const MdCodeBlock(
+            'print(1)',
+            language: 'py',
+            info: 'py',
+            complete: false,
+          ),
+        );
+      },
+    );
 
     test('end of input closes an unclosed fence when complete', () {
-      expect(
-        nodeOf('```\ncode'),
-        const MdCodeBlock('code', complete: true),
-      );
+      expect(nodeOf('```\ncode'), const MdCodeBlock('code', complete: true));
     });
 
     test('backtick info containing a backtick is not a fence', () {
@@ -182,10 +187,7 @@ void main() {
 
     test('only "1." may interrupt a paragraph', () {
       expect(nodesOf('In\n2015. A year'), hasLength(1));
-      expect(nodesOf('Steps:\n1. first'), [
-        isA<MdParagraph>(),
-        isA<MdList>(),
-      ]);
+      expect(nodesOf('Steps:\n1. first'), [isA<MdParagraph>(), isA<MdList>()]);
       expect(nodesOf('Items:\n- first'), hasLength(2));
     });
 
@@ -195,7 +197,10 @@ void main() {
       final nested = l.items.first.children[1] as MdList;
       final deeper = nested.items.single.children[1] as MdList;
       expect(deeper.ordered, isTrue);
-      expect(deeper.items.single.children.single, const MdParagraph([MdText('c')]));
+      expect(
+        deeper.items.single.children.single,
+        const MdParagraph([MdText('c')]),
+      );
     });
 
     test('tight vs loose', () {
@@ -226,13 +231,19 @@ void main() {
     test('task items', () {
       final l = list('- [ ] open\n- [x] done\n- [X] also\n- [ ]not task');
       expect([for (final i in l.items) i.checked], [false, true, true, null]);
-      expect(l.items.first.children.single, const MdParagraph([MdText('open')]));
+      expect(
+        l.items.first.children.single,
+        const MdParagraph([MdText('open')]),
+      );
     });
 
     test('fenced code with blank lines inside an item', () {
       final l = list('- x\n\n  ```\n  a\n\n  b\n  ```\n- y');
       expect(l.items, hasLength(2));
-      expect(l.items.first.children[1], const MdCodeBlock('a\n\nb', complete: true));
+      expect(
+        l.items.first.children[1],
+        const MdCodeBlock('a\n\nb', complete: true),
+      );
     });
 
     test('a thematic break ends the list', () {
@@ -284,7 +295,10 @@ void main() {
     test('a header row before its delimiter row previews as a table', () {
       final p = IncrementalMarkdownParser();
       final preview = p.update('| Model | Size |\n').single;
-      expect(preview.node, isA<MdTable>().having((t) => t.tentative, 'tentative', isTrue));
+      expect(
+        preview.node,
+        isA<MdTable>().having((t) => t.tentative, 'tentative', isTrue),
+      );
       expect((preview.node as MdTable).header, const [
         [MdText('Model')],
         [MdText('Size')],
@@ -304,7 +318,10 @@ void main() {
 
   group('thematic breaks', () {
     test('***, ---, ___ with spaces', () {
-      expect(nodesOf('***\n\n- - -\n\n_ _ _'), List.filled(3, const MdThematicBreak()));
+      expect(
+        nodesOf('***\n\n- - -\n\n_ _ _'),
+        List.filled(3, const MdThematicBreak()),
+      );
     });
   });
 
@@ -318,11 +335,16 @@ void main() {
     });
 
     test('closing delimiter at the end of a content line', () {
-      expect(nodeOf('\$\$\na +\nb \$\$'), const MdMathBlock('a +\nb', complete: true));
+      expect(
+        nodeOf('\$\$\na +\nb \$\$'),
+        const MdMathBlock('a +\nb', complete: true),
+      );
     });
 
     test('streams as incomplete raw TeX until closed', () {
-      final block = IncrementalMarkdownParser().update('\$\$\n\\frac{a}{').single;
+      final block = IncrementalMarkdownParser()
+          .update('\$\$\n\\frac{a}{')
+          .single;
       expect(block.node, const MdMathBlock(r'\frac{a}{', complete: false));
       expect(block.frozen, isFalse);
     });

@@ -51,13 +51,17 @@ Future<void> _loadFonts() async {
   }
 
   // Fonts declared by dependencies (KaTeX) are in the test asset bundle.
-  final manifest =
-      json.decode(await rootBundle.loadString('FontManifest.json')) as List<Object?>;
+  final manifest = json.decode(
+    await rootBundle.loadString('FontManifest.json'),
+  ) as List<Object?>;
   for (final entry in manifest.cast<Map<String, Object?>>()) {
     final family = entry['family']! as String;
-    final loader = FontLoader(family.replaceFirst(RegExp(r'^packages/[^/]+/'), ''));
+    final loader = FontLoader(
+      family.replaceFirst(RegExp(r'^packages/[^/]+/'), ''),
+    );
     final samePackaged = FontLoader(family);
-    for (final font in (entry['fonts']! as List<Object?>).cast<Map<String, Object?>>()) {
+    for (final font
+        in (entry['fonts']! as List<Object?>).cast<Map<String, Object?>>()) {
       final asset = font['asset']! as String;
       loader.addFont(rootBundle.load(asset));
       samePackaged.addFont(rootBundle.load(asset));
@@ -65,7 +69,8 @@ Future<void> _loadFonts() async {
     await loader.load();
     await samePackaged.load();
   }
-  const typewriter = 'packages/flutter_math_fork/lib/katex_fonts/fonts/KaTeX_Typewriter-Regular.ttf';
+  const typewriter =
+      'packages/flutter_math_fork/lib/katex_fonts/fonts/KaTeX_Typewriter-Regular.ttf';
   await (FontLoader('monospace')..addFont(rootBundle.load(typewriter))).load();
 }
 
@@ -76,9 +81,7 @@ Future<ByteData> _bytes(File f) async =>
 /// environment or by walking up from the flutter_tester binary
 /// (`bin/cache/artifacts/engine/<platform>/flutter_tester`).
 Directory? _materialFontsDir() {
-  final roots = <String>[
-    if (Platform.environment['FLUTTER_ROOT'] case final root?) root,
-  ];
+  final roots = <String>[?Platform.environment['FLUTTER_ROOT']];
   var dir = File(Platform.resolvedExecutable).parent;
   for (var i = 0; i < 6; i++) {
     roots.add(dir.path);

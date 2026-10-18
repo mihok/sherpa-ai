@@ -58,14 +58,7 @@ final class WindowProfile {
       <= 8192 => (WindowTier.small, 0.55, _min(0.70, formula), 0.90, 2, 0.35),
       <= 16384 => (WindowTier.medium, 0.60, _min(0.78, formula), 0.92, 2, 0.30),
       < 131072 => (WindowTier.large, 0.60, _min(0.80, formula), 0.92, 3, 0.30),
-      _ => (
-          WindowTier.huge,
-          _min(0.50, 100000 / w),
-          _min(_min(0.85, 150000 / w), formula),
-          0.95,
-          4,
-          0.30,
-        ),
+      _ => (WindowTier.huge, _min(0.50, 100000 / w), _min(_min(0.85, 150000 / w), formula), 0.95, 4, 0.30),
     };
     return WindowProfile(
       tier: tier,
@@ -77,12 +70,12 @@ final class WindowProfile {
   }
 
   factory WindowProfile.fromJson(JsonMap j) => WindowProfile(
-        thresholds: ContextThresholds.fromJson(j.obj('thresholds')),
-        keepRecentUserTurns: j.optInt('keepRecentUserTurns') ?? 2,
-        keptTailFraction: j.optDouble('keptTailFraction') ?? 0.30,
-        modelCompaction: j.opt<bool>('modelCompaction') ?? true,
-        tier: WindowTier.values.firstWhere((t) => t.name == j.opt<String>('tier'), orElse: () => WindowTier.custom),
-      );
+    thresholds: ContextThresholds.fromJson(j.obj('thresholds')),
+    keepRecentUserTurns: j.optInt('keepRecentUserTurns') ?? 2,
+    keptTailFraction: j.optDouble('keptTailFraction') ?? 0.30,
+    modelCompaction: j.opt<bool>('modelCompaction') ?? true,
+    tier: WindowTier.values.firstWhere((t) => t.name == j.opt<String>('tier'), orElse: () => WindowTier.custom),
+  );
 
   static const int defaultMaxSummaryTokens = 1024;
   static const int defaultSummarizerPromptTokens = 500;
@@ -157,12 +150,12 @@ final class WindowProfile {
         );
 
   JsonMap toJson() => {
-        'thresholds': thresholds.toJson(),
-        'keepRecentUserTurns': keepRecentUserTurns,
-        'keptTailFraction': keptTailFraction,
-        'modelCompaction': modelCompaction,
-        'tier': tier.name,
-      };
+    'thresholds': thresholds.toJson(),
+    'keepRecentUserTurns': keepRecentUserTurns,
+    'keptTailFraction': keptTailFraction,
+    'modelCompaction': modelCompaction,
+    'tier': tier.name,
+  };
 
   static double _min(double a, double b) => a < b ? a : b;
 }

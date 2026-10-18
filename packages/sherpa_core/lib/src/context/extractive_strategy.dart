@@ -22,21 +22,27 @@ final class ExtractiveContextStrategy implements ContextStrategy {
   String get id => 'extractive';
 
   static final RegExp _preference = RegExp(
-      r"\b(i prefer|i'd prefer|i would prefer|i like|i'd like|i would like|please use|my preference)\b",
-      caseSensitive: false);
+    r"\b(i prefer|i'd prefer|i would prefer|i like|i'd like|i would like|please use|my preference)\b",
+    caseSensitive: false,
+  );
   static final RegExp _constraint = RegExp(
-      r"\b(must|mustn't|never|always|do not|don't|only|no more than|at most|at least|make sure|ensure|"
-      r'required|requirement|constraint|forbidden|avoid)\b',
-      caseSensitive: false);
+    r"\b(must|mustn't|never|always|do not|don't|only|no more than|at most|at least|make sure|ensure|"
+    r'required|requirement|constraint|forbidden|avoid)\b',
+    caseSensitive: false,
+  );
   static final RegExp _decision = RegExp(
-      r"\b(i will use|i'll use|we'll use|we will use|decided|decision:|going with|chose|i chose|switching to)\b",
-      caseSensitive: false);
+    r"\b(i will use|i'll use|we'll use|we will use|decided|decision:|going with|chose|i chose|switching to)\b",
+    caseSensitive: false,
+  );
 
   @override
   Future<CompactionSummary> summarize(CompactionInput input, {CancellationToken? cancel}) async {
     cancel?.throwIfCancelled();
     final prev = input.previousSummary;
-    final users = [for (final m in input.messages) if (isRealUserTurn(m)) m];
+    final users = [
+      for (final m in input.messages)
+        if (isRealUserTurn(m)) m,
+    ];
     final constraints = <String>[];
     final preferences = <String>[];
     for (final m in users) {
@@ -51,8 +57,9 @@ final class ExtractiveContextStrategy implements ContextStrategy {
     final plan = input.plan ?? prev?.plan;
     final model = CompactionSummary(
       goal: clipText(
-          input.taskStatement ?? prev?.goal ?? (users.isEmpty ? '' : firstLine(users.first.text)),
-          CompactionSummary.goalChars),
+        input.taskStatement ?? prev?.goal ?? (users.isEmpty ? '' : firstLine(users.first.text)),
+        CompactionSummary.goalChars,
+      ),
       constraints: SummaryComposer.carryForward(prev?.constraints ?? const [], constraints, cap: 12),
       userPreferences: SummaryComposer.carryForward(prev?.userPreferences ?? const [], preferences, cap: 8),
       decisions: SummaryComposer.carryForward(prev?.decisions ?? const [], _decisions(input.messages), cap: 12),
@@ -72,17 +79,17 @@ final class ExtractiveContextStrategy implements ContextStrategy {
       CompactionSummary.dedupeItems([...fresh.reversed, ...?previous]).take(cap).toList();
 
   static List<String> _decisions(List<Message> messages) => [
-        for (final m in messages)
-          if (m.role == Role.assistant)
-            for (final s in sentences(m.text))
-              if (_decision.hasMatch(s)) '${Provenance.model} ${clipText(s, 230)}',
-      ];
+    for (final m in messages)
+      if (m.role == Role.assistant)
+        for (final s in sentences(m.text))
+          if (_decision.hasMatch(s)) '${Provenance.model} ${clipText(s, 230)}',
+  ];
 
   static List<String> _planItems(Plan? plan, {required bool done}) => [
-        for (final i in plan?.items ?? const <PlanItem>[])
-          if ((i.status == PlanStatus.done) == done && i.status != PlanStatus.cancelled)
-            '${Provenance.model} ${clipText(i.title, 190)}',
-      ];
+    for (final i in plan?.items ?? const <PlanItem>[])
+      if ((i.status == PlanStatus.done) == done && i.status != PlanStatus.cancelled)
+        '${Provenance.model} ${clipText(i.title, 190)}',
+  ];
 
   static String? _currentWork(List<Message> messages) {
     for (final m in messages.reversed) {
@@ -116,9 +123,11 @@ final class ExtractiveContextStrategy implements ContextStrategy {
         final line = firstLine(p.text);
         if (line.isEmpty) continue;
         final tag = Provenance.tool(p.toolName);
-        out.add(errors
-            ? '$tag ${calls[p.callId] ?? p.toolName} failed: ${clipText(line, 180)}'
-            : '$tag ${clipText(line, 220)}');
+        out.add(
+          errors
+              ? '$tag ${calls[p.callId] ?? p.toolName} failed: ${clipText(line, 180)}'
+              : '$tag ${clipText(line, 220)}',
+        );
       }
     }
     return out;

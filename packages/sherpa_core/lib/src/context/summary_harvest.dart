@@ -57,11 +57,16 @@ abstract final class SummaryComposer {
     final covered = {...?prev?.coveredMessageIds};
     return CompactionSummary(
       goal: model.goal.trim().isNotEmpty ? model.goal : (prev?.goal ?? input.taskStatement ?? ''),
-      constraints: carryForward(prev?.constraints ?? const [], model.constraints.where((s) => !Provenance.isTool(s)),
-          cap: CompactionSummary.listLimits['constraints']!.$1),
+      constraints: carryForward(
+        prev?.constraints ?? const [],
+        model.constraints.where((s) => !Provenance.isTool(s)),
+        cap: CompactionSummary.listLimits['constraints']!.$1,
+      ),
       userPreferences: carryForward(
-          prev?.userPreferences ?? const [], model.userPreferences.where((s) => !Provenance.isTool(s)),
-          cap: CompactionSummary.listLimits['userPreferences']!.$1),
+        prev?.userPreferences ?? const [],
+        model.userPreferences.where((s) => !Provenance.isTool(s)),
+        cap: CompactionSummary.listLimits['userPreferences']!.$1,
+      ),
       decisions: model.decisions,
       completed: model.completed,
       openTasks: model.openTasks,
@@ -75,7 +80,11 @@ abstract final class SummaryComposer {
       nextStepQuote: h.nextStepQuote ?? prev?.nextStepQuote,
       artifacts: _newestFirst(h.artifacts, prev?.artifacts ?? const [], (a) => a, CompactionSummary.maxArtifacts),
       stateHandles: _newestFirst(
-          h.stateHandles, prev?.stateHandles ?? const [], (s) => s.dedupeKey, CompactionSummary.maxStateHandles),
+        h.stateHandles,
+        prev?.stateHandles ?? const [],
+        (s) => s.dedupeKey,
+        CompactionSummary.maxStateHandles,
+      ),
       sideEffectLedger: [
         ...?prev?.sideEffectLedger,
         for (final s in h.sideEffects)
@@ -166,7 +175,10 @@ abstract final class SummaryComposer {
       stateHandles: _dedupeBy(handles.reversed, (h) => h.dedupeKey).toList(),
       sideEffects: effects,
       taint: _dedupeBy(taint, (t) => t.source).toList(),
-      coveredMessageIds: [for (final m in input.messages) if (!isSyntheticView(m)) m.id],
+      coveredMessageIds: [
+        for (final m in input.messages)
+          if (!isSyntheticView(m)) m.id,
+      ],
     );
   }
 
@@ -174,18 +186,16 @@ abstract final class SummaryComposer {
   // User intent
 
   static List<String> _userMessages(CompactionInput input, TokenCounter counter) => _collectUserMessages(
-        [for (final m in input.messages.reversed) if (isRealUserTurn(m) && m.text.trim().isNotEmpty) m.text.trim()],
-        input.previousSummary?.userMessages ?? const [],
-        input.userMessageTokens,
-        counter,
-      );
+    [
+      for (final m in input.messages.reversed)
+        if (isRealUserTurn(m) && m.text.trim().isNotEmpty) m.text.trim(),
+    ],
+    input.previousSummary?.userMessages ?? const [],
+    input.userMessageTokens,
+    counter,
+  );
 
-  static List<String> _collectUserMessages(
-    List<String> fresh,
-    List<String> older,
-    int budget,
-    TokenCounter counter,
-  ) {
+  static List<String> _collectUserMessages(List<String> fresh, List<String> older, int budget, TokenCounter counter) {
     final out = <String>[];
     var left = budget;
     for (final text in [...fresh, ...older]) {
@@ -227,10 +237,13 @@ abstract final class SummaryComposer {
 
   static final RegExp _uri = RegExp(r'''\b[a-zA-Z][a-zA-Z0-9+.-]{1,15}://[^\s<>"'`)\]}|\\]+''');
   static final RegExp _absPath = RegExp(r'''(?<![\w.:/~@%-])(?:~|\.{1,2})?/(?:[\w.@+-]+/)*[\w.@+-]+''');
-  static final RegExp _relPath =
-      RegExp(r'''(?<![\w.:/~@%-])(?:[\w@+-][\w.@+-]*/)+[\w@+-][\w.@+-]*\.[A-Za-z][A-Za-z0-9]{0,7}(?![\w/])''');
-  static final RegExp _artifactKey =
-      RegExp(r'(path|file|filename|dir|directory|folder|uri|url|href|src|dest|destination|target)$', caseSensitive: false);
+  static final RegExp _relPath = RegExp(
+    r'''(?<![\w.:/~@%-])(?:[\w@+-][\w.@+-]*/)+[\w@+-][\w.@+-]*\.[A-Za-z][A-Za-z0-9]{0,7}(?![\w/])''',
+  );
+  static final RegExp _artifactKey = RegExp(
+    r'(path|file|filename|dir|directory|folder|uri|url|href|src|dest|destination|target)$',
+    caseSensitive: false,
+  );
   static const String _trailingPunct = '.,;:!?\'")';
   static const int _scanLimit = 50000;
 
@@ -259,23 +272,24 @@ abstract final class SummaryComposer {
   static List<String> artifactsInJson(Object? value, {String? key, int depth = 0}) {
     if (depth > 6) return const [];
     return switch (value) {
-      String() when key != null && _artifactKey.hasMatch(key) && value.isNotEmpty && !value.contains('\n') =>
-        [clipText(value.trim(), CompactionSummary.maxArtifactChars)],
+      String() when key != null && _artifactKey.hasMatch(key) && value.isNotEmpty && !value.contains('\n') => [
+        clipText(value.trim(), CompactionSummary.maxArtifactChars),
+      ],
       String() => extractArtifacts(value),
       Map<Object?, Object?>() => [
-          for (final e in value.entries) ...artifactsInJson(e.value, key: e.key.toString(), depth: depth + 1),
-        ],
+        for (final e in value.entries) ...artifactsInJson(e.value, key: e.key.toString(), depth: depth + 1),
+      ],
       List<Object?>() => [for (final e in value.take(50)) ...artifactsInJson(e, key: key, depth: depth + 1)],
       _ => const [],
     };
   }
 
   static List<String> _artifactsInResult(ToolResultPart p) => [
-        ...extractArtifacts(p.text),
-        if (p.structured != null) ...artifactsInJson(p.structured),
-        for (final c in p.content)
-          if (c is ResourceLinkPart) c.uri else if (c is EmbeddedResourcePart) c.uri,
-      ];
+    ...extractArtifacts(p.text),
+    if (p.structured != null) ...artifactsInJson(p.structured),
+    for (final c in p.content)
+      if (c is ResourceLinkPart) c.uri else if (c is EmbeddedResourcePart) c.uri,
+  ];
 
   static String _trimPunct(String s) {
     var end = s.length;
@@ -289,13 +303,16 @@ abstract final class SummaryComposer {
   // State handles
 
   static final RegExp _handleKey = RegExp(
-      r'^(id|uuid|guid|handle|cursor|next_?cursor|ref)$|(_id|Id|ID|_uuid|Uuid|_handle|Handle|_ref|Ref)$');
+    r'^(id|uuid|guid|handle|cursor|next_?cursor|ref)$|(_id|Id|ID|_uuid|Uuid|_handle|Handle|_ref|Ref)$',
+  );
   static final RegExp _secretKey = RegExp(
-      r'(token|secret|passw|signature|credential|api_?key|apikey|auth|cookie|private|otp|pin$)',
-      caseSensitive: false);
+    r'(token|secret|passw|signature|credential|api_?key|apikey|auth|cookie|private|otp|pin$)',
+    caseSensitive: false,
+  );
   static final RegExp _secretValue = RegExp(r'^(sk-|ghp_|gho_|ghs_|hf_|xox[abprs]-|eyJ|AKIA|AIza)');
-  static final RegExp _handleText =
-      RegExp(r'''\b([A-Za-z][\w-]{0,40}?(?:_id|Id|ID|_handle|Handle|_ref))\b["']?\s*[:=]\s*["']?([\w.:/#-]{1,120})''');
+  static final RegExp _handleText = RegExp(
+    r'''\b([A-Za-z][\w-]{0,40}?(?:_id|Id|ID|_handle|Handle|_ref))\b["']?\s*[:=]\s*["']?([\w.:/#-]{1,120})''',
+  );
   static const int _handlesPerResult = 6;
 
   /// Ids and handles in a tool result (structured content, JSON text, or

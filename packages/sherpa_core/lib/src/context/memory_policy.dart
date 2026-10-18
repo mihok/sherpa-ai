@@ -42,10 +42,10 @@ final class MemoryContextPolicy {
   bool appliesTo(ExecutionLocation? location) => location == ExecutionLocation.onDevice;
 
   double limitFraction(MemoryState state) => switch (state.pressure) {
-        MemoryPressure.normal => normalFraction,
-        MemoryPressure.moderate => moderateFraction,
-        MemoryPressure.critical => criticalFraction,
-      };
+    MemoryPressure.normal => normalFraction,
+    MemoryPressure.moderate => moderateFraction,
+    MemoryPressure.critical => criticalFraction,
+  };
 
   /// The window to plan (and allocate) for [contextLength] under [state].
   int effectiveContextLength(int contextLength, MemoryState state) {

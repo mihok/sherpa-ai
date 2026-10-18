@@ -197,7 +197,8 @@ final class MdListItem {
       mdListEquals(children, other.children);
 
   @override
-  int get hashCode => Object.hash(MdListItem, checked, Object.hashAll(children));
+  int get hashCode =>
+      Object.hash(MdListItem, checked, Object.hashAll(children));
 
   @override
   String toString() => 'MdListItem(${checked ?? ''}$children)';

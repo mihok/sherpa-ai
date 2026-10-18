@@ -42,7 +42,9 @@ class MathView extends StatelessWidget {
       content = _raw();
     } else {
       final fontSize = style.fontSize ?? 16;
-      final scaler = inline ? TextScaler.noScaling : MediaQuery.textScalerOf(context);
+      final scaler = inline
+          ? TextScaler.noScaling
+          : MediaQuery.textScalerOf(context);
       content = Math.tex(
         tex,
         mathStyle: display ? MathStyle.display : MathStyle.text,

@@ -1,4 +1,3 @@
-import 'package:flutter/rendering.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -29,7 +28,10 @@ void main() {
     expect(spanContaining(tester, 'strong').style.fontWeight, FontWeight.w700);
     expect(spanContaining(tester, 'em').style.fontStyle, FontStyle.italic);
     expect(
-      spanContaining(tester, 'gone').style.decoration!.contains(TextDecoration.lineThrough),
+      spanContaining(
+        tester,
+        'gone',
+      ).style.decoration!.contains(TextDecoration.lineThrough),
       isTrue,
     );
     final code = spanContaining(tester, 'code').style;
@@ -40,13 +42,20 @@ void main() {
     expect(link.span.recognizer, isNotNull);
   });
 
-  testWidgets('paragraph soft breaks and hard breaks become line breaks', (tester) async {
+  testWidgets('paragraph soft breaks and hard breaks become line breaks', (
+    tester,
+  ) async {
     await pumpMarkdown(tester, 'one\ntwo  \nthree');
-    final text = tester.widget<RichText>(find.byType(RichText).first).text.toPlainText();
+    final text = tester
+        .widget<RichText>(find.byType(RichText).first)
+        .text
+        .toPlainText();
     expect(text, 'one\ntwo\nthree');
   });
 
-  testWidgets('code block: language label, copy button, horizontal scroll', (tester) async {
+  testWidgets('code block: language label, copy button, horizontal scroll', (
+    tester,
+  ) async {
     await pumpMarkdown(tester, '```dart\nvoid main() {}\n```');
     expect(find.text('dart'), findsOneWidget);
     expect(find.byIcon(Icons.content_copy_rounded), findsOneWidget);
@@ -65,7 +74,9 @@ void main() {
     expect(keyword.style.color, isNot(plainColor));
   });
 
-  testWidgets('table: header styling, alignment, horizontal scroll', (tester) async {
+  testWidgets('table: header styling, alignment, horizontal scroll', (
+    tester,
+  ) async {
     await pumpMarkdown(tester, '| L | C | R |\n|:--|:-:|--:|\n| a | b | c |');
     final table = tester.widget<Table>(find.byType(Table));
     expect(table.children, hasLength(2));
@@ -77,7 +88,12 @@ void main() {
     ];
     expect(aligns, [TextAlign.start, TextAlign.center, TextAlign.end]);
     final scroll = tester.widget<SingleChildScrollView>(
-      find.ancestor(of: find.byType(Table), matching: find.byType(SingleChildScrollView)).first,
+      find
+          .ancestor(
+            of: find.byType(Table),
+            matching: find.byType(SingleChildScrollView),
+          )
+          .first,
     );
     expect(scroll.scrollDirection, Axis.horizontal);
   });
@@ -85,9 +101,15 @@ void main() {
   testWidgets('block quote has a leading bar and dimmed text', (tester) async {
     await pumpMarkdown(tester, '> quoted\n\nplain');
     final box = tester.widget<DecoratedBox>(
-      find.ancestor(of: find.text('quoted'), matching: find.byType(DecoratedBox)).first,
+      find
+          .ancestor(
+            of: find.text('quoted'),
+            matching: find.byType(DecoratedBox),
+          )
+          .first,
     );
-    final border = (box.decoration as BoxDecoration).border! as BorderDirectional;
+    final border =
+        (box.decoration as BoxDecoration).border! as BorderDirectional;
     expect(border.start.width, 3);
     expect(
       spanContaining(tester, 'quoted').style.color,
@@ -95,7 +117,9 @@ void main() {
     );
   });
 
-  testWidgets('lists: bullets by depth, numbers from start, tasks', (tester) async {
+  testWidgets('lists: bullets by depth, numbers from start, tasks', (
+    tester,
+  ) async {
     final semantics = tester.ensureSemantics();
     await pumpMarkdown(
       tester,
@@ -112,11 +136,11 @@ void main() {
     // "checked, done" — no separate checkbox control.
     expect(
       tester.getSemantics(find.text('done')),
-      containsSemantics(hasCheckedState: true, isChecked: true),
+      isSemantics(hasCheckedState: true, isChecked: true),
     );
     expect(
       tester.getSemantics(find.text('todo')),
-      containsSemantics(hasCheckedState: true, isChecked: false),
+      isSemantics(hasCheckedState: true, isChecked: false),
     );
     semantics.dispose();
   });
@@ -126,27 +150,40 @@ void main() {
     expect(find.byType(Divider), findsOneWidget);
   });
 
-  testWidgets('math: block and inline render with flutter_math_fork', (tester) async {
-    await pumpMarkdown(tester, r'$$\frac{1}{2}$$' '\n\ninline \$x^2\$ here');
+  testWidgets('math: block and inline render with flutter_math_fork', (
+    tester,
+  ) async {
+    await pumpMarkdown(
+      tester,
+      r'$$\frac{1}{2}$$'
+      '\n\ninline \$x^2\$ here',
+    );
     expect(find.byType(Math), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('math parse errors fall back to raw TeX in monospace', (tester) async {
+  testWidgets('math parse errors fall back to raw TeX in monospace', (
+    tester,
+  ) async {
     await pumpMarkdown(tester, r'$$\frac{1}{$$');
     expect(find.text(r'\frac{1}{'), findsOneWidget);
     final raw = tester.widget<Text>(find.text(r'\frac{1}{'));
     expect(raw.style!.fontFamily, 'monospace');
   });
 
-  testWidgets('a streaming (unclosed) math block shows raw TeX', (tester) async {
+  testWidgets('a streaming (unclosed) math block shows raw TeX', (
+    tester,
+  ) async {
     await pumpMarkdown(tester, '\$\$\n\\int_0^1 x', streaming: true);
     expect(find.byType(Math), findsNothing);
     expect(find.text(r'\int_0^1 x'), findsOneWidget);
   });
 
   testWidgets('HTML is shown as text, never interpreted', (tester) async {
-    await pumpMarkdown(tester, '<div><b>bold?</b><img src="https://x.io/p.png"></div>');
+    await pumpMarkdown(
+      tester,
+      '<div><b>bold?</b><img src="https://x.io/p.png"></div>',
+    );
     expect(find.textContaining('<div><b>bold?</b>'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
   });
@@ -155,7 +192,11 @@ void main() {
     await pumpMarkdown(tester, 'text\n\n```\ncode\n```');
     final lightText = spanContaining(tester, 'text').style.color;
     final lightBox = _codeBackground(tester);
-    await pumpMarkdown(tester, 'text\n\n```\ncode\n```', brightness: Brightness.dark);
+    await pumpMarkdown(
+      tester,
+      'text\n\n```\ncode\n```',
+      brightness: Brightness.dark,
+    );
     expect(spanContaining(tester, 'text').style.color, isNot(lightText));
     expect(_codeBackground(tester), isNot(lightBox));
   });
@@ -176,7 +217,9 @@ void main() {
 
 Color _codeBackground(WidgetTester tester) {
   final box = tester.widget<DecoratedBox>(
-    find.ancestor(of: find.text('code'), matching: find.byType(DecoratedBox)).first,
+    find
+        .ancestor(of: find.text('code'), matching: find.byType(DecoratedBox))
+        .first,
   );
   return (box.decoration as BoxDecoration).color!;
 }

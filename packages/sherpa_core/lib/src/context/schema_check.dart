@@ -113,23 +113,23 @@ abstract final class SchemaCheck {
   }
 
   static bool _hasType(String type, Object? v) => switch (type) {
-        'object' => v is Map<Object?, Object?>,
-        'array' => v is List<Object?>,
-        'string' => v is String,
-        'integer' => v is int || (v is double && v == v.roundToDouble()),
-        'number' => v is num,
-        'boolean' => v is bool,
-        'null' => v == null,
-        _ => true,
-      };
+    'object' => v is Map<Object?, Object?>,
+    'array' => v is List<Object?>,
+    'string' => v is String,
+    'integer' => v is int || (v is double && v == v.roundToDouble()),
+    'number' => v is num,
+    'boolean' => v is bool,
+    'null' => v == null,
+    _ => true,
+  };
 
   static String _typeName(Object? v) => switch (v) {
-        null => 'null',
-        Map<Object?, Object?>() => 'object',
-        List<Object?>() => 'array',
-        String() => 'string',
-        num() => 'number',
-        bool() => 'boolean',
-        _ => v.runtimeType.toString(),
-      };
+    null => 'null',
+    Map<Object?, Object?>() => 'object',
+    List<Object?>() => 'array',
+    String() => 'string',
+    num() => 'number',
+    bool() => 'boolean',
+    _ => v.runtimeType.toString(),
+  };
 }

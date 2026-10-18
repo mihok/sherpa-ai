@@ -77,7 +77,11 @@ void main() {
         for (var seed = 1; seed <= 12; seed++) {
           final parser = stream(doc, randomChunks(seed, maxChunk: seed * 8));
           expect(parser.blocks, onceStreaming, reason: 'seed $seed');
-          expect(parser.update(doc, complete: true), once, reason: 'seed $seed');
+          expect(
+            parser.update(doc, complete: true),
+            once,
+            reason: 'seed $seed',
+          );
         }
       });
 
@@ -107,7 +111,11 @@ void main() {
             previousFrozen = count;
             for (final b in blocks.take(count)) {
               final seen = frozen.putIfAbsent(b.id, () => b);
-              expect(identical(seen, b), isTrue, reason: '${b.id} was replaced');
+              expect(
+                identical(seen, b),
+                isTrue,
+                reason: '${b.id} was replaced',
+              );
             }
           },
         );
@@ -135,7 +143,10 @@ void main() {
     });
 
     test('cost of a token does not depend on how many blocks are frozen', () {
-      final history = List.generate(500, (i) => 'Paragraph $i with **bold**.').join('\n\n');
+      final history = List.generate(
+        500,
+        (i) => 'Paragraph $i with **bold**.',
+      ).join('\n\n');
       final parser = IncrementalMarkdownParser()..update('$history\n\n');
       expect(parser.blocks, hasLength(500));
       expect(parser.blocks.every((b) => b.frozen), isTrue);
@@ -190,7 +201,10 @@ void main() {
       final p = IncrementalMarkdownParser();
       expect(p.update('Title\n-').single.node, isA<MdParagraph>());
       expect(p.update('Title\n---').single.node, isA<MdParagraph>());
-      expect(p.update('Title\n---\n').single.node, const MdHeading(2, [MdText('Title')]));
+      expect(
+        p.update('Title\n---\n').single.node,
+        const MdHeading(2, [MdText('Title')]),
+      );
     });
   });
 
@@ -225,7 +239,9 @@ void main() {
       // And it still matches a fresh parse (ignoring ids).
       expect(
         after.map((b) => b.node),
-        IncrementalMarkdownParser().update('# Keep\n\nnew paragraph\n\n').map((b) => b.node),
+        IncrementalMarkdownParser()
+            .update('# Keep\n\nnew paragraph\n\n')
+            .map((b) => b.node),
       );
     });
 

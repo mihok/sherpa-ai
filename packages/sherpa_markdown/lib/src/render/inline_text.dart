@@ -51,10 +51,10 @@ class _InlineTextState extends State<InlineText> {
     // before any pointer event can reach a disposed recognizer.
     _disposeRecognizers();
     final scope = MarkdownScope.of(context);
-    final span = InlineSpanBuilder(scope, _recognizers.add).build(
-      widget.inlines,
-      widget.style,
-    );
+    final span = InlineSpanBuilder(
+      scope,
+      _recognizers.add,
+    ).build(widget.inlines, widget.style);
     return Text.rich(span, textAlign: widget.textAlign);
   }
 }

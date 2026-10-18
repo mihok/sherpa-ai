@@ -35,11 +35,14 @@ abstract final class HandoffScrubbers {
   ];
   static final RegExp _bearer = RegExp(r'(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}', caseSensitive: false);
   static final RegExp _assignment = RegExp(
-      r'''\b(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)(\s*[:=]\s*["']?)[^\s"'&,;]{4,}''',
-      caseSensitive: false);
+    r'\b(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)'
+    r'''(\s*[:=]\s*["']?)[^\s"'&,;]{4,}''',
+    caseSensitive: false,
+  );
   static final RegExp _query = RegExp(
-      r'([?&](?:api[_-]?key|key|token|access_token|refresh_token|sig|signature|code|secret|password)=)[^&\s#]+',
-      caseSensitive: false);
+    r'([?&](?:api[_-]?key|key|token|access_token|refresh_token|sig|signature|code|secret|password)=)[^&\s#]+',
+    caseSensitive: false,
+  );
 
   /// Token-shaped strings, bearer values, `key=value` secrets and secret
   /// query parameters. Defense in depth only: it cannot know every format.
@@ -258,13 +261,15 @@ Future<SessionRecord> startSessionFromHandoff({
   await store.putMessage(sessionId, ack);
   final plan = bundle.plan ?? bundle.summary.plan;
   if (plan != null) await store.putPlan(sessionId, plan);
-  await store.appendAudit(AuditEntry(
-    id: ids.next('aud'),
-    sessionId: sessionId,
-    at: now,
-    kind: AuditKind.handoff,
-    summary: 'Started from a handoff of $from',
-    data: {'bundleCreatedAt': bundle.createdAt.toUtc().toIso8601String(), 'sourceModel': bundle.source.modelId},
-  ));
+  await store.appendAudit(
+    AuditEntry(
+      id: ids.next('aud'),
+      sessionId: sessionId,
+      at: now,
+      kind: AuditKind.handoff,
+      summary: 'Started from a handoff of $from',
+      data: {'bundleCreatedAt': bundle.createdAt.toUtc().toIso8601String(), 'sourceModel': bundle.source.modelId},
+    ),
+  );
   return session;
 }

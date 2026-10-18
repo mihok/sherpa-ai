@@ -88,8 +88,8 @@ final class LadderContextManager implements ContextManager {
     this.toolLookup,
     Clock clock = const SystemClock(),
     Random? random,
-  })  : _clock = clock,
-        _random = random ?? Random.secure();
+  }) : _clock = clock,
+       _random = random ?? Random.secure();
 
   /// Summarizer for windows above 4K (e.g. `ModelContextStrategy`).
   final ContextStrategy strategy;
@@ -167,10 +167,10 @@ final class LadderContextManager implements ContextManager {
       final (source, ids) = m.id.startsWith('summary:')
           ? (ContextItemSource.summary, ['${m.metadata['overlayId']}'])
           : m.id.startsWith('synthetic:')
-              ? (ContextItemSource.synthetic, const <String>[])
-              : raw != null && identical(request.path[raw], m)
-                  ? (ContextItemSource.transcript, const <String>[])
-                  : (ContextItemSource.edited, partOverlays[m.id] ?? const <String>[]);
+          ? (ContextItemSource.synthetic, const <String>[])
+          : raw != null && identical(request.path[raw], m)
+          ? (ContextItemSource.transcript, const <String>[])
+          : (ContextItemSource.edited, partOverlays[m.id] ?? const <String>[]);
       items.add(InspectedItem(message: m, tokens: view.counts[j], source: source, overlayIds: ids));
     }
     return ContextInspection(
@@ -223,17 +223,20 @@ final class LadderContextManager implements ContextManager {
         );
         final saved = tokens - ContextDiffs.partTokens(p.counter, m, PartRewrite.replacePayload(r, stub));
         if (saved < minSaving) continue;
-        out.add(ToolOutputElided(
-          id: 'ctx-elide:${m.id}:${r.callId}',
-          createdAt: p.now,
-          reason: 'Elided a stale ${r.toolName} result (call ${r.callId}, ${groupDigits(tokens)} → '
-              '${groupDigits(tokens - saved)} tokens): context was ${_pct(ratio)} full, pruning starts at '
-              '${_pct(p.profile.thresholds.prune)}.',
-          tokensSaved: saved,
-          messageId: m.id,
-          callId: r.callId,
-          stub: stub,
-        ));
+        out.add(
+          ToolOutputElided(
+            id: 'ctx-elide:${m.id}:${r.callId}',
+            createdAt: p.now,
+            reason:
+                'Elided a stale ${r.toolName} result (call ${r.callId}, ${groupDigits(tokens)} → '
+                '${groupDigits(tokens - saved)} tokens): context was ${_pct(ratio)} full, pruning starts at '
+                '${_pct(p.profile.thresholds.prune)}.',
+            tokensSaved: saved,
+            messageId: m.id,
+            callId: r.callId,
+            stub: stub,
+          ),
+        );
       }
     }
     return out;
@@ -255,9 +258,17 @@ final class LadderContextManager implements ContextManager {
         final tokens = ContextDiffs.partTokens(p.counter, m, part);
         if (tokens <= s.largeToolInputTokens) continue;
         final replacement = jsonEncode(PayloadShrink.shrinkArguments(call.arguments));
-        final o = _truncation(p, m, pi, part, tokens, replacement,
-            reason: (after) => 'Cleared the large input of ${call.name} (call ${call.id}, ${groupDigits(tokens)} → '
-                '${groupDigits(after)} tokens; argsDigest kept): context was ${_pct(ratio)} full.');
+        final o = _truncation(
+          p,
+          m,
+          pi,
+          part,
+          tokens,
+          replacement,
+          reason: (after) =>
+              'Cleared the large input of ${call.name} (call ${call.id}, ${groupDigits(tokens)} → '
+              '${groupDigits(after)} tokens; argsDigest kept): context was ${_pct(ratio)} full.',
+        );
         if (o != null) out.add(o);
       }
     }
@@ -287,21 +298,29 @@ final class LadderContextManager implements ContextManager {
         final charsPerToken = (text.length / tokens).clamp(1.0, 6.0);
         final replacement = switch (part) {
           ToolResultPart() => PayloadShrink.truncatedResult(
-              toolName: part.toolName,
-              callId: callId,
-              tokens: tokens,
-              text: part.text,
-              structured: part.structured,
-              maxChars: (keep * charsPerToken).round(),
-            ),
+            toolName: part.toolName,
+            callId: callId,
+            tokens: tokens,
+            text: part.text,
+            structured: part.structured,
+            maxChars: (keep * charsPerToken).round(),
+          ),
           ToolCallPart(:final call) => jsonEncode(PayloadShrink.shrinkArguments(call.arguments, maxStringChars: 40)),
           _ => text,
         };
         final name = part is ToolResultPart ? part.toolName : (part as ToolCallPart).call.name;
-        final o = _truncation(p, m, pi, part, tokens, replacement,
-            reason: (after) => 'Truncated a recent ${part is ToolResultPart ? 'result' : 'input'} of $name '
-                '(call $callId, ${groupDigits(tokens)} → ${groupDigits(after)} tokens): the request would not '
-                'fit the window otherwise.');
+        final o = _truncation(
+          p,
+          m,
+          pi,
+          part,
+          tokens,
+          replacement,
+          reason: (after) =>
+              'Truncated a recent ${part is ToolResultPart ? 'result' : 'input'} of $name '
+              '(call $callId, ${groupDigits(tokens)} → ${groupDigits(after)} tokens): the request would not '
+              'fit the window otherwise.',
+        );
         if (o == null) continue;
         (p.settings.excludedTools.contains(name) ? excluded : normal).add(o);
       }
@@ -380,18 +399,19 @@ final class LadderContextManager implements ContextManager {
       nonce: p.nonce(previousSummary),
     );
     CompactedRange build(CompactionSummary summary, String strategyId, int size) => CompactedRange(
-          id: 'ctx-compact:${p.path.first.id}:${p.path[cut - 1].id}',
-          createdAt: p.now,
-          reason: '${forced ? 'Compacted on request' : 'Context was ${_pct(ratio)} full (compaction starts at '
-              '${_pct(p.profile.thresholds.compact)})'}: summarized ${fresh.length} earlier messages with '
-              '$strategyId (${groupDigits(replaced)} → ${groupDigits(size)} tokens) and kept the last $k user '
-              '${k == 1 ? 'turn' : 'turns'} verbatim.',
-          tokensSaved: replaced - size,
-          fromMessageId: p.path.first.id,
-          toMessageId: p.path[cut - 1].id,
-          summary: summary,
-          strategyId: strategyId,
-        );
+      id: 'ctx-compact:${p.path.first.id}:${p.path[cut - 1].id}',
+      createdAt: p.now,
+      reason:
+          '${forced ? 'Compacted on request' : 'Context was ${_pct(ratio)} full (compaction starts at '
+                    '${_pct(p.profile.thresholds.compact)})'}: summarized ${fresh.length} earlier messages with '
+          '$strategyId (${groupDigits(replaced)} → ${groupDigits(size)} tokens) and kept the last $k user '
+          '${k == 1 ? 'turn' : 'turns'} verbatim.',
+      tokensSaved: replaced - size,
+      fromMessageId: p.path.first.id,
+      toMessageId: p.path[cut - 1].id,
+      summary: summary,
+      strategyId: strategyId,
+    );
 
     final primary = p.profile.modelCompaction ? strategy : fallbackStrategy;
     final first = await _summarize(p, primary, input, replaced, build);
@@ -420,11 +440,15 @@ final class LadderContextManager implements ContextManager {
     try {
       final summary = await s.summarize(input, cancel: p.request.cancel);
       final probe = build(summary, s.id, 0);
-      final size = p.counter.countMessage(PassthroughContextManager.summaryMessage(probe)) +
+      final size =
+          p.counter.countMessage(PassthroughContextManager.summaryMessage(probe)) +
           p.counter.countMessage(PassthroughContextManager.summaryAck(probe));
       // Gemini rule: a summary that is not smaller than its range is useless.
       if (size >= replaced) {
-        return (overlay: null, failure: 'the ${s.id} summary ($size tokens) is not smaller than the $replaced tokens it replaces');
+        return (
+          overlay: null,
+          failure: 'the ${s.id} summary ($size tokens) is not smaller than the $replaced tokens it replaces',
+        );
       }
       return (overlay: build(summary, s.id, size), failure: null);
     } on CancelledException {
@@ -446,12 +470,12 @@ final class LadderContextManager implements ContextManager {
         ContextRecommendationKind.hardStop,
         p.canRewrite
             ? 'This conversation no longer fits the model\'s context window (${groupDigits(b.inputTokens)} of '
-                '${groupDigits(b.usableInput)} tokens) even after pruning and compaction. Continue in a new '
-                'session from a handoff, or switch to a model with a larger window.'
+                  '${groupDigits(b.usableInput)} tokens) even after pruning and compaction. Continue in a new '
+                  'session from a handoff, or switch to a model with a larger window.'
             : 'This conversation no longer fits the model\'s context window (${groupDigits(b.inputTokens)} of '
-                '${groupDigits(b.usableInput)} tokens) in the middle of a tool loop, and this model only accepts '
-                'context rewrites at a new user turn. Send a message to let Sherpa compact, or continue in a new '
-                'session from a handoff.',
+                  '${groupDigits(b.usableInput)} tokens) in the middle of a tool loop, and this model only accepts '
+                  'context rewrites at a new user turn. Send a message to let Sherpa compact, or continue in a new '
+                  'session from a handoff.',
       );
     }
     final reasons = <String>[];
@@ -520,17 +544,15 @@ final class _View {
   }
 
   List<Message> before(int rawIndex) => [
-        for (var j = 0; j < messages.length; j++)
-          if (raw[j] < rawIndex) messages[j],
-      ];
+    for (var j = 0; j < messages.length; j++)
+      if (raw[j] < rawIndex) messages[j],
+  ];
 }
 
 /// Per-call working state: the request, derived limits and the overlays
 /// recorded so far plus those created during this call.
 final class _Pass {
-  _Pass(this.manager, this.request)
-      : overlays = [...request.overlays],
-        now = manager._clock.now() {
+  _Pass(this.manager, this.request) : overlays = [...request.overlays], now = manager._clock.now() {
     final caps = request.capabilities;
     final loc = request.location ?? manager.location;
     limit = manager.memoryPolicy.appliesTo(loc)
@@ -548,7 +570,8 @@ final class _Pass {
     );
     margin = counter.isExact ? 0 : (limit * fraction).round();
     final usable = (limit - reserve - margin).clamp(0, limit);
-    final derived = settings.profile ??
+    final derived =
+        settings.profile ??
         WindowProfile.forWindow(
           limit: limit,
           usableInput: usable,
@@ -645,11 +668,13 @@ final class _Pass {
 
   ActiveRange? get latestCompaction => _active.isEmpty ? null : _active.reduce((a, b) => a.to >= b.to ? a : b);
 
-  bool hasPartOverlay(String messageId, int partIndex, {String? callId}) => overlays.any((o) => switch (o) {
-        ToolOutputElided() => o.messageId == messageId && o.callId == callId,
-        PayloadTruncated() => o.messageId == messageId && o.partIndex == partIndex,
-        CompactedRange() => false,
-      });
+  bool hasPartOverlay(String messageId, int partIndex, {String? callId}) => overlays.any(
+    (o) => switch (o) {
+      ToolOutputElided() => o.messageId == messageId && o.callId == callId,
+      PayloadTruncated() => o.messageId == messageId && o.partIndex == partIndex,
+      CompactedRange() => false,
+    },
+  );
 
   /// Ids of the [n] most recent visible tool calls.
   Set<String> recentCallIds(int n) {
@@ -713,10 +738,12 @@ final class _Pass {
     for (final m in repaired) {
       final n = _counts[m] ??= counter.countMessage(m);
       counts.add(n);
-      raw.add(index[m.id] ??
-          rangeStart['${m.metadata['overlayId']}'] ??
-          index[m.id.replaceFirst('synthetic:results:', '')] ??
-          path.length);
+      raw.add(
+        index[m.id] ??
+            rangeStart['${m.metadata['overlayId']}'] ??
+            index[m.id.replaceFirst('synthetic:results:', '')] ??
+            path.length,
+      );
       if (m.pinned) {
         pinned += n;
       } else {

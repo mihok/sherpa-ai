@@ -41,8 +41,14 @@ final class InMemorySessionStore implements SessionStore {
     _audit.remove(id);
   }
 
+  /// Mirrors the SQL store's foreign keys: rows need an existing session.
+  void _requireSession(String sessionId) {
+    if (!_sessions.containsKey(sessionId)) throw StateError('unknown session $sessionId');
+  }
+
   @override
   Future<void> putMessage(String sessionId, Message message) async {
+    _requireSession(sessionId);
     (_messages[sessionId] ??= {})[message.id] = message.toJson();
   }
 
@@ -76,6 +82,7 @@ final class InMemorySessionStore implements SessionStore {
 
   @override
   Future<void> putOverlay(String sessionId, ContextOverlay overlay) async {
+    _requireSession(sessionId);
     (_overlays[sessionId] ??= {})[overlay.id] = overlay.toJson();
   }
 
@@ -90,7 +97,10 @@ final class InMemorySessionStore implements SessionStore {
         ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
   @override
-  Future<void> putPlan(String sessionId, Plan plan) async => _plans[sessionId] = plan.toJson();
+  Future<void> putPlan(String sessionId, Plan plan) async {
+    _requireSession(sessionId);
+    _plans[sessionId] = plan.toJson();
+  }
 
   @override
   Future<Plan?> getPlan(String sessionId) async {
@@ -99,8 +109,10 @@ final class InMemorySessionStore implements SessionStore {
   }
 
   @override
-  Future<void> putCheckpoint(RunCheckpoint checkpoint) async =>
-      _checkpoints[checkpoint.sessionId] = checkpoint.toJson();
+  Future<void> putCheckpoint(RunCheckpoint checkpoint) async {
+    _requireSession(checkpoint.sessionId);
+    _checkpoints[checkpoint.sessionId] = checkpoint.toJson();
+  }
 
   @override
   Future<RunCheckpoint?> getCheckpoint(String sessionId) async {
@@ -109,12 +121,24 @@ final class InMemorySessionStore implements SessionStore {
   }
 
   @override
-  Future<void> appendAudit(AuditEntry entry) async =>
-      (_audit[entry.sessionId] ??= []).add(entry.toJson());
+  Future<void> appendAudit(AuditEntry entry) async {
+    _requireSession(entry.sessionId);
+    final list = _audit[entry.sessionId] ??= [];
+    // Idempotent per id so a resumed run cannot duplicate audit lines.
+    if (list.any((e) => e['id'] == entry.id)) return;
+    list.add(entry.toJson());
+  }
 
   @override
   Future<List<AuditEntry>> audit(String sessionId, {int? limit}) async {
-    final all = (_audit[sessionId] ?? const []).map(AuditEntry.fromJson).toList();
+    // Chronological by time, ties in append order. List.sort is not
+    // stable, so the append index is the explicit tiebreak.
+    final indexed = [for (final (i, j) in (_audit[sessionId] ?? const []).indexed) (i, AuditEntry.fromJson(j))]
+      ..sort((x, y) {
+        final c = x.$2.at.compareTo(y.$2.at);
+        return c != 0 ? c : x.$1.compareTo(y.$1);
+      });
+    final all = [for (final (_, e) in indexed) e];
     if (limit == null || all.length <= limit) return all;
     return all.sublist(all.length - limit);
   }

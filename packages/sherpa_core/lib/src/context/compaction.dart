@@ -30,11 +30,11 @@ final class StateHandle {
   const StateHandle({required this.key, required this.value, this.tool, this.callId});
 
   factory StateHandle.fromJson(JsonMap j) => StateHandle(
-        key: j.req<String>('key'),
-        value: j.req<String>('value'),
-        tool: j.opt<String>('tool'),
-        callId: j.opt<String>('callId'),
-      );
+    key: j.req<String>('key'),
+    value: j.req<String>('value'),
+    tool: j.opt<String>('tool'),
+    callId: j.opt<String>('callId'),
+  );
 
   final String key;
   final String value;
@@ -66,16 +66,16 @@ final class SideEffectRecord {
   });
 
   factory SideEffectRecord.fromJson(JsonMap j) => SideEffectRecord(
-        callId: j.req<String>('callId'),
-        tool: j.req<String>('tool'),
-        server: j.opt<String>('server'),
-        argsDigest: j.req<String>('argsDigest'),
-        outcome: SideEffectOutcome.values.firstWhere(
-          (o) => o.name == j.req<String>('outcome'),
-          orElse: () => throw FormatError('unknown side-effect outcome ${j['outcome']}'),
-        ),
-        argsPreview: j.opt<String>('argsPreview'),
-      );
+    callId: j.req<String>('callId'),
+    tool: j.req<String>('tool'),
+    server: j.opt<String>('server'),
+    argsDigest: j.req<String>('argsDigest'),
+    outcome: SideEffectOutcome.values.firstWhere(
+      (o) => o.name == j.req<String>('outcome'),
+      orElse: () => throw FormatError('unknown side-effect outcome ${j['outcome']}'),
+    ),
+    argsPreview: j.opt<String>('argsPreview'),
+  );
 
   final String callId;
   final String tool;
@@ -90,22 +90,22 @@ final class SideEffectRecord {
   final String? argsPreview;
 
   SideEffectRecord map(String Function(String) f) => SideEffectRecord(
-        callId: callId,
-        tool: tool,
-        server: server,
-        argsDigest: argsDigest,
-        outcome: outcome,
-        argsPreview: argsPreview == null ? null : f(argsPreview!),
-      );
+    callId: callId,
+    tool: tool,
+    server: server,
+    argsDigest: argsDigest,
+    outcome: outcome,
+    argsPreview: argsPreview == null ? null : f(argsPreview!),
+  );
 
   JsonMap toJson() => compact({
-        'callId': callId,
-        'tool': tool,
-        'server': server,
-        'argsDigest': argsDigest,
-        'outcome': outcome.name,
-        'argsPreview': argsPreview,
-      });
+    'callId': callId,
+    'tool': tool,
+    'server': server,
+    'argsDigest': argsDigest,
+    'outcome': outcome.name,
+    'argsPreview': argsPreview,
+  });
 }
 
 /// An untrusted source seen in the summarized range (R11 §9.1 `taint`).
@@ -171,57 +171,57 @@ final class CompactionSummary {
 
   /// Reads only the [M] fields of a summarizer reply (already validated).
   factory CompactionSummary.fromModelJson(JsonMap j) => CompactionSummary(
-        goal: j.opt<String>('goal') ?? '',
-        constraints: _strings(j, 'constraints'),
-        userPreferences: _strings(j, 'userPreferences'),
-        decisions: _strings(j, 'decisions'),
-        completed: _strings(j, 'completed'),
-        openTasks: _strings(j, 'openTasks'),
-        currentWork: j.opt<String>('currentWork') ?? '',
-        nextStep: j.opt<String>('nextStep') ?? '',
-        keyFacts: _strings(j, 'keyFacts'),
-        failedApproaches: _strings(j, 'failedApproaches'),
-        notes: _nonEmpty(j.opt<String>('notes')),
-      );
+    goal: j.opt<String>('goal') ?? '',
+    constraints: _strings(j, 'constraints'),
+    userPreferences: _strings(j, 'userPreferences'),
+    decisions: _strings(j, 'decisions'),
+    completed: _strings(j, 'completed'),
+    openTasks: _strings(j, 'openTasks'),
+    currentWork: j.opt<String>('currentWork') ?? '',
+    nextStep: j.opt<String>('nextStep') ?? '',
+    keyFacts: _strings(j, 'keyFacts'),
+    failedApproaches: _strings(j, 'failedApproaches'),
+    notes: _nonEmpty(j.opt<String>('notes')),
+  );
 
   static CompactionSummary _fromV2(JsonMap j) => CompactionSummary(
-        goal: j.opt<String>('goal') ?? '',
-        constraints: _strings(j, 'constraints'),
-        userPreferences: _strings(j, 'userPreferences'),
-        decisions: _strings(j, 'decisions'),
-        completed: _strings(j, 'completed'),
-        openTasks: _strings(j, 'openTasks'),
-        currentWork: j.opt<String>('currentWork') ?? '',
-        nextStep: j.opt<String>('nextStep') ?? '',
-        keyFacts: _strings(j, 'keyFacts'),
-        failedApproaches: _strings(j, 'failedApproaches'),
-        notes: j.opt<String>('notes'),
-        task: j.opt<String>('task'),
-        userMessages: _strings(j, 'userMessages'),
-        nextStepQuote: j.opt<String>('nextStepQuote'),
-        artifacts: _strings(j, 'artifacts'),
-        stateHandles: j.mapList('stateHandles').map(StateHandle.fromJson).toList(),
-        sideEffectLedger: j.mapList('sideEffectLedger').map(SideEffectRecord.fromJson).toList(),
-        pendingApprovals: _strings(j, 'pendingApprovals'),
-        taint: j.mapList('taint').map(TaintRecord.fromJson).toList(),
-        compactionCount: j.optInt('compactionCount') ?? 0,
-        coveredMessageIds: _strings(j, 'coveredMessageIds'),
-        plan: j.optObj('plan') == null ? null : Plan.fromJson(j.obj('plan')),
-        nonce: j.opt<String>('nonce'),
-      );
+    goal: j.opt<String>('goal') ?? '',
+    constraints: _strings(j, 'constraints'),
+    userPreferences: _strings(j, 'userPreferences'),
+    decisions: _strings(j, 'decisions'),
+    completed: _strings(j, 'completed'),
+    openTasks: _strings(j, 'openTasks'),
+    currentWork: j.opt<String>('currentWork') ?? '',
+    nextStep: j.opt<String>('nextStep') ?? '',
+    keyFacts: _strings(j, 'keyFacts'),
+    failedApproaches: _strings(j, 'failedApproaches'),
+    notes: j.opt<String>('notes'),
+    task: j.opt<String>('task'),
+    userMessages: _strings(j, 'userMessages'),
+    nextStepQuote: j.opt<String>('nextStepQuote'),
+    artifacts: _strings(j, 'artifacts'),
+    stateHandles: j.mapList('stateHandles').map(StateHandle.fromJson).toList(),
+    sideEffectLedger: j.mapList('sideEffectLedger').map(SideEffectRecord.fromJson).toList(),
+    pendingApprovals: _strings(j, 'pendingApprovals'),
+    taint: j.mapList('taint').map(TaintRecord.fromJson).toList(),
+    compactionCount: j.optInt('compactionCount') ?? 0,
+    coveredMessageIds: _strings(j, 'coveredMessageIds'),
+    plan: j.optObj('plan') == null ? null : Plan.fromJson(j.obj('plan')),
+    nonce: j.opt<String>('nonce'),
+  );
 
   static CompactionSummary _fromV1(JsonMap j) => CompactionSummary(
-        goal: j.opt<String>('goal') ?? '',
-        decisions: _strings(j, 'decisions'),
-        constraints: _strings(j, 'constraints'),
-        openTasks: _strings(j, 'openTasks'),
-        keyFacts: _strings(j, 'keyFacts'),
-        userPreferences: _strings(j, 'userPreferences'),
-        notes: j.opt<String>('notes'),
-        artifacts: _strings(j, 'filesAndUrls'),
-        stateHandles: [for (final s in _strings(j, 'toolState')) _handleFromText(s)],
-        compactionCount: 1,
-      );
+    goal: j.opt<String>('goal') ?? '',
+    decisions: _strings(j, 'decisions'),
+    constraints: _strings(j, 'constraints'),
+    openTasks: _strings(j, 'openTasks'),
+    keyFacts: _strings(j, 'keyFacts'),
+    userPreferences: _strings(j, 'userPreferences'),
+    notes: j.opt<String>('notes'),
+    artifacts: _strings(j, 'filesAndUrls'),
+    stateHandles: [for (final s in _strings(j, 'toolState')) _handleFromText(s)],
+    compactionCount: 1,
+  );
 
   static StateHandle _handleFromText(String s) {
     final m = RegExp(r'^\s*([\w.-]{1,64})\s*[:=]\s*(.+)$').firstMatch(s);
@@ -229,9 +229,9 @@ final class CompactionSummary {
   }
 
   static List<String> _strings(JsonMap j, String key) => [
-        for (final e in j.opt<List<Object?>>(key) ?? const <Object?>[])
-          if (e is String) e else throw FormatError('expected "$key" to hold strings, got ${e.runtimeType}'),
-      ];
+    for (final e in j.opt<List<Object?>>(key) ?? const <Object?>[])
+      if (e is String) e else throw FormatError('expected "$key" to hold strings, got ${e.runtimeType}'),
+  ];
 
   static String? _nonEmpty(String? s) => s == null || s.trim().isEmpty ? null : s;
 
@@ -316,7 +316,16 @@ final class CompactionSummary {
       },
       'notes': {'type': 'string', 'maxLength': 600},
     },
-    'required': ['schemaVersion', 'goal', 'constraints', 'decisions', 'openTasks', 'currentWork', 'nextStep', 'keyFacts'],
+    'required': [
+      'schemaVersion',
+      'goal',
+      'constraints',
+      'decisions',
+      'openTasks',
+      'currentWork',
+      'nextStep',
+      'keyFacts',
+    ],
   };
 
   // [M] — model-generated.
@@ -392,32 +401,31 @@ final class CompactionSummary {
     Plan? plan,
     String? nonce,
     bool clearNonce = false,
-  }) =>
-      CompactionSummary(
-        goal: goal ?? this.goal,
-        constraints: constraints ?? this.constraints,
-        userPreferences: userPreferences ?? this.userPreferences,
-        decisions: decisions ?? this.decisions,
-        completed: completed ?? this.completed,
-        openTasks: openTasks ?? this.openTasks,
-        currentWork: currentWork ?? this.currentWork,
-        nextStep: nextStep ?? this.nextStep,
-        keyFacts: keyFacts ?? this.keyFacts,
-        failedApproaches: failedApproaches ?? this.failedApproaches,
-        notes: notes ?? this.notes,
-        task: task ?? this.task,
-        userMessages: userMessages ?? this.userMessages,
-        nextStepQuote: nextStepQuote ?? this.nextStepQuote,
-        artifacts: artifacts ?? this.artifacts,
-        stateHandles: stateHandles ?? this.stateHandles,
-        sideEffectLedger: sideEffectLedger ?? this.sideEffectLedger,
-        pendingApprovals: pendingApprovals ?? this.pendingApprovals,
-        taint: taint ?? this.taint,
-        compactionCount: compactionCount ?? this.compactionCount,
-        coveredMessageIds: coveredMessageIds ?? this.coveredMessageIds,
-        plan: plan ?? this.plan,
-        nonce: clearNonce ? null : (nonce ?? this.nonce),
-      );
+  }) => CompactionSummary(
+    goal: goal ?? this.goal,
+    constraints: constraints ?? this.constraints,
+    userPreferences: userPreferences ?? this.userPreferences,
+    decisions: decisions ?? this.decisions,
+    completed: completed ?? this.completed,
+    openTasks: openTasks ?? this.openTasks,
+    currentWork: currentWork ?? this.currentWork,
+    nextStep: nextStep ?? this.nextStep,
+    keyFacts: keyFacts ?? this.keyFacts,
+    failedApproaches: failedApproaches ?? this.failedApproaches,
+    notes: notes ?? this.notes,
+    task: task ?? this.task,
+    userMessages: userMessages ?? this.userMessages,
+    nextStepQuote: nextStepQuote ?? this.nextStepQuote,
+    artifacts: artifacts ?? this.artifacts,
+    stateHandles: stateHandles ?? this.stateHandles,
+    sideEffectLedger: sideEffectLedger ?? this.sideEffectLedger,
+    pendingApprovals: pendingApprovals ?? this.pendingApprovals,
+    taint: taint ?? this.taint,
+    compactionCount: compactionCount ?? this.compactionCount,
+    coveredMessageIds: coveredMessageIds ?? this.coveredMessageIds,
+    plan: plan ?? this.plan,
+    nonce: clearNonce ? null : (nonce ?? this.nonce),
+  );
 
   /// Applies [f] to every free-text field (used by the handoff scrubber).
   CompactionSummary mapText(String Function(String) f) {
@@ -465,13 +473,13 @@ final class CompactionSummary {
   ///   laundered into trusted memory); they move to `keyFacts`;
   /// * lists are deduped (tag and case ignored) and cut to their caps.
   CompactionSummary normalized() {
-    final movedFacts = <String>[
-      ...constraints.where(Provenance.isTool),
-      ...userPreferences.where(Provenance.isTool),
-    ];
+    final movedFacts = <String>[...constraints.where(Provenance.isTool), ...userPreferences.where(Provenance.isTool)];
     List<String> cap(String field, Iterable<String> items, {bool keepNewest = false}) {
       final (maxItems, maxChars) = listLimits[field]!;
-      final out = dedupeItems([for (final s in items) if (s.trim().isNotEmpty) clipText(s.trim(), maxChars)]);
+      final out = dedupeItems([
+        for (final s in items)
+          if (s.trim().isNotEmpty) clipText(s.trim(), maxChars),
+      ]);
       if (out.length <= maxItems) return out;
       return keepNewest ? out.sublist(out.length - maxItems) : out.sublist(0, maxItems);
     }
@@ -489,9 +497,7 @@ final class CompactionSummary {
       failedApproaches: cap('failedApproaches', failedApproaches),
       notes: notes == null ? null : clipText(notes!.trim(), notesChars),
       task: task == null ? null : clipText(task!.trim(), maxTaskChars),
-      userMessages: [
-        for (final m in userMessages.take(maxUserMessages)) clipText(m, maxUserMessageChars),
-      ],
+      userMessages: [for (final m in userMessages.take(maxUserMessages)) clipText(m, maxUserMessageChars)],
       nextStepQuote: nextStepQuote == null ? null : clipText(nextStepQuote!, nextStepChars),
       artifacts: [for (final a in dedupeItems(artifacts).take(maxArtifacts)) clipText(a, maxArtifactChars)],
       stateHandles: stateHandles.take(maxStateHandles).toList(),
@@ -510,24 +516,27 @@ final class CompactionSummary {
   /// Dedupes list items by [itemKey], keeping the first occurrence.
   static List<String> dedupeItems(Iterable<String> items) {
     final seen = <String>{};
-    return [for (final s in items) if (seen.add(itemKey(s))) s];
+    return [
+      for (final s in items)
+        if (seen.add(itemKey(s))) s,
+    ];
   }
 
   /// The [M] subset as JSON (what a summarizer is asked to produce).
   JsonMap modelFieldsJson() => compact({
-        'schemaVersion': currentSchemaVersion,
-        'goal': goal,
-        'constraints': constraints,
-        'userPreferences': userPreferences,
-        'decisions': decisions,
-        'completed': completed,
-        'openTasks': openTasks,
-        'currentWork': currentWork,
-        'nextStep': nextStep,
-        'keyFacts': keyFacts,
-        'failedApproaches': failedApproaches,
-        'notes': notes,
-      });
+    'schemaVersion': currentSchemaVersion,
+    'goal': goal,
+    'constraints': constraints,
+    'userPreferences': userPreferences,
+    'decisions': decisions,
+    'completed': completed,
+    'openTasks': openTasks,
+    'currentWork': currentWork,
+    'nextStep': nextStep,
+    'keyFacts': keyFacts,
+    'failedApproaches': failedApproaches,
+    'notes': notes,
+  });
 
   /// Text placed in the model context as a synthetic user message.
   String render() {
@@ -588,8 +597,10 @@ final class CompactionSummary {
       b.write('\n\n${UntrustedData.wrap(untrusted.toString(), source: 'summary', nonce: nonce)}');
     }
     if (taint.isNotEmpty) {
-      b.write('\n\nUntrusted sources in the summarized turns: '
-          '${[for (final t in taint) t.source].join(', ')}.');
+      b.write(
+        '\n\nUntrusted sources in the summarized turns: '
+        '${[for (final t in taint) t.source].join(', ')}.',
+      );
     }
     return b.toString();
   }

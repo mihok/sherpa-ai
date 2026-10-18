@@ -114,14 +114,15 @@ final class _Repairer {
   int _syntheticKeys = 0;
 
   static const String _structural = '{}[]:,';
+  /// Opening quote → closing quote, including the smart quotes models emit.
   static const Map<String, String> _quotePairs = {
     '"': '"',
     "'": "'",
     '`': '`',
-    '“': '”',
-    '”': '”',
-    '‘': '’',
-    '’': '’',
+    '\u201C': '\u201D',
+    '\u201D': '\u201D',
+    '\u2018': '\u2019',
+    '\u2019': '\u2019',
   };
 
   String run() {
@@ -270,8 +271,8 @@ final class _Repairer {
         _skipLine();
         continue;
       }
-      if (_s.startsWith('...', _i) || c == '…') {
-        _i += c == '…' ? 1 : 3;
+      if (_s.startsWith('...', _i) || c == '\u2026') {
+        _i += c == '\u2026' ? 1 : 3;
         continue;
       }
       if (_structural.contains(c)) {
@@ -321,7 +322,7 @@ final class _Repairer {
         _i += _escape(b);
         continue;
       }
-      final isCloser = c == closer || (open == '"' && c == '”') || (closer == '”' && c == '"');
+      final isCloser = c == closer || (open == '"' && c == '\u201D') || (closer == '\u201D' && c == '"');
       if (isCloser && _closesHere(_i)) {
         _i++;
         return _Token(_Tok.string, b.toString());

@@ -73,9 +73,7 @@ final class InlineMarkdownParser {
     parses++;
     var inlines = source.trim().isEmpty
         ? const <MdInline>[]
-        : List<MdInline>.unmodifiable(
-            _convert(_document.parseInline(source)),
-          );
+        : List<MdInline>.unmodifiable(_convert(_document.parseInline(source)));
     if (pendingUrl) inlines = _markTrailingLinkPending(inlines);
     if (!streamingTail) {
       _memo[text] = inlines;
@@ -181,10 +179,7 @@ List<MdInline> _markTrailingLinkPending(List<MdInline> inlines) {
       title: title,
       children: children,
     ),
-    MdEmphasis(:final children) => _wrapIfChanged(
-      children,
-      MdEmphasis.new,
-    ),
+    MdEmphasis(:final children) => _wrapIfChanged(children, MdEmphasis.new),
     MdStrong(:final children) => _wrapIfChanged(children, MdStrong.new),
     MdStrikethrough(:final children) => _wrapIfChanged(
       children,

@@ -27,11 +27,8 @@ final class BlockBuilder {
     List<SrcLine> lines, {
     required bool complete,
     required bool streamingTail,
-  }) => _children(
-    lines,
-    complete: complete,
-    streamingTail: streamingTail,
-  ).nodes;
+  }) =>
+      _children(lines, complete: complete, streamingTail: streamingTail).nodes;
 
   ({List<MdNode> nodes, List<BlockSpan> spans}) _children(
     List<SrcLine> lines, {
@@ -45,8 +42,7 @@ final class BlockBuilder {
         build(
           spans[i],
           lines,
-          tentative:
-              streamingTail && i == spans.length - 1 && !spans[i].closed,
+          tentative: streamingTail && i == spans.length - 1 && !spans[i].closed,
         ),
     ];
     return (nodes: nodes, spans: spans);
@@ -54,11 +50,7 @@ final class BlockBuilder {
 
   /// Builds the node for one span. [tentative] is set only for the open
   /// block at the live end of a stream.
-  MdNode build(
-    BlockSpan span,
-    List<SrcLine> lines, {
-    required bool tentative,
-  }) {
+  MdNode build(BlockSpan span, List<SrcLine> lines, {required bool tentative}) {
     switch (span.kind) {
       case SpanKind.paragraph:
         return MdParagraph(
@@ -124,9 +116,8 @@ final class BlockBuilder {
         return const MdThematicBreak();
       case SpanKind.html:
         return MdHtmlBlock(
-          [
-            for (var k = span.first; k <= span.last; k++) lines[k].text,
-          ].join('\n'),
+          [for (var k = span.first; k <= span.last; k++) lines[k].text]
+              .join('\n'),
         );
     }
   }
@@ -210,7 +201,11 @@ final class BlockBuilder {
     );
   }
 
-  MdNode _table(BlockSpan span, List<SrcLine> lines, {required bool tentative}) {
+  MdNode _table(
+    BlockSpan span,
+    List<SrcLine> lines, {
+    required bool tentative,
+  }) {
     final columns = span.alignments.length;
     List<String> normalize(List<String> cells) => [
       for (var c = 0; c < columns; c++) c < cells.length ? cells[c] : '',
@@ -276,7 +271,10 @@ String? fenceLanguage(String info) {
 /// shown as a header-only table: it is almost always the first row of a
 /// table whose `|---|` delimiter has not arrived yet, and previewing it as
 /// a table avoids a paragraph→table flip.
-List<BlockSpan> splitTentativeTable(List<BlockSpan> spans, List<SrcLine> lines) {
+List<BlockSpan> splitTentativeTable(
+  List<BlockSpan> spans,
+  List<SrcLine> lines,
+) {
   if (spans.isEmpty) return spans;
   final last = spans.last;
   if (last.kind != SpanKind.paragraph ||

@@ -78,7 +78,8 @@ final class ModelContextStrategy implements ContextStrategy {
         final replaced = input.replacedTokens;
         final rendered = counter.countText(summary.render());
         if (replaced == null || rendered < replaced) return summary;
-        problem = 'the summary renders to $rendered tokens but replaces only $replaced; make every field '
+        problem =
+            'the summary renders to $rendered tokens but replaces only $replaced; make every field '
             'much shorter and drop low-value items';
       } else {
         problem = parsed.problem!;
@@ -101,10 +102,7 @@ final class ModelContextStrategy implements ContextStrategy {
     final context = input.contextMessages;
     if (context != null) return context;
     final prev = input.previousSummary;
-    return [
-      if (prev != null) _user('summarizer:previous', prev.render()),
-      ...input.messages,
-    ];
+    return [if (prev != null) _user('summarizer:previous', prev.render()), ...input.messages];
   }
 
   String _promptText(CompactionInput input) {
@@ -113,8 +111,10 @@ final class ModelContextStrategy implements ContextStrategy {
       b.write('\nThe first message above is the previous summary: integrate it.');
     }
     if (input.keptMessages.isNotEmpty) {
-      b.write('\nThe ${input.keptMessages.length} most recent messages are kept verbatim after this summary; '
-          'summarize only the conversation above.');
+      b.write(
+        '\nThe ${input.keptMessages.length} most recent messages are kept verbatim after this summary; '
+        'summarize only the conversation above.',
+      );
     }
     return b.toString();
   }

@@ -72,20 +72,20 @@ final class HandoffSource {
   final String? sessionId;
 
   HandoffSource map(String Function(String) f) => HandoffSource(
-        appVersion: f(appVersion),
-        providerKind: providerKind,
-        modelId: f(modelId),
-        location: location,
-        sessionId: sessionId,
-      );
+    appVersion: f(appVersion),
+    providerKind: providerKind,
+    modelId: f(modelId),
+    location: location,
+    sessionId: sessionId,
+  );
 
   JsonMap toJson() => compact({
-        'appVersion': appVersion,
-        'providerKind': providerKind,
-        'modelId': modelId,
-        'location': location.name,
-        'sessionId': sessionId,
-      });
+    'appVersion': appVersion,
+    'providerKind': providerKind,
+    'modelId': modelId,
+    'location': location.name,
+    'sessionId': sessionId,
+  });
 }
 
 /// One turn as plain text: no reasoning, no signatures, no provider ids, so
@@ -214,19 +214,19 @@ final class HandoffBundle {
   String encode() => jsonEncode(toJson());
 
   JsonMap toJson() => compact({
-        'format': format,
-        'version': version,
-        'createdAt': createdAt.toUtc().toIso8601String(),
-        'source': source.toJson(),
-        'task': task,
-        'plan': plan?.toJson(),
-        'summary': summary.toJson(),
-        'pinned': pinned.isEmpty ? null : [for (final t in pinned) t.toJson()],
-        'recentTurns': recentTurns.isEmpty ? null : [for (final t in recentTurns) t.toJson()],
-        'connections': connections.isEmpty ? null : [for (final c in connections) c.toJson()],
-        'artifacts': artifacts.isEmpty ? null : [for (final a in artifacts) a.toJson()],
-        'notes': notes,
-      });
+    'format': format,
+    'version': version,
+    'createdAt': createdAt.toUtc().toIso8601String(),
+    'source': source.toJson(),
+    'task': task,
+    'plan': plan?.toJson(),
+    'summary': summary.toJson(),
+    'pinned': pinned.isEmpty ? null : [for (final t in pinned) t.toJson()],
+    'recentTurns': recentTurns.isEmpty ? null : [for (final t in recentTurns) t.toJson()],
+    'connections': connections.isEmpty ? null : [for (final c in connections) c.toJson()],
+    'artifacts': artifacts.isEmpty ? null : [for (final a in artifacts) a.toJson()],
+    'notes': notes,
+  });
 
   /// Applies [f] (a secret scrubber) to every free-text field.
   HandoffBundle mapText(String Function(String) f) {
@@ -263,8 +263,10 @@ final class HandoffBundle {
   /// The seed message text for the new session: task, summary (with the
   /// new session's [nonce]), plan, pinned items and recent turns.
   String renderForModel({String? nonce}) {
-    final b = StringBuffer('Handoff from an earlier Sherpa session (made ${createdAt.toUtc().toIso8601String()} '
-        'with ${source.modelId}). Continue the task from here; do not repeat actions listed as already performed.');
+    final b = StringBuffer(
+      'Handoff from an earlier Sherpa session (made ${createdAt.toUtc().toIso8601String()} '
+      'with ${source.modelId}). Continue the task from here; do not repeat actions listed as already performed.',
+    );
     b.write('\n\nTask: ${task.trim()}');
     final s = summary.copyWith(plan: plan ?? summary.plan, nonce: nonce, clearNonce: nonce == null);
     b.write('\n\n${s.render()}');
@@ -281,12 +283,16 @@ final class HandoffBundle {
       }
     }
     if (connections.isNotEmpty) {
-      b.write('\n\nServers the earlier session used (they may need to be reconnected): '
-          '${[for (final c in connections) '${c.name} (${c.url})'].join(', ')}');
+      b.write(
+        '\n\nServers the earlier session used (they may need to be reconnected): '
+        '${[for (final c in connections) '${c.name} (${c.url})'].join(', ')}',
+      );
     }
     if (artifacts.isNotEmpty) {
-      b.write('\n\nFiles attached to the handoff: '
-          '${[for (final a in artifacts) '${a.name} (${a.mimeType}, ${groupDigits(a.size)} bytes)'].join(', ')}');
+      b.write(
+        '\n\nFiles attached to the handoff: '
+        '${[for (final a in artifacts) '${a.name} (${a.mimeType}, ${groupDigits(a.size)} bytes)'].join(', ')}',
+      );
     }
     if (notes != null && notes!.trim().isNotEmpty) b.write('\n\nNotes from the user: ${notes!.trim()}');
     return b.toString();
@@ -302,8 +308,10 @@ final class HandoffBundle {
   String toMarkdown() {
     final b = StringBuffer('# Handoff: ${_md(clipText(firstLine(task), 120))}\n');
     b.write('\n- **Created:** ${createdAt.toUtc().toIso8601String()}');
-    b.write('\n- **From:** ${_md(source.modelId)} (${_md(source.providerKind)}, ${source.location.name}), '
-        'Sherpa ${_md(source.appVersion)}');
+    b.write(
+      '\n- **From:** ${_md(source.modelId)} (${_md(source.providerKind)}, ${source.location.name}), '
+      'Sherpa ${_md(source.appVersion)}',
+    );
     b.write('\n\n## Task\n\n${_md(task)}\n');
     final p = plan ?? summary.plan;
     if (p != null && !p.isEmpty) {
@@ -339,8 +347,10 @@ final class HandoffBundle {
     if (artifacts.isNotEmpty) {
       b.write('\n## Files\n');
       for (final a in artifacts) {
-        b.write('\n- ${_md(a.name)} (${_md(a.mimeType)}, ${groupDigits(a.size)} bytes, sha256 '
-            '${_code(a.sha256.substring(0, 12))}…)');
+        b.write(
+          '\n- ${_md(a.name)} (${_md(a.mimeType)}, ${groupDigits(a.size)} bytes, sha256 '
+          '${_code(a.sha256.substring(0, 12))}…)',
+        );
       }
       b.write('\n');
     }
@@ -449,8 +459,10 @@ final class _BundleReader {
   static final RegExp _mime = RegExp(r'^[A-Za-z0-9][\w.+-]*/[\w.+-]+$');
   static final RegExp _sha256 = RegExp(r'^[0-9a-f]{64}$');
   static final RegExp _secretParam = RegExp(
-      r'^(api[-_]?key|key|token|access[-_]?token|refresh[-_]?token|code|secret|client[-_]?secret|password|sig|signature)$',
-      caseSensitive: false);
+    r'^(api[-_]?key|key|token|access[-_]?token|refresh[-_]?token|code|secret|client[-_]?secret|password|sig'
+    r'|signature)$',
+    caseSensitive: false,
+  );
 
   HandoffBundle read(JsonMap j) {
     _keys(j, _topKeys, 'bundle');
@@ -544,19 +556,19 @@ final class _BundleReader {
   }
 
   List<HandoffTurn> _turns(JsonMap j, String key, int max) => [
-        for (final t in _list(j, key, max))
-          () {
-            _keys(t, const {'role', 'text', 'toolName'}, key);
-            final role = t.req<String>('role');
-            final r = switch (role) {
-              'user' => Role.user,
-              'assistant' => Role.assistant,
-              'tool' => Role.tool,
-              _ => throw FormatError('invalid role "$role" in $key'),
-            };
-            return HandoffTurn(role: r, text: t.req<String>('text'), toolName: t.opt<String>('toolName'));
-          }(),
-      ];
+    for (final t in _list(j, key, max))
+      () {
+        _keys(t, const {'role', 'text', 'toolName'}, key);
+        final role = t.req<String>('role');
+        final r = switch (role) {
+          'user' => Role.user,
+          'assistant' => Role.assistant,
+          'tool' => Role.tool,
+          _ => throw FormatError('invalid role "$role" in $key'),
+        };
+        return HandoffTurn(role: r, text: t.req<String>('text'), toolName: t.opt<String>('toolName'));
+      }(),
+  ];
 
   HandoffConnection _connection(JsonMap c) {
     _keys(c, const {'type', 'name', 'url', 'authKind'}, 'connections');
@@ -591,7 +603,8 @@ final class _BundleReader {
     if (size < 0 || size > limits.maxArtifactSize) throw const FormatError('artifact size out of range');
     final path = a.req<String>('path');
     final segments = path.split('/');
-    final unsafe = path.isEmpty ||
+    final unsafe =
+        path.isEmpty ||
         path.length > 400 ||
         path.startsWith('/') ||
         path.contains(r'\') ||
@@ -599,6 +612,12 @@ final class _BundleReader {
         segments.any((s) => s == '..' || s.isEmpty) ||
         path.codeUnits.any((u) => u < 0x20);
     if (unsafe) throw FormatError('unsafe artifact path "$path"');
-    return HandoffArtifact(name: _short(a.req<String>('name'), 'artifact name'), mimeType: mime, sha256: sha, size: size, path: path);
+    return HandoffArtifact(
+      name: _short(a.req<String>('name'), 'artifact name'),
+      mimeType: mime,
+      sha256: sha,
+      size: size,
+      path: path,
+    );
   }
 }

@@ -178,12 +178,15 @@ final class MarkdownTheme {
   });
 
   /// Resolves [style] against [Theme] and [DefaultTextStyle].
-  factory MarkdownTheme.resolve(BuildContext context, SherpaMarkdownStyle style) {
+  factory MarkdownTheme.resolve(
+    BuildContext context,
+    SherpaMarkdownStyle style,
+  ) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final body = DefaultTextStyle.of(
-      context,
-    ).style.merge(theme.textTheme.bodyLarge).merge(style.body);
+    final body = DefaultTextStyle.of(context).style
+        .merge(theme.textTheme.bodyLarge)
+        .merge(style.body);
     final size = body.fontSize ?? 16;
     final code =
         style.code ??
@@ -193,7 +196,8 @@ final class MarkdownTheme {
           fontSize: size * 0.875,
           height: 1.45,
         );
-    final codeBackground = style.codeBackground ?? scheme.surfaceContainerHighest;
+    final codeBackground =
+        style.codeBackground ?? scheme.surfaceContainerHighest;
     final inlineCode =
         style.inlineCode ??
         code.copyWith(
@@ -202,9 +206,21 @@ final class MarkdownTheme {
           backgroundColor: codeBackground,
         );
     final defaults = <TextStyle>[
-      body.copyWith(fontSize: size * 1.5, fontWeight: FontWeight.w700, height: 1.25),
-      body.copyWith(fontSize: size * 1.3, fontWeight: FontWeight.w700, height: 1.3),
-      body.copyWith(fontSize: size * 1.15, fontWeight: FontWeight.w600, height: 1.3),
+      body.copyWith(
+        fontSize: size * 1.5,
+        fontWeight: FontWeight.w700,
+        height: 1.25,
+      ),
+      body.copyWith(
+        fontSize: size * 1.3,
+        fontWeight: FontWeight.w700,
+        height: 1.3,
+      ),
+      body.copyWith(
+        fontSize: size * 1.15,
+        fontWeight: FontWeight.w600,
+        height: 1.3,
+      ),
       body.copyWith(fontSize: size * 1.05, fontWeight: FontWeight.w600),
       body.copyWith(fontWeight: FontWeight.w600),
       body.copyWith(

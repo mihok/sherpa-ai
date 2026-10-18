@@ -27,7 +27,14 @@ void main() {
     artifacts: const ['/w/importer.dart', 'https://api.example.com/v1/rows'],
     stateHandles: const [StateHandle(key: 'basket_id', value: 'b-42', tool: 'cart', callId: 'c9')],
     sideEffectLedger: const [
-      SideEffectRecord(callId: 'c7', tool: 'create_issue', server: 'gh', argsDigest: '0123456789abcdef', outcome: SideEffectOutcome.ok, argsPreview: '{"title":"Bug"}'),
+      SideEffectRecord(
+        callId: 'c7',
+        tool: 'create_issue',
+        server: 'gh',
+        argsDigest: '0123456789abcdef',
+        outcome: SideEffectOutcome.ok,
+        argsPreview: '{"title":"Bug"}',
+      ),
     ],
     pendingApprovals: const ['delete_repo (call c11)'],
     taint: const [TaintRecord(source: 'tool:fetch', firstMessageId: 'm4')],
@@ -36,7 +43,10 @@ void main() {
     plan: Plan(
       task: 'Build a CSV importer for the shop',
       updatedAt: DateTime.utc(2026, 10, 18),
-      items: const [PlanItem(id: '1', title: 'Parser', status: PlanStatus.done), PlanItem(id: '2', title: 'Writer')],
+      items: const [
+        PlanItem(id: '1', title: 'Parser', status: PlanStatus.done),
+        PlanItem(id: '2', title: 'Writer'),
+      ],
     ),
     nonce: 'abcdef0123456789',
   );
@@ -146,7 +156,12 @@ void main() {
     Conv session() {
       final c = Conv()..user('Clean up /home/me/project/src/app.dart and see https://docs.example.com/guide.');
       c.toolTurn('c1', 'read_file', {'path': '/home/me/project/src/app.dart'}, 'class App {}');
-      c.toolTurn('c2', 'cart.create', const {}, '{"basket_id": "b-77", "api_token": "sk-should-not-leak-123456", "items": []}');
+      c.toolTurn(
+        'c2',
+        'cart.create',
+        const {},
+        '{"basket_id": "b-77", "api_token": "sk-should-not-leak-123456", "items": []}',
+      );
       c.toolTurn('c3', 'create_issue', {'title': 'Crash on start'}, 'Created issue #12');
       c.toolTurn('c4', 'delete_branch', {'name': 'old'}, 'The user declined this tool call.', isError: true);
       c.toolTurn('c5', 'update_plan', {'items': []}, 'Plan updated');
@@ -165,7 +180,10 @@ void main() {
     test('extracts artifacts, handles, ledger and taint deterministically', () {
       final c = session();
       final h = SummaryComposer.harvest(CompactionInput(messages: c.messages, tools: const [readFile]));
-      expect(h.artifacts, containsAll(['/home/me/project/src/app.dart', 'lib/src/csv_writer.dart', 'file:///home/me/report.pdf']));
+      expect(
+        h.artifacts,
+        containsAll(['/home/me/project/src/app.dart', 'lib/src/csv_writer.dart', 'file:///home/me/report.pdf']),
+      );
       expect(h.artifacts.first, 'lib/src/csv_writer.dart', reason: 'newest first');
       expect(h.stateHandles.map((s) => '${s.key}=${s.value}'), ['basket_id=b-77']);
       expect(jsonEncode(h.stateHandles.map((s) => s.toJson()).toList()), isNot(contains('sk-should')));
@@ -186,11 +204,9 @@ void main() {
         c.user('Message $i ${'word ' * 80}');
         c.assistant('ok');
       }
-      final h = SummaryComposer.harvest(CompactionInput(
-        messages: c.messages,
-        userMessageTokens: 250,
-        counter: const QuarterCounter(),
-      ));
+      final h = SummaryComposer.harvest(
+        CompactionInput(messages: c.messages, userMessageTokens: 250, counter: const QuarterCounter()),
+      );
       expect(h.userMessages.first, startsWith('Message 4'));
       expect(h.userMessages, hasLength(3));
       expect(h.userMessages.last, endsWith('…'));

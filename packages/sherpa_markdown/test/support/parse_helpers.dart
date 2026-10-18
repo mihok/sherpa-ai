@@ -4,7 +4,8 @@ import 'package:sherpa_markdown/parse.dart';
 
 /// Nodes of [text] parsed in one go.
 List<MdNode> nodesOf(String text, {bool complete = true}) => [
-  for (final b in IncrementalMarkdownParser().update(text, complete: complete)) b.node,
+  for (final b in IncrementalMarkdownParser().update(text, complete: complete))
+    b.node,
 ];
 
 /// The single node of [text].
@@ -30,7 +31,8 @@ String plain(List<MdInline> inlines) => plainTextOf(inlines);
 IncrementalMarkdownParser stream(
   String text,
   Iterable<int> chunkSizes, {
-  void Function(IncrementalMarkdownParser parser, List<MdBlock> blocks)? onUpdate,
+  void Function(IncrementalMarkdownParser parser, List<MdBlock> blocks)?
+  onUpdate,
 }) {
   final parser = IncrementalMarkdownParser();
   var pos = 0;

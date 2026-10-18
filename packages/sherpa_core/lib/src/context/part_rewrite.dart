@@ -13,15 +13,12 @@ abstract final class PartRewrite {
   /// reduced arguments (stage-2 input clearing), or plain text that is
   /// wrapped as `{"_sherpa": text}` so the arguments stay an object.
   static ContentPart replacePayload(ContentPart part, String replacement) => switch (part) {
-        ToolResultPart() => part.copyWith(content: [TextPart(replacement)], structured: const {}),
-        ToolCallPart(:final call) => ToolCallPart(ToolCall(
-            id: call.id,
-            name: call.name,
-            arguments: _argumentsFrom(replacement),
-            repaired: call.repaired,
-          )),
-        _ => TextPart(replacement),
-      };
+    ToolResultPart() => part.copyWith(content: [TextPart(replacement)], structured: const {}),
+    ToolCallPart(:final call) => ToolCallPart(
+      ToolCall(id: call.id, name: call.name, arguments: _argumentsFrom(replacement), repaired: call.repaired),
+    ),
+    _ => TextPart(replacement),
+  };
 
   static String? callIdOf(ContentPart part) => part is ToolResultPart ? part.callId : null;
 

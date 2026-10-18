@@ -85,25 +85,21 @@ final class BlockSpan {
   /// Column alignments of a [SpanKind.table] span.
   final List<MdAlign> alignments;
 
-  BlockSpan copyWith({
-    SpanKind? kind,
-    int? first,
-    int? last,
-    bool? closed,
-  }) => BlockSpan(
-    kind ?? this.kind,
-    first ?? this.first,
-    last ?? this.last,
-    closed: closed ?? this.closed,
-    proofLine: proofLine,
-    level: level,
-    fence: fence,
-    fenceCloseLine: fenceCloseLine,
-    math: math,
-    mathCloseLine: mathCloseLine,
-    items: items,
-    alignments: alignments,
-  );
+  BlockSpan copyWith({SpanKind? kind, int? first, int? last, bool? closed}) =>
+      BlockSpan(
+        kind ?? this.kind,
+        first ?? this.first,
+        last ?? this.last,
+        closed: closed ?? this.closed,
+        proofLine: proofLine,
+        level: level,
+        fence: fence,
+        fenceCloseLine: fenceCloseLine,
+        math: math,
+        mathCloseLine: mathCloseLine,
+        items: items,
+        alignments: alignments,
+      );
 
   @override
   String toString() =>

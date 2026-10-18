@@ -44,7 +44,10 @@ class ListBlockView extends StatelessWidget {
       painter.dispose();
     }
     final itemGap = list.tight ? theme.blockSpacing * 0.25 : theme.blockSpacing;
-    final childContext = context.copyWith(listDepth: depth + 1, tight: list.tight);
+    final childContext = context.copyWith(
+      listDepth: depth + 1,
+      tight: list.tight,
+    );
     return Semantics(
       container: true,
       role: SemanticsRole.list,
@@ -112,7 +115,9 @@ class _TaskBox extends StatelessWidget {
       checked: checked,
       child: ExcludeSemantics(
         child: Icon(
-          checked ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+          checked
+              ? Icons.check_box_rounded
+              : Icons.check_box_outline_blank_rounded,
           size: size,
           color: checked ? theme.taskChecked : theme.taskUnchecked,
         ),

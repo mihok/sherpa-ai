@@ -65,7 +65,12 @@ Future<void> pumpMarkdown(
 }
 
 /// Sets the test surface to [width]×[height] logical pixels at DPR 1.
-void setSurface(WidgetTester tester, double width, double height, {double dpr = 1}) {
+void setSurface(
+  WidgetTester tester,
+  double width,
+  double height, {
+  double dpr = 1,
+}) {
   tester.view.physicalSize = Size(width * dpr, height * dpr);
   tester.view.devicePixelRatio = dpr;
   addTearDown(tester.view.reset);

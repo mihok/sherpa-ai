@@ -147,7 +147,9 @@ final class AuditEntry {
 /// `sherpa_data`; [InMemorySessionStore] serves tests and evals.
 ///
 /// All writes are durable when the returned future completes: the agent
-/// loop relies on that for crash-safe checkpoints.
+/// loop relies on that for crash-safe checkpoints. Every per-session write
+/// requires the session to exist (StateError otherwise). Audit entries are
+/// idempotent per id and listed chronologically (ties in append order).
 abstract interface class SessionStore {
   Future<SessionRecord> putSession(SessionRecord session);
   Future<SessionRecord?> getSession(String id);

@@ -7,15 +7,15 @@ import 'package:test/test.dart';
 import 'helpers.dart';
 
 String validJson({String goal = 'Ship it'}) => jsonEncode({
-      'schemaVersion': 2,
-      'goal': goal,
-      'constraints': ['[user] No tabs'],
-      'decisions': ['[model] Use SQLite'],
-      'openTasks': ['[model] Writer'],
-      'currentWork': 'Writing',
-      'nextStep': 'Finish the writer',
-      'keyFacts': ['[tool:read_file] 3 columns'],
-    });
+  'schemaVersion': 2,
+  'goal': goal,
+  'constraints': ['[user] No tabs'],
+  'decisions': ['[model] Use SQLite'],
+  'openTasks': ['[model] Writer'],
+  'currentWork': 'Writing',
+  'nextStep': 'Finish the writer',
+  'keyFacts': ['[tool:read_file] 3 columns'],
+});
 
 ScriptedTurn reply(String text) => ScriptedTurn([TextDelta(text), const Finish(FinishReason.stop)]);
 
@@ -76,11 +76,13 @@ void main() {
       final fatal = issues.where((i) => i.fatal).map((i) => i.path).toList();
       expect(fatal, containsAll([r'$.constraints', r'$.decisions', r'$.keyFacts']));
       expect(issues.where((i) => !i.fatal).map((i) => i.path), containsAll([r'$.goal', r'$.extra']));
-      final coerced = SchemaCheck.coerce(CompactionSummary.schema, {
-        'goal': 'x' * 500,
-        'keyFacts': [for (var i = 0; i < 30; i++) 'f$i'],
-        'extra': 1,
-      })! as Map;
+      final coerced =
+          SchemaCheck.coerce(CompactionSummary.schema, {
+                'goal': 'x' * 500,
+                'keyFacts': [for (var i = 0; i < 30; i++) 'f$i'],
+                'extra': 1,
+              })!
+              as Map;
       expect((coerced['goal'] as String).length, 400);
       expect(coerced['keyFacts'], hasLength(16));
       expect(coerced.containsKey('extra'), isFalse);
@@ -158,7 +160,10 @@ void main() {
         c.assistant('ok $i');
       }
       final provider = ScriptedProvider([reply(validJson(goal: 'model goal'))]);
-      final m = LadderContextManager(strategy: ModelContextStrategy(provider: provider, modelId: 'm'), clock: FakeClock());
+      final m = LadderContextManager(
+        strategy: ModelContextStrategy(provider: provider, modelId: 'm'),
+        clock: FakeClock(),
+      );
       final r = req(c.messages, tools: const [readFile]);
       final view = m.inspect(r).messages;
       final p = await m.prepare(r);
@@ -172,7 +177,9 @@ void main() {
       expect(prefix, view.take(prefix.length).map((x) => x.id), reason: 'the summarizer extends the cached prefix');
       expect(prefix.last, o.toMessageId);
 
-      final failing = ScriptedProvider([ScriptedTurn.error(const ProviderException(ProviderErrorKind.network, 'down'))]);
+      final failing = ScriptedProvider([
+        ScriptedTurn.error(const ProviderException(ProviderErrorKind.network, 'down')),
+      ]);
       final fallback = await LadderContextManager(
         strategy: ModelContextStrategy(provider: failing, modelId: 'm'),
         clock: FakeClock(),
@@ -189,18 +196,23 @@ void main() {
       }
       final token = CancellationToken()..cancel('stop');
       final provider = ScriptedProvider([reply(validJson())]);
-      final m = LadderContextManager(strategy: ModelContextStrategy(provider: provider, modelId: 'm'), clock: FakeClock());
+      final m = LadderContextManager(
+        strategy: ModelContextStrategy(provider: provider, modelId: 'm'),
+        clock: FakeClock(),
+      );
       final r = req(c.messages);
       await expectLater(
-        m.prepare(ContextRequest(
-          sessionId: r.sessionId,
-          path: r.path,
-          overlays: r.overlays,
-          tools: r.tools,
-          capabilities: r.capabilities,
-          counter: r.counter,
-          cancel: token,
-        )),
+        m.prepare(
+          ContextRequest(
+            sessionId: r.sessionId,
+            path: r.path,
+            overlays: r.overlays,
+            tools: r.tools,
+            capabilities: r.capabilities,
+            counter: r.counter,
+            cancel: token,
+          ),
+        ),
         throwsA(isA<CancelledException>()),
       );
     });

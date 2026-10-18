@@ -51,26 +51,31 @@ final class Conv {
     return m;
   }
 
-  Message user(String text, {bool pinned = false}) => _add((id, parent, at) =>
-      Message(id: id, parentId: parent, role: Role.user, content: [TextPart(text)], createdAt: at, pinned: pinned));
+  Message user(String text, {bool pinned = false}) => _add(
+    (id, parent, at) =>
+        Message(id: id, parentId: parent, role: Role.user, content: [TextPart(text)], createdAt: at, pinned: pinned),
+  );
 
-  Message assistant(String text, {List<ToolCall> calls = const [], String? reasoning, String? prefixKey}) =>
-      _add((id, parent, at) => Message(
-            id: id,
-            parentId: parent,
-            role: Role.assistant,
-            createdAt: at,
-            content: [
-              if (reasoning != null) ReasoningPart(text: reasoning, signature: 'sig-$id'),
-              if (text.isNotEmpty) TextPart(text),
-              for (final c in calls) ToolCallPart(c),
-            ],
-            finishReason: calls.isEmpty ? 'stop' : 'toolCalls',
-            metadata: prefixKey == null ? const {} : {'prefixKey': prefixKey},
-          ));
+  Message assistant(String text, {List<ToolCall> calls = const [], String? reasoning, String? prefixKey}) => _add(
+    (id, parent, at) => Message(
+      id: id,
+      parentId: parent,
+      role: Role.assistant,
+      createdAt: at,
+      content: [
+        if (reasoning != null) ReasoningPart(text: reasoning, signature: 'sig-$id'),
+        if (text.isNotEmpty) TextPart(text),
+        for (final c in calls) ToolCallPart(c),
+      ],
+      finishReason: calls.isEmpty ? 'stop' : 'toolCalls',
+      metadata: prefixKey == null ? const {} : {'prefixKey': prefixKey},
+    ),
+  );
 
-  Message results(List<ToolResultPart> parts, {bool pinned = false}) => _add((id, parent, at) =>
-      Message(id: id, parentId: parent, role: Role.tool, content: parts, createdAt: at, pinned: pinned));
+  Message results(List<ToolResultPart> parts, {bool pinned = false}) => _add(
+    (id, parent, at) =>
+        Message(id: id, parentId: parent, role: Role.tool, content: parts, createdAt: at, pinned: pinned),
+  );
 
   /// An assistant call followed by its result.
   void toolTurn(
@@ -82,7 +87,10 @@ final class Conv {
     bool pinned = false,
     JsonMap? structured,
   }) {
-    assistant('', calls: [ToolCall(id: callId, name: tool, arguments: args)]);
+    assistant(
+      '',
+      calls: [ToolCall(id: callId, name: tool, arguments: args)],
+    );
     results([
       ToolResultPart(
         callId: callId,
@@ -109,21 +117,20 @@ ContextRequest req(
   TokenCounter counter = const QuarterCounter(),
   String? systemPrompt = 'You are a test assistant.',
   String? nonce = 'nonce0123456789ab',
-}) =>
-    ContextRequest(
-      sessionId: 's1',
-      path: path,
-      overlays: overlays,
-      tools: tools,
-      capabilities: ModelCapabilities(contextLength: window, maxOutputTokens: maxOutput, historyPolicy: policy),
-      counter: counter,
-      systemPrompt: systemPrompt,
-      plan: plan,
-      memory: memory,
-      settings: settings,
-      boundaryNonce: nonce,
-      location: location,
-    );
+}) => ContextRequest(
+  sessionId: 's1',
+  path: path,
+  overlays: overlays,
+  tools: tools,
+  capabilities: ModelCapabilities(contextLength: window, maxOutputTokens: maxOutput, historyPolicy: policy),
+  counter: counter,
+  systemPrompt: systemPrompt,
+  plan: plan,
+  memory: memory,
+  settings: settings,
+  boundaryNonce: nonce,
+  location: location,
+);
 
 /// Thresholds that make every stage run (prune at 5%) without compacting.
 final WindowProfile pruneEverything = WindowProfile(
@@ -140,7 +147,8 @@ final WindowProfile compactEverything = WindowProfile(
   keptTailFraction: 0.9,
 );
 
-String lines(int n, {String prefix = 'line'}) => [for (var i = 0; i < n; i++) '$prefix $i of the payload text'].join('\n');
+String lines(int n, {String prefix = 'line'}) =>
+    [for (var i = 0; i < n; i++) '$prefix $i of the payload text'].join('\n');
 
 /// The provider-facing invariant on a message list sent to a model.
 void expectProviderInvariants(List<Message> messages, {String? reason}) {

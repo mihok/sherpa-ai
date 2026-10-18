@@ -130,11 +130,10 @@ abstract final class SyntaxHighlighter {
     String code,
     String language,
   ) async {
-    final tokens = await compute(
-      tokenize,
-      (code: code, language: language),
-      debugLabel: 'sherpa_markdown highlight',
-    );
+    final tokens = await compute(tokenize, (
+      code: code,
+      language: language,
+    ), debugLabel: 'sherpa_markdown highlight');
     _store(code, language, tokens);
     return tokens;
   }

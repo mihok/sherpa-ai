@@ -17,7 +17,7 @@ final class CancelledException implements Exception {
 /// Tokens form a tree: cancelling a parent cancels every child, so the
 /// "stop everything" control only needs the root token of a run.
 final class CancellationToken {
-  CancellationToken({CancellationToken? parent}) {
+  CancellationToken({CancellationToken? parent}) : _parent = parent {
     if (parent != null) {
       if (parent.isCancelled) {
         _cancel(parent._reason ?? 'parent cancelled');
@@ -32,6 +32,7 @@ final class CancellationToken {
 
   final Completer<String> _completer = Completer<String>();
   final List<CancellationToken> _children = [];
+  final CancellationToken? _parent;
   String? _reason;
 
   bool get isCancelled => _completer.isCompleted;
@@ -53,6 +54,10 @@ final class CancellationToken {
     }
     _children.clear();
   }
+
+  /// Unlinks this token from its parent once the work it guarded is done,
+  /// so a long-lived run token does not accumulate one child per request.
+  void detach() => _parent?._children.remove(this);
 
   void throwIfCancelled() {
     if (isCancelled) throw CancelledException(_reason ?? 'cancelled');

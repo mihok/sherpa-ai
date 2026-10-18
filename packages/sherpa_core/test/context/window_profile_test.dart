@@ -5,13 +5,12 @@ import 'helpers.dart';
 
 void main() {
   group('WindowProfile.forWindow (R11 §9.2 table)', () {
-    WindowProfile at(int limit, {int reserve = 512, int margin = 0, int maxSummary = 1024}) =>
-        WindowProfile.forWindow(
-          limit: limit,
-          usableInput: limit - reserve - margin,
-          safetyMargin: margin,
-          maxSummaryTokens: maxSummary,
-        );
+    WindowProfile at(int limit, {int reserve = 512, int margin = 0, int maxSummary = 1024}) => WindowProfile.forWindow(
+      limit: limit,
+      usableInput: limit - reserve - margin,
+      safetyMargin: margin,
+      maxSummaryTokens: maxSummary,
+    );
 
     test('≤ 4K: deterministic summary only, keep 1 turn, 40% tail', () {
       final p = at(4096);
@@ -119,8 +118,11 @@ void main() {
       expect(p.effectiveContextLength(8192, MemoryState.unknown), 8192);
       expect(p.effectiveContextLength(8192, const MemoryState(pressure: MemoryPressure.moderate)), 6144);
       expect(p.effectiveContextLength(8192, const MemoryState(pressure: MemoryPressure.critical)), 4096);
-      expect(p.effectiveContextLength(1500, const MemoryState(pressure: MemoryPressure.critical)), 1024,
-          reason: 'never below the minimum');
+      expect(
+        p.effectiveContextLength(1500, const MemoryState(pressure: MemoryPressure.critical)),
+        1024,
+        reason: 'never below the minimum',
+      );
     });
 
     test('shrinks only on-device windows', () {
@@ -132,8 +134,10 @@ void main() {
       expect(remote.budget.limit, 8192);
       final unknown = manager.inspect(req(conv.messages, memory: critical));
       expect(unknown.budget.limit, 8192, reason: 'unknown location is not assumed on-device');
-      final configured = LadderContextManager(clock: FakeClock(), location: ExecutionLocation.onDevice)
-          .inspect(req(conv.messages, memory: critical));
+      final configured = LadderContextManager(
+        clock: FakeClock(),
+        location: ExecutionLocation.onDevice,
+      ).inspect(req(conv.messages, memory: critical));
       expect(configured.budget.limit, 4096);
     });
 
