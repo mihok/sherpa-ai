@@ -1,0 +1,20 @@
+name: sherpa_providers
+description: >-
+  Remote model providers for Sherpa: Anthropic Messages, OpenAI Chat
+  Completions (with per-server quirk profiles) and OpenAI Responses.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  http: ^1.6.0
+  meta: ^1.19.0
+  sherpa_core: any
+  sherpa_net: any
+
+dev_dependencies:
+  shelf: ^1.4.3
+  test: ^1.31.1

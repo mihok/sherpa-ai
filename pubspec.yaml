@@ -1,0 +1,29 @@
+name: sherpa_workspace
+description: Monorepo root for the Sherpa mobile agent harness (pub workspace).
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+# Pub workspaces (Dart >= 3.6) give one lockfile and one resolution for every
+# package, which keeps the core packages and the app on identical versions
+# without melos. Members must declare `resolution: workspace`.
+workspace:
+  - app
+  - packages/sherpa_core
+  - packages/sherpa_data
+  - packages/sherpa_hub
+  - packages/sherpa_markdown
+  - packages/sherpa_net
+  - packages/sherpa_providers
+
+# Build-hook options are only honoured in the workspace ROOT pubspec; in a
+# member pubspec they are silently ignored and SQLite ships unencrypted.
+# sherpa_data refuses to open a database when PRAGMA cipher is empty.
+hooks:
+  user_defines:
+    sqlite3:
+      source: sqlite3mc
+
+dev_dependencies:
+  lints: ^6.0.0

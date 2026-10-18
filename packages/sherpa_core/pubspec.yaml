@@ -1,0 +1,16 @@
+name: sherpa_core
+description: >-
+  Pure-Dart agent core for Sherpa: domain model, provider/tool/context
+  interfaces, agent loop, context manager and handoff. No Flutter imports.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  meta: ^1.19.0
+
+dev_dependencies:
+  test: ^1.31.1

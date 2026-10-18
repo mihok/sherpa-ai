@@ -1,0 +1,22 @@
+name: sherpa_data
+description: >-
+  Encrypted Drift/SQLite persistence for Sherpa: SessionStore, settings,
+  provider configs, model library, MCP servers and downloads.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  drift: ^2.35.2
+  meta: ^1.19.0
+  path: ^1.9.1
+  sherpa_core: any
+  sqlite3: ^3.7.1
+
+dev_dependencies:
+  build_runner: ^2.16.1
+  drift_dev: ^2.35.1
+  test: ^1.31.1

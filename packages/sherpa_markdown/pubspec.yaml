@@ -1,0 +1,24 @@
+name: sherpa_markdown
+description: >-
+  Incremental streaming Markdown for Sherpa: a pure-Dart block splitter that
+  freezes completed blocks, and a material_ui renderer with code, tables,
+  math and images.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_math_fork: ^0.7.4
+  markdown: ^7.3.1
+  material_ui: ^1.7.0
+  re_highlight: ^0.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

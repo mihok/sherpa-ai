@@ -1,0 +1,22 @@
+name: sherpa_hub
+description: >-
+  Pure-Dart Hugging Face Hub model directory for Sherpa: Hub client
+  (search, details, files, resolve, GGUF header peek), GGUF metadata
+  reader, model-name parser, device-fit engine and download planner.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  crypto: ^3.0.7
+  http: ^1.6.0
+  meta: ^1.19.0
+  sherpa_core: any
+  sherpa_net: any
+
+dev_dependencies:
+  shelf: ^1.4.3
+  test: ^1.31.1
