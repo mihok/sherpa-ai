@@ -1,0 +1,43 @@
+name: sherpa_webview
+description: >-
+  Flutter plugin that hosts MCP Apps (io.modelcontextprotocol/ui) in a
+  sandboxed WebView: a trusted shell page with an opaque-origin srcdoc
+  iframe, CSP built only from consented domains, and a Dart bridge that
+  enforces tool visibility, approvals and confirmations.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  crypto: ^3.0.7
+  flutter:
+    sdk: flutter
+  material_ui: ^1.7.0
+  meta: ^1.19.0
+  sherpa_core: any
+  # Only lib/mcp.dart (the McpToolRouter / McpServerManager adapter) imports
+  # it; the bridge, policy and widget libraries depend on sherpa_core only.
+  sherpa_mcp: any
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  pigeon: ^29.0.10
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: io.github.mihok.sherpa_webview
+        pluginClass: SherpaWebviewPlugin
+      ios:
+        pluginClass: SherpaWebviewPlugin
+  # The trusted shell page. Native code reads it from the app's Flutter
+  # assets (never from the network) and loads it under a virtual https
+  # origin; the Chromium security suite loads the same file.
+  assets:
+    - assets/mcp_app_shell.html

@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Native code replaces the placeholder below with the policy Dart built
+     from the server's CONSENTED domains (validated character set; anything
+     else is replaced by the no-network default). The View's srcdoc document
+     inherits this policy and gets a copy as its first element. -->
+<meta http-equiv="Content-Security-Policy" content="__SHERPA_CSP__">
+<meta http-equiv="x-dns-prefetch-control" content="off">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Sherpa MCP App shell</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:transparent}
+iframe{display:block;border:0;margin:0;padding:0;width:100%;height:100%;background:transparent}
+</style>
+</head>
+<body>
+<script>
+/*
+ * Sherpa MCP Apps shell (trusted). Relays JSON-RPC between the sandboxed
+ * View iframe and native code. It is NOT the security boundary on its own:
+ * the iframe sandbox, the CSP, native origin/frame checks and the Dart
+ * bridge all enforce independently. Shell envelope protocol v1:
+ *   shell -> native: {kind:'ready',v,cspOk} {kind:'view',message}
+ *                    {kind:'frame-loaded'} {kind:'stats',...} {kind:'error',reason}
+ *   native -> shell: {kind:'load',html,limits,theme,title} {kind:'post',message}
+ *                    {kind:'context',theme} {kind:'teardown'}
+ */
+(function () {
+  'use strict';
+  var SHELL_ORIGIN = 'https://mcp-view.sherpa.invalid';
+  var VERSION = 1;
+  var HARD_MAX_CHARS = 4 * 1024 * 1024;
+  // Everything the View could ask the embedder for, denied (an opaque-origin
+  // frame gets none of the 'self'-default features anyway).
+  var DENY_FEATURES = [
+    'accelerometer', 'ambient-light-sensor', 'autoplay', 'bluetooth', 'camera',
+    'clipboard-read', 'clipboard-write', 'display-capture', 'encrypted-media',
+    'fullscreen', 'gamepad', 'geolocation', 'gyroscope', 'hid', 'identity-credentials-get',
+    'idle-detection', 'local-fonts', 'magnetometer', 'microphone', 'midi', 'otp-credentials',
+    'payment', 'picture-in-picture', 'publickey-credentials-create', 'publickey-credentials-get',
+    'screen-wake-lock', 'serial', 'storage-access', 'usb', 'web-share', 'window-management',
+    'xr-spatial-tracking'
+  ].map(function (f) { return f + " 'none'"; }).join('; ');
+
+  var limits = { maxChars: 1024 * 1024, burst: 64, perSecond: 32 };
+  var stats = { forged: 0, malformed: 0, oversized: 0, rateLimited: 0 };
+  var statsTimer = 0;
+  var frame = null;
+  var torn = false;
+  var tokens = limits.burst;
+  var lastRefill = Date.now();
+  var errorReplies = { windowStart: 0, count: 0 };
+
+  var cspMeta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+  var csp = cspMeta ? String(cspMeta.getAttribute('content') || '') : '';
+  // Fail closed: without a real policy (placeholder not substituted) the
+  // shell refuses to create the View.
+  var cspOk = /^default-src 'none'; /.test(csp) && csp.indexOf('__SHERPA') < 0 &&
+      /(^|; )connect-src [^;]+/.test(csp) && /(^|; )frame-src 'none'/.test(csp);
+  var originOk = location.origin === SHELL_ORIGIN && window.top === window;
+
+  // ---------------------------------------------------------------- native
+  // Android: WebViewCompat.addWebMessageListener injects `__sherpaHost` only
+  // into frames whose origin is SHELL_ORIGIN. iOS: a script in a private
+  // WKContentWorld (main frame only) relays self-posted {__sherpaOut} to the
+  // message handler, and native calls window.__sherpaShell.receive(string).
+  var host = window.__sherpaHost;
+
+  function sendRaw(s) {
+    if (host && typeof host.postMessage === 'function') {
+      host.postMessage(s);
+    } else {
+      window.postMessage({ __sherpaOut: s }, SHELL_ORIGIN);
+    }
+  }
+
+  function send(obj) {
+    var s;
+    try { s = JSON.stringify(obj); } catch (e) { return; }
+    sendRaw(s);
+  }
+
+  function receive(s) {
+    if (typeof s !== 'string' || s.length > HARD_MAX_CHARS * 2) return;
+    var m;
+    try { m = JSON.parse(s); } catch (e) { return; }
+    if (!m || typeof m !== 'object') return;
+    switch (m.kind) {
+      case 'load': load(m); break;
+      case 'post': toView(m.message); break;
+      case 'context': applyTheme(m.theme); break;
+      case 'teardown': teardown(); break;
+      default: break;
+    }
+  }
+
+  if (host) {
+    if (typeof host.addEventListener === 'function') {
+      host.addEventListener('message', function (e) { receive(e.data); });
+    } else {
+      host.onmessage = function (e) { receive(e.data); };
+    }
+  }
+  Object.defineProperty(window, '__sherpaShell', {
+    value: Object.freeze({ receive: receive }),
+    writable: false,
+    configurable: false,
+    enumerable: false
+  });
+
+  // ------------------------------------------------------------------ View
+  function escAttr(s) {
+    return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Runs first inside the View document. Convenience and best-effort
+  // hardening only: the View can undo anything here, so nothing relies on it.
+  function viewPrelude() {
+    try {
+      ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'RTCIceTransport',
+       'RTCSctpTransport', 'RTCRtpSender', 'RTCRtpReceiver', 'RTCRtpTransceiver'].forEach(function (k) {
+        try { Object.defineProperty(window, k, { value: undefined, writable: false, configurable: false }); } catch (e) {}
+      });
+    } catch (e) {}
+    // Plain links become ui/open-link requests to the host, which checks
+    // the scheme and asks the user. The frame itself never navigates.
+    document.addEventListener('click', function (e) {
+      if (e.defaultPrevented || e.button !== 0) return;
+      var t = e.target;
+      while (t && !(t.tagName === 'A' || t.tagName === 'AREA')) t = t.parentNode;
+      if (!t || !t.href) return;
+      var href = String(t.href);
+      if (!/^(https?|mailto|tel):/i.test(href)) return;
+      e.preventDefault();
+      parent.postMessage({ jsonrpc: '2.0', method: 'sherpa/notifications/link-activated', params: { url: href } }, '*');
+    }, false);
+  }
+
+  function srcdocFor(html) {
+    return '<!DOCTYPE html>' +
+      '<meta http-equiv="Content-Security-Policy" content="' + escAttr(csp) + '">' +
+      '<meta http-equiv="x-dns-prefetch-control" content="off">' +
+      '<meta name="referrer" content="no-referrer">' +
+      '<script>(' + String(viewPrelude) + ')();<\/script>' +
+      html;
+  }
+
+  function load(m) {
+    if (frame || torn) return send({ kind: 'error', reason: 'already-loaded' });
+    if (!cspOk || !originOk) return send({ kind: 'error', reason: 'shell-misconfigured' });
+    if (typeof m.html !== 'string' || m.html.length > HARD_MAX_CHARS) {
+      return send({ kind: 'error', reason: 'html-too-large' });
+    }
+    var l = m.limits || {};
+    if (typeof l.maxChars === 'number' && l.maxChars >= 1024) limits.maxChars = Math.min(l.maxChars, HARD_MAX_CHARS);
+    if (typeof l.burst === 'number' && l.burst >= 1) limits.burst = Math.min(l.burst, 1000);
+    if (typeof l.perSecond === 'number' && l.perSecond > 0) limits.perSecond = Math.min(l.perSecond, 1000);
+    tokens = limits.burst;
+    applyTheme(m.theme);
+    var f = document.createElement('iframe');
+    // NEVER allow-same-origin (the View must stay at an opaque origin, so it
+    // matches no bridge origin rule and can touch no shell global or
+    // storage), and no popups, top navigation, forms, modals or downloads.
+    f.setAttribute('sandbox', 'allow-scripts');
+    f.setAttribute('allow', DENY_FEATURES);
+    f.setAttribute('referrerpolicy', 'no-referrer');
+    f.setAttribute('title', typeof m.title === 'string' ? m.title.slice(0, 200) : 'MCP App');
+    f.addEventListener('load', function () { if (frame === f) send({ kind: 'frame-loaded' }); });
+    f.srcdoc = srcdocFor(m.html);
+    frame = f;
+    document.body.appendChild(f);
+  }
+
+  function toView(msg) {
+    if (!frame || torn || !frame.contentWindow || !msg || typeof msg !== 'object') return;
+    // '*' is required: the View's origin is opaque ("null").
+    frame.contentWindow.postMessage(msg, '*');
+  }
+
+  function applyTheme(theme) {
+    if (theme !== 'light' && theme !== 'dark') return;
+    document.documentElement.style.colorScheme = theme;
+    if (frame) frame.style.colorScheme = theme;
+  }
+
+  function teardown() {
+    torn = true;
+    if (frame) {
+      frame.remove();
+      frame = null;
+    }
+  }
+
+  function takeToken() {
+    var now = Date.now();
+    tokens = Math.min(limits.burst, tokens + (now - lastRefill) * limits.perSecond / 1000);
+    lastRefill = now;
+    if (tokens < 1) return false;
+    tokens -= 1;
+    return true;
+  }
+
+  function bump(key) {
+    stats[key]++;
+    if (!statsTimer) {
+      statsTimer = setTimeout(function () {
+        statsTimer = 0;
+        send({ kind: 'stats', forged: stats.forged, malformed: stats.malformed,
+               oversized: stats.oversized, rateLimited: stats.rateLimited });
+      }, 1000);
+    }
+  }
+
+  // Requests the shell refuses still get an answer, so the View's promise
+  // settles (at most 10 per second).
+  function rejectRequest(d, code, message) {
+    if (!d || typeof d !== 'object' || typeof d.method !== 'string') return;
+    var id = d.id;
+    if (!((typeof id === 'string' && id.length <= 128) || (typeof id === 'number' && isFinite(id)))) return;
+    var now = Date.now();
+    if (now - errorReplies.windowStart > 1000) { errorReplies.windowStart = now; errorReplies.count = 0; }
+    if (++errorReplies.count > 10) return;
+    toView({ jsonrpc: '2.0', id: id, error: { code: code, message: message } });
+  }
+
+  window.addEventListener('message', function (e) {
+    if (e.source === window) return; // iOS self-post path / own traffic
+    if (!frame || torn || e.source !== frame.contentWindow) { bump('forged'); return; }
+    if (e.origin !== 'null') { bump('forged'); return; }
+    var d = e.data;
+    if (!takeToken()) { bump('rateLimited'); rejectRequest(d, -32000, 'Rate limit exceeded'); return; }
+    if (!d || typeof d !== 'object' || Array.isArray(d) || d.jsonrpc !== '2.0') { bump('malformed'); return; }
+    var s;
+    try { s = JSON.stringify(d); } catch (err) { bump('malformed'); return; }
+    if (typeof s !== 'string') { bump('malformed'); return; }
+    if (s.length > limits.maxChars) { bump('oversized'); rejectRequest(d, -32600, 'Message too large'); return; }
+    sendRaw('{"kind":"view","message":' + s + '}');
+  });
+
+  function ready() {
+    send({ kind: 'ready', v: VERSION, cspOk: cspOk && originOk });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ready);
+  } else {
+    ready();
+  }
+})();
+</script>
+</body>
+</html>

@@ -20,6 +20,7 @@ workspace:
   - packages/sherpa_net
   - packages/sherpa_platform
   - packages/sherpa_providers
+  - packages/sherpa_webview
 
 # Build-hook options are only honoured in the workspace ROOT pubspec; in a
 # member pubspec they are silently ignored and SQLite ships unencrypted.

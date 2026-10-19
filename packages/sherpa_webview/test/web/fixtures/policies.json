@@ -1,0 +1,138 @@
+{
+  "comment": "CSP goldens shared by test/csp_test.dart (Dart builder) and test/web/security.test.mjs (Chromium). Regenerate the outputs with: dart run tool/csp_fixture.dart",
+  "cases": [
+    {
+      "name": "none",
+      "csp": {},
+      "granted": [],
+      "policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'",
+      "allowedOrigins": [],
+      "rejected": []
+    },
+    {
+      "name": "declared-not-consented",
+      "csp": {
+        "connectDomains": [
+          "https://api.allowed.example"
+        ],
+        "resourceDomains": [
+          "https://cdn.allowed.example"
+        ]
+      },
+      "granted": [],
+      "policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'",
+      "allowedOrigins": [],
+      "rejected": []
+    },
+    {
+      "name": "connect",
+      "csp": {
+        "connectDomains": [
+          "https://api.allowed.example",
+          "wss://ws.allowed.example"
+        ]
+      },
+      "granted": [
+        "https://api.allowed.example",
+        "wss://ws.allowed.example"
+      ],
+      "policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src 'none'; media-src 'none'; connect-src https://api.allowed.example wss://ws.allowed.example; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'",
+      "allowedOrigins": [
+        "https://api.allowed.example",
+        "wss://ws.allowed.example"
+      ],
+      "rejected": []
+    },
+    {
+      "name": "resources",
+      "csp": {
+        "connectDomains": [
+          "https://api.allowed.example"
+        ],
+        "resourceDomains": [
+          "https://cdn.allowed.example",
+          "https://*.wild.example"
+        ]
+      },
+      "granted": [
+        "https://api.allowed.example",
+        "https://cdn.allowed.example",
+        "https://*.wild.example"
+      ],
+      "policy": "default-src 'none'; script-src 'unsafe-inline' https://cdn.allowed.example https://*.wild.example; style-src 'unsafe-inline' https://cdn.allowed.example https://*.wild.example; img-src data: blob: https://cdn.allowed.example https://*.wild.example; font-src https://cdn.allowed.example https://*.wild.example; media-src https://cdn.allowed.example https://*.wild.example; connect-src https://api.allowed.example; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'",
+      "allowedOrigins": [
+        "https://api.allowed.example",
+        "https://cdn.allowed.example",
+        "https://*.wild.example"
+      ],
+      "rejected": []
+    },
+    {
+      "name": "partial-consent",
+      "csp": {
+        "connectDomains": [
+          "https://api.allowed.example",
+          "https://api.other.example"
+        ]
+      },
+      "granted": [
+        "https://api.allowed.example",
+        "https://api.undeclared.example"
+      ],
+      "policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src 'none'; media-src 'none'; connect-src https://api.allowed.example; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'",
+      "allowedOrigins": [
+        "https://api.allowed.example"
+      ],
+      "rejected": []
+    },
+    {
+      "name": "injection",
+      "csp": {
+        "connectDomains": [
+          "https://ok.example; script-src *",
+          "*",
+          "data:",
+          "http://insecure.example",
+          "https://127.0.0.1",
+          "https://localhost",
+          "https://printer.local",
+          "https://a.example/path",
+          "https://user@a.example",
+          "'unsafe-eval'",
+          "https://*",
+          "wss://*.example"
+        ],
+        "resourceDomains": [
+          "wss://cdn.example",
+          "blob:",
+          "https://cdn.example/x.js"
+        ]
+      },
+      "granted": [
+        "https://ok.example; script-src *",
+        "*",
+        "data:",
+        "http://insecure.example"
+      ],
+      "policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'",
+      "allowedOrigins": [],
+      "rejected": [
+        "https://ok.example; script-src *",
+        "*",
+        "data:",
+        "http://insecure.example",
+        "https://127.0.0.1",
+        "https://localhost",
+        "https://printer.local",
+        "https://a.example/path",
+        "https://user@a.example",
+        "'unsafe-eval'",
+        "https://*",
+        "wss://*.example",
+        "wss://cdn.example",
+        "blob:",
+        "https://cdn.example/x.js"
+      ]
+    }
+  ]
+}

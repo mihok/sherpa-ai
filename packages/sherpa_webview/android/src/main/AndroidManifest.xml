@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- No permissions: Views get none in this version. Network for
+         consented domains uses the app's INTERNET permission; camera,
+         microphone and geolocation requests are always denied in
+         McpAppPlatformView. -->
+</manifest>
