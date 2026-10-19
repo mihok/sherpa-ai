@@ -72,5 +72,11 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Android 11+ package visibility: lets url_launcher find a Custom
+             Tabs browser for links and URL elicitation (otherwise it opens
+             the browser app, never an in-app WebView). -->
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService"/>
+        </intent>
     </queries>
 </manifest>
