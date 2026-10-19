@@ -57,7 +57,9 @@ Flags (R05 §7.3): arm64-v8a, `android-29`, `ANDROID_STL=c++_shared`, `BUILD_SHA
 `GGML_CPU_KLEIDIAI=ON` with `FETCHCONTENT_SOURCE_DIR_KLEIDIAI` (CMake never downloads),
 `GGML_OPENMP=OFF`, `GGML_LLAMAFILE=OFF`, `GGML_LTO=ON`, `-ffile-prefix-map` for stable paths.
 `llama-common` is compiled into `libsherpa_engine.so` as a static archive behind a version script, so the
-engine exports exactly the 39 `se_*` functions and dead code (arg parser, downloader, HTTP) is dropped.
+engine exports exactly the 42 `se_*` functions of ABI 1.1 (39 in 1.0) and dead code (arg parser,
+downloader, HTTP) is dropped. `libmtmd.so` (image input through a paired projector) is built by default;
+`SHERPA_MTMD=0` leaves it out.
 
 Output in `out/android/`: `jniLibs/arm64-v8a/*.so` (`--strip-debug`, symbol table kept for Play's
 `SYMBOL_TABLE` level), `symbols-arm64-v8a.tar.gz` (unstripped + `build-ids.txt`), `variants.txt`,
@@ -65,8 +67,11 @@ Output in `out/android/`: `jniLibs/arm64-v8a/*.so` (`--strip-debug`, symbol tabl
 aligned to `0x4000`; `NEEDED` ⊆ {libc, libm, libdl, liblog, libandroid, libc++_shared, own libs} (no
 `libomp.so`, no hard `libOpenCL.so`); all 7 variants present and exporting
 `ggml_backend_score`/`ggml_backend_init`; the engine exports only `se_*`; `--strip-unneeded` payload ≤
-`ANDROID_SIZE_BUDGET_BYTES` (16 MiB). Measured: 14.47 MB stripped (engine 2.26 MB, llama 3.39 MB, each
-variant ~0.95 MB, libc++_shared 1.37 MB), clean build 6 min 38 s at `-j3`.
+`ANDROID_SIZE_BUDGET_BYTES` (16 MiB). Measured with mtmd (ABI 1.1): 15.86 MB stripped of the
+16.78 MB budget (engine 2.29 MB, llama 3.39 MB, mtmd 1.37 MB, each variant ~0.95 MB,
+libc++_shared 1.37 MB); build 267 s at `-j3` with a warm build directory. Without mtmd
+(ABI 1.0) it was 14.47 MB. The headroom is now small: a llama.cpp bump that grows the payload may need
+`SHERPA_MTMD=0` or a budget review.
 
 App integration: copy `jniLibs/` into the plugin, `ndk { abiFilters += "arm64-v8a" }`,
 `packaging { jniLibs { pickFirsts += "**/libc++_shared.so" } }`. No `extractNativeLibs` /

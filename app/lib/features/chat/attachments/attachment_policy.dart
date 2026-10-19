@@ -10,10 +10,16 @@ import 'package:sherpa_core/sherpa_core.dart';
 ///   takes natively; 4.7+ goes to 2576 px but costs ~2.7× the tokens) and
 ///   sends PDFs as `document` blocks (R10 §7.2).
 /// * OpenAI (Chat and Responses): `detail: high` fits images into a
-///   2048 px square anyway, so larger uploads only cost bandwidth. PDFs are
-///   not mapped by Sherpa's OpenAI adapters yet, so they are refused.
+///   2048 px square anyway, so larger uploads only cost bandwidth. PDFs go
+///   as `file` / `input_file` parts (50 MB per request) on models that read
+///   them.
 /// * Servers on the local network and on-device models: 1024 px, which
-///   keeps image tokens (and memory on the phone) small.
+///   keeps image tokens (and memory on the phone) small. They take no PDFs.
+///
+/// Whether PDFs are accepted is the model's [ModelCapabilities.pdfInput]
+/// (reported by each provider: Anthropic from its model traits and
+/// `/v1/models`, OpenAI by model family, OpenRouter from its model list,
+/// and false for servers without file parts), not the provider kind.
 ///
 /// Every limit is shown to the user in [summary] and in the refusal copy,
 /// so nothing is dropped silently.
@@ -28,8 +34,8 @@ final class AttachmentPolicy {
     this.pdfRefusal,
   });
 
-  /// The chat's model. [vision] decides images; the provider kind decides
-  /// PDFs and the image size.
+  /// The chat's model. Its capabilities decide images ([vision]) and PDFs
+  /// ([pdfInput]); the provider kind and location decide the image size.
   factory AttachmentPolicy.forModel({
     required String modelName,
     required ProviderInfo provider,
@@ -43,7 +49,7 @@ final class AttachmentPolicy {
       ProviderKind.localLiteRt ||
       ProviderKind.localSystem => localImageEdge,
     };
-    final pdf = provider.kind == ProviderKind.anthropic;
+    final pdf = capabilities.pdfInput;
     return AttachmentPolicy(
       modelName: modelName,
       imagesAllowed: capabilities.vision,
@@ -54,8 +60,8 @@ final class AttachmentPolicy {
           : "$modelName can't see images. Switch to a model with vision to attach photos.",
       pdfRefusal: pdf
           ? null
-          : "$modelName's provider can't take PDFs in Sherpa yet (only Anthropic models can). "
-                'Attach the text as a .txt or .md file instead.',
+          : "$modelName can't read PDFs. Switch to a model that reads documents, "
+                'or attach the text as a .txt or .md file instead.',
     );
   }
 
@@ -88,7 +94,8 @@ final class AttachmentPolicy {
   /// About 60k tokens of text.
   static const int maxTextBytes = 256 * 1024;
 
-  /// Base64 makes it ~13.3 MB, well inside Anthropic's 32 MB request cap.
+  /// Base64 makes it ~13.3 MB, well inside Anthropic's 32 MB and OpenAI's
+  /// 50 MB request caps.
   static const int maxPdfBytes = 10 * 1024 * 1024;
 
   /// Everything attached to one message, before encoding.

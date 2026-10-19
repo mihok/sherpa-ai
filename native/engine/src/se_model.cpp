@@ -261,6 +261,9 @@ std::string build_model_info(ModelImpl & m) {
     mm["loaded"] = m.mtmd != nullptr;
     mm["vision"] = m.mtmd ? mtmd_support_vision(m.mtmd) : false;
     mm["audio"]  = m.mtmd ? mtmd_support_audio(m.mtmd) : false;
+    // ABI 1.1: requests may carry images (image_url / media content parts). Audio input is not wired.
+    mm["image_input"] = m.image_input;
+    if (m.mtmd) mm["mrope"] = mtmd_decode_use_mrope(m.mtmd);
 #else
     mm["loaded"] = false;
     mm["compiled"] = false;
@@ -376,12 +379,18 @@ SE_API se_status se_model_load(const char * path, const se_model_params * p, se_
     if (mp.mmproj_path && *mp.mmproj_path) {
 #if SE_HAVE_MTMD
       se::require_file(mp.mmproj_path, "mmproj");
+      // A per-load random marker: user text cannot contain it, so it never splits a prompt by accident.
+      uint64_t rng = (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count() ^ (uint64_t) (uintptr_t) m.get();
+      m->media_marker = "<__sherpa_media_" + se::random_id(rng, 16) + "__>";
       mtmd_context_params mcp = mtmd_context_params_default();
       mcp.use_gpu       = mp.mmproj_use_gpu != 0;
       mcp.print_timings = false;
       mcp.n_threads     = se::default_thread_count();
+      mcp.media_marker  = m->media_marker.c_str();
       m->mtmd = mtmd_init_from_file(mp.mmproj_path, m->model, mcp);
       if (m->mtmd == nullptr) se::fail(SE_ERR_MODEL_LOAD, std::string("failed to load mmproj '") + mp.mmproj_path + "'");
+      m->image_input = mtmd_support_vision(m->mtmd);
+      m->mmproj_fingerprint = se::quick_fingerprint(mp.mmproj_path, nullptr);
 #else
       se::fail(SE_ERR_UNSUPPORTED, "this build has no multimodal (mtmd) support");
 #endif
@@ -442,7 +451,8 @@ SE_API int32_t se_count_chat_tokens(const se_model * m, const char * request_jso
     if (!m) se::fail(SE_ERR_INVALID_ARG, "model is NULL");
     se::ChatRequest req = se::parse_chat_request(*m->impl, request_json);
     const common_chat_params chat = se::apply_template(*m->impl, req.inputs);
-    return (int32_t) se::tokenize_prompt(m->impl->vocab, chat.prompt, true).size();
+    if (req.media.empty()) return (int32_t) se::tokenize_prompt(m->impl->vocab, chat.prompt, true).size();
+    return (int32_t) se::build_prompt(*m->impl, chat.prompt, req.media).n_cells;
   });
 }
 

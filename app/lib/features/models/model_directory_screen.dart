@@ -5,7 +5,9 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_hub/sherpa_hub.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
 import '../../services/device/device_profile_source.dart';
@@ -61,7 +63,7 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Semantics(headingLevel: 1, child: const Text('Browse models')),
+        title: Heading(level: 1, child: const Text('Browse models')),
         actions: [
           IconButton(
             tooltip: running == 0 ? 'Downloads' : 'Downloads, $running in progress',
@@ -83,6 +85,7 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
             child: CustomScrollView(
               controller: _scroll,
               physics: const AlwaysScrollableScrollPhysics(),
+              semanticChildCount: s.items.isEmpty ? null : s.items.length,
               slivers: [
                 SliverToBoxAdapter(child: _SearchField(controller: _search, onChanged: controller.setText)),
                 const SliverToBoxAdapter(child: _QuantizerRow()),
@@ -147,19 +150,25 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
     return [
       SliverPadding(
         padding: pad,
-        sliver: SliverList.separated(
-          itemCount: items.length + 1,
-          separatorBuilder: (_, _) => SizedBox(height: t.space.md),
-          itemBuilder: (context, i) {
-            if (i == items.length) return _ListFooter(state: s, onRetry: c.loadMore);
-            final e = items[i];
-            return ModelCard(
-              key: ValueKey(e.id),
-              entry: e,
-              estimate: device == null ? null : estimateCardFit(e, device),
-              onTap: () => context.go(Routes.modelDetail(e.id)),
-            );
-          },
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, i) {
+              if (i.isOdd) return SizedBox(height: t.space.md);
+              final k = i ~/ 2;
+              if (k == items.length) return _ListFooter(state: s, onRetry: c.loadMore);
+              final e = items[k];
+              return ModelCard(
+                key: ValueKey(e.id),
+                entry: e,
+                estimate: device == null ? null : estimateCardFit(e, device),
+                onTap: () => context.go(Routes.modelDetail(e.id)),
+              );
+            },
+            childCount: items.length * 2 + 1,
+            // Only the cards are list items ("12 of 30" in TalkBack), not
+            // the gaps or the "Load more" footer.
+            semanticIndexCallback: (_, i) => i.isEven && i ~/ 2 < items.length ? i ~/ 2 : null,
+          ),
         ),
       ),
     ];
@@ -228,18 +237,30 @@ class _QuantizerRow extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: EdgeInsets.fromLTRB(t.space.lg, t.space.xs, t.space.sm, 0),
+          padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, t.space.xs, t.space.sm, 0),
           child: Row(
             children: [
-              Semantics(
-                headingLevel: 2,
+              Heading(
+                level: 2,
                 child: Text('Trusted quantizers', style: theme.textTheme.labelLarge?.copyWith(color: theme.colorScheme.primary)),
               ),
-              const Tooltip(
-                triggerMode: TooltipTriggerMode.tap,
-                message: 'Anyone can upload to Hugging Face. These accounts publish carefully converted copies of '
-                    'popular models with file names Sherpa decodes reliably. Tap one to see only its uploads.',
-                child: Padding(padding: EdgeInsets.all(8), child: Icon(Icons.info_outline_rounded, size: 16)),
+              // A real button (48 dp, labelled) rather than a 32 dp tap tooltip.
+              IconButton(
+                tooltip: 'About trusted quantizers',
+                iconSize: 18,
+                icon: const Icon(Icons.info_outline_rounded),
+                onPressed: () => unawaited(showDialog<void>(
+                  context: context,
+                  animationStyle: motionStyleOf(context),
+                  builder: (context) => AlertDialog(
+                    title: const Heading(child: Text('Trusted quantizers')),
+                    content: const Text(
+                      'Anyone can upload to Hugging Face. These accounts publish carefully converted copies of '
+                      'popular models with file names Sherpa decodes reliably. Tap one to see only its uploads.',
+                    ),
+                    actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK'))],
+                  ),
+                )),
               ),
             ],
           ),
@@ -252,7 +273,7 @@ class _QuantizerRow extends ConsumerWidget {
             children: [
               for (final q in prefs.trustedQuantizers)
                 Padding(
-                  padding: EdgeInsets.only(right: t.space.sm),
+                  padding: EdgeInsetsDirectional.only(end: t.space.sm),
                   child: FilterChip(
                     label: Text(q),
                     selected: selected.contains(q),
@@ -290,7 +311,7 @@ class _FilterRow extends ConsumerWidget {
     }
 
     Widget format(HubFormatFilter f, String label, String tip) => Padding(
-          padding: EdgeInsets.only(right: t.space.sm),
+          padding: EdgeInsetsDirectional.only(end: t.space.sm),
           child: Tooltip(
             message: tip,
             child: ChoiceChip(
@@ -333,7 +354,7 @@ class _FilterRow extends ConsumerWidget {
             tooltip: 'What the model is for (the Hub pipeline tag)',
           ),
           Padding(
-            padding: EdgeInsets.only(right: t.space.sm),
+            padding: EdgeInsetsDirectional.only(end: t.space.sm),
             child: Tooltip(
               message: 'Models whose chat template or tags mention tool calling. A hint; Sherpa checks the '
                   'downloaded file itself.',
@@ -384,7 +405,7 @@ class _MenuChip<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = SherpaTokens.of(context);
     return Padding(
-      padding: EdgeInsets.only(right: t.space.sm),
+      padding: EdgeInsetsDirectional.only(end: t.space.sm),
       child: MenuAnchor(
         menuChildren: [
           if (allowAny) MenuItemButton(onPressed: () => onSelected(null), child: const Text('Any')),
@@ -420,7 +441,7 @@ class _ContentFilterNote extends ConsumerWidget {
         ? 'Showing uncensored fine-tunes'
         : '$hidden uncensored fine-tune${hidden == 1 ? '' : 's'} hidden';
     return Padding(
-      padding: EdgeInsets.fromLTRB(t.space.lg, 0, t.space.sm, 0),
+      padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, 0, t.space.sm, 0),
       child: Row(
         children: [
           Icon(showing ? Icons.visibility_outlined : Icons.visibility_off_outlined, size: 16, color: theme.colorScheme.onSurfaceVariant),
@@ -454,7 +475,12 @@ class _ListFooter extends StatelessWidget {
     if (state.loadingMore) {
       return Padding(
         padding: EdgeInsets.all(t.space.lg),
-        child: const Center(child: SizedBox.square(dimension: 24, child: CircularProgressIndicator(strokeWidth: 2.5))),
+        child: const Center(
+          child: SizedBox.square(
+            dimension: 24,
+            child: CircularProgressIndicator(strokeWidth: 2.5, semanticsLabel: 'Loading more models'),
+          ),
+        ),
       );
     }
     if (state.failure != null && state.hasMore) {
@@ -516,6 +542,7 @@ class _FailureView extends ConsumerWidget {
 /// Add or remove pinned publishers.
 Future<void> showEditQuantizersSheet(BuildContext context) => showModalBottomSheet<void>(
       context: context,
+      sheetAnimationStyle: motionStyleOf(context),
       isScrollControlled: true,
       showDragHandle: true,
       builder: (context) => const _EditQuantizersSheet(),
@@ -557,7 +584,7 @@ class _EditQuantizersSheetState extends ConsumerState<_EditQuantizersSheet> {
           shrinkWrap: true,
           padding: EdgeInsets.fromLTRB(t.space.lg, 0, t.space.lg, t.space.lg),
           children: [
-            Semantics(headingLevel: 2, child: Text('Trusted quantizers', style: Theme.of(context).textTheme.titleLarge)),
+            Heading(level: 2, child: Text('Trusted quantizers', style: Theme.of(context).textTheme.titleLarge)),
             SizedBox(height: t.space.sm),
             Text(
               'Pinned above the results. Pick accounts that publish GGUF or MLX conversions you trust.',
@@ -584,12 +611,12 @@ class _EditQuantizersSheetState extends ConsumerState<_EditQuantizersSheet> {
                 labelText: 'Add an account',
                 hintText: 'e.g. Qwen',
                 errorText: _error,
-                suffixIcon: IconButton(tooltip: 'Add', icon: const Icon(Icons.add), onPressed: () => unawaited(_submit())),
+                suffixIcon: IconButton(tooltip: 'Add account', icon: const Icon(Icons.add), onPressed: () => unawaited(_submit())),
               ),
             ),
             SizedBox(height: t.space.md),
             Align(
-              alignment: Alignment.centerLeft,
+              alignment: AlignmentDirectional.centerStart,
               child: TextButton(onPressed: () => unawaited(notifier.resetQuantizers()), child: const Text('Reset to defaults')),
             ),
           ],

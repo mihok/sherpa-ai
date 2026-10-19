@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import 'untrusted.dart';
 
 /// A compaction summary (schema v2) laid out for reading.
@@ -93,16 +94,18 @@ class SummaryView extends StatelessWidget {
     final t = SherpaTokens.of(context);
     return Padding(
       padding: EdgeInsets.only(bottom: t.space.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Semantics(
-            headingLevel: 3,
-            child: Text(title, style: Theme.of(context).textTheme.titleSmall),
-          ),
-          SizedBox(height: t.space.xs),
-          body,
-        ],
+      child: HeadingGroup(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Heading(
+              level: 3,
+              child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+            ),
+            SizedBox(height: t.space.xs),
+            body,
+          ],
+        ),
       ),
     );
   }
@@ -194,7 +197,7 @@ class _TaggedItemView extends StatelessWidget {
       return UntrustedFrame(label: 'Untrusted · from the ${item.tool ?? 'unknown'} tool', child: body);
     }
     return Padding(
-      padding: EdgeInsets.only(left: t.space.xs),
+      padding: EdgeInsetsDirectional.only(start: t.space.xs),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -218,10 +221,10 @@ class _Quote extends StatelessWidget {
     final theme = Theme.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        border: Border(left: BorderSide(color: theme.colorScheme.outlineVariant, width: t.space.xs - 1)),
+        border: BorderDirectional(start: BorderSide(color: theme.colorScheme.outlineVariant, width: t.space.xs - 1)),
       ),
       child: Padding(
-        padding: EdgeInsets.only(left: t.space.md),
+        padding: EdgeInsetsDirectional.only(start: t.space.md),
         child: SelectableText(text, style: theme.textTheme.bodyMedium),
       ),
     );

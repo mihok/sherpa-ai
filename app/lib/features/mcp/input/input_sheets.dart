@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../../../design/motion.dart';
 import '../../../services/mcp/input/input_queue.dart';
 import 'elicitation_sheet.dart';
 import 'sampling_sheet.dart';
@@ -10,6 +11,7 @@ import 'url_elicitation_sheet.dart';
 Future<void> showMcpInputSheet(BuildContext context, McpPendingInput input, {bool useRootNavigator = true}) =>
     showModalBottomSheet<void>(
       context: context,
+      sheetAnimationStyle: motionStyleOf(context),
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,

@@ -42,6 +42,9 @@ final Uint8List _pdf = Uint8List.fromList(utf8.encode('%PDF-1.4\n1 0 obj << >> e
 
 const _vision = ModelCapabilities(contextLength: 32768, vision: true);
 
+/// A model that also reads PDFs (Claude, GPT-5, ...).
+const _visionPdf = ModelCapabilities(contextLength: 32768, vision: true, pdfInput: true);
+
 const ProviderInfo _anthropic = ProviderInfo(
   id: kProviderId,
   kind: ProviderKind.anthropic,
@@ -148,12 +151,19 @@ void main() {
   });
 
   group('policy', () {
-    test('per provider: image edge and PDFs; vision decides images', () {
-      final a = AttachmentPolicy.forModel(modelName: 'Claude', provider: _anthropic, capabilities: _vision);
+    test('per provider: image edge; capabilities decide images and PDFs', () {
+      final a = AttachmentPolicy.forModel(modelName: 'Claude', provider: _anthropic, capabilities: _visionPdf);
       expect((a.imagesAllowed, a.maxImageEdge, a.pdfAllowed), (true, 1568, true));
       final o = AttachmentPolicy.forModel(modelName: 'GPT', provider: _openAi, capabilities: _vision);
       expect((o.maxImageEdge, o.pdfAllowed), (2048, false));
-      expect(o.pdfRefusal, contains('only Anthropic models'));
+      expect(o.pdfRefusal, "GPT can't read PDFs. Switch to a model that reads documents, or attach the text as a .txt or .md file instead.");
+      // The capability, not the provider kind: an OpenAI model that reads
+      // PDFs takes them, an Anthropic model whose capabilities say no does not.
+      final gpt5 = AttachmentPolicy.forModel(modelName: 'GPT-5', provider: _openAi, capabilities: _visionPdf);
+      expect((gpt5.pdfAllowed, gpt5.pdfRefusal), (true, null));
+      expect(gpt5.summary, contains('PDFs up to 10 MB'));
+      final oldClaude = AttachmentPolicy.forModel(modelName: 'Claude 3 Haiku', provider: _anthropic, capabilities: _vision);
+      expect(oldClaude.pdfAllowed, isFalse);
       const lan = ProviderInfo(
         id: 'l',
         kind: ProviderKind.openAiCompatible,
@@ -180,7 +190,7 @@ void main() {
   });
 
   group('composer attachments', () {
-    final claude = AttachmentPolicy.forModel(modelName: 'Claude', provider: _anthropic, capabilities: _vision);
+    final claude = AttachmentPolicy.forModel(modelName: 'Claude', provider: _anthropic, capabilities: _visionPdf);
     final gpt = AttachmentPolicy.forModel(modelName: 'GPT', provider: _openAi, capabilities: _vision);
     final blind = AttachmentPolicy.forModel(
       modelName: 'Tiny',
@@ -278,7 +288,7 @@ void main() {
       final provider = ScriptedProvider(
         [ScriptedTurn.text('Nice photo.')],
         info: _anthropic,
-        capabilitiesValue: _vision,
+        capabilitiesValue: _visionPdf,
       );
       final h = ChatHarness(provider: provider, overrides: [chatAttachmentStoreProvider.overrideWithValue(store)]);
       addTearDown(h.dispose);
@@ -303,6 +313,10 @@ void main() {
       expect(resources.map((r) => r.mimeType), ['text/markdown', 'application/pdf']);
       expect(resources.first.text, '# Trip');
       expect(resources.last.blob, isNull);
+      expect(resources.last.size, _pdf.length, reason: 'recorded for the token estimate');
+      expect(resources.last.pages, isNull, reason: 'this tiny PDF declares no pages');
+      expect(HeuristicTokenCounter().countMessage(user), greaterThan(pdfTokensPerPage),
+          reason: 'the stored PDF is not free in the context ring');
       expect(user.text, 'What do you see?');
       expect(user.content.first, isA<ImagePart>(), reason: 'attachments before the question');
       final listed = user.metadata[kMessageAttachmentsKey]! as List;
@@ -481,7 +495,7 @@ void main() {
       expect(find.text('beach.jpg'), findsNothing, reason: 'the composer is empty again');
     });
 
-    testWidgets('text and PDF files: a PDF is refused with the reason unless the provider takes documents', (
+    testWidgets('text and PDF files: a PDF is refused with the reason unless the model reads documents', (
       tester,
     ) async {
       final h = harness();
@@ -492,10 +506,10 @@ void main() {
 
       picker.file = _picked('report.pdf', _pdf);
       await openSheet(tester);
-      expect(find.textContaining("can't take PDFs in Sherpa yet"), findsOneWidget, reason: 'said up front');
+      expect(find.textContaining("can't read PDFs"), findsOneWidget, reason: 'said up front');
       await tester.tap(find.byKey(const ValueKey('attach-files')));
       await settle(tester);
-      expect(find.textContaining("Scripted model's provider can't take PDFs in Sherpa yet"), findsOneWidget);
+      expect(find.textContaining("Scripted model can't read PDFs"), findsOneWidget);
       expect(find.text('report.pdf'), findsNothing);
       await tester.pump(const Duration(seconds: 5)); // the snackbar goes away
       await tester.pumpAndSettle();
@@ -517,8 +531,8 @@ void main() {
       expect(sent.content.whereType<EmbeddedResourcePart>().single.text, '# Plan');
     });
 
-    testWidgets('a PDF goes to an Anthropic model as a document', (tester) async {
-      final h = harness(info: _anthropic);
+    testWidgets('a PDF goes to a model that reads documents, with its size and pages for the estimate', (tester) async {
+      final h = harness(info: _anthropic, caps: _visionPdf);
       addTearDown(h.dispose);
       await h.createSession();
       await pumpChatScreen(tester, h);
@@ -535,6 +549,7 @@ void main() {
       final doc = sent.content.whereType<EmbeddedResourcePart>().single;
       expect(doc.mimeType, 'application/pdf');
       expect(doc.blob, _pdf);
+      expect(doc.size, _pdf.length);
       final semantics = tester.ensureSemantics();
       expect(find.bySemanticsLabel(RegExp(r'^PDF report\.pdf')), findsOneWidget);
       semantics.dispose();

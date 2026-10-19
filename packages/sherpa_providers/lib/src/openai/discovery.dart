@@ -148,7 +148,7 @@ final class ModelDiscovery {
       if (caps == null) {
         final fromList = _fromListEntry(e, quirks) ?? _fromLmStudio(id, lmStudio);
         if (fromList != null) {
-          caps = fromList;
+          caps = _pdfGate(id, fromList, quirks);
           _put(id, caps, authoritative: true);
         } else if (quirks.contextDiscovery == ContextDiscovery.llamaCppProps ||
             quirks.contextDiscovery == ContextDiscovery.staticTable) {
@@ -156,6 +156,7 @@ final class ModelDiscovery {
         } else {
           caps = _toolGate(id, ModelCapabilities.unknown);
         }
+        caps = _pdfGate(id, caps, quirks);
       }
       out.add(ModelDescriptor(
         id: id,
@@ -177,11 +178,11 @@ final class ModelDiscovery {
     if (cached != null) return cached;
     try {
       final (caps, authoritative) = await _discover(modelId, quirks);
-      final gated = _toolGate(modelId, caps);
+      final gated = _pdfGate(modelId, _toolGate(modelId, caps), quirks);
       _put(modelId, gated, authoritative: authoritative);
       return gated;
     } on Exception {
-      final fallback = _toolGate(modelId, ModelCapabilities.unknown);
+      final fallback = _pdfGate(modelId, _toolGate(modelId, ModelCapabilities.unknown), quirks);
       _put(modelId, fallback, authoritative: false);
       return fallback;
     }
@@ -189,6 +190,18 @@ final class ModelDiscovery {
 
   ModelCapabilities _toolGate(String modelId, ModelCapabilities caps) =>
       forChat && chatToolsUnavailable(modelId) ? caps.copyWith(toolCallFormat: ToolCallFormat.none) : caps;
+
+  /// PDF input as the server allows it ([ServerQuirks.pdfInput]): never on
+  /// servers without file parts, by family on OpenAI, from the listing
+  /// (`input_modalities: file`) on OpenRouter.
+  static ModelCapabilities _pdfGate(String modelId, ModelCapabilities caps, ServerQuirks quirks) {
+    final pdf = switch (quirks.pdfInput) {
+      PdfInputSupport.none => false,
+      PdfInputSupport.openAiModels => openAiModelTakesPdf(modelId),
+      PdfInputSupport.all => caps.pdfInput,
+    };
+    return pdf == caps.pdfInput ? caps : caps.copyWith(pdfInput: pdf);
+  }
 
   Future<(ModelCapabilities, bool)> _discover(String id, ServerQuirks quirks) async {
     switch (quirks.contextDiscovery) {
@@ -245,6 +258,7 @@ final class ModelDiscovery {
       toolCallFormat: params.isEmpty || params.contains('tools') ? ToolCallFormat.native : ToolCallFormat.none,
       parallelToolCalls: params.isEmpty || params.contains('parallel_tool_calls') || params.contains('tools'),
       vision: inputs.contains('image'),
+      pdfInput: inputs.contains('file'),
       reasoning: reasoning?.flag('mandatory') ?? false
           ? ReasoningSupport.always
           : (params.contains('reasoning') || reasoning != null ? ReasoningSupport.optional : ReasoningSupport.none),

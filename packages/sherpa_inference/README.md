@@ -23,7 +23,7 @@ ModelLifecycleManager ── admission (se_estimate_memory × MemoryMonitor) · 
 EngineHost (interface) ── FfiEngineHost: worker isolate (blocking calls) + pump isolate (events)
       │                └─ ProcessEngineHost: Android `:inference` process (Pigeon → AIDL/Binder → JNI)
       ▼
-lib/src/ffi: hand-written bindings (39 se_* functions), library loader
+lib/src/ffi: hand-written bindings (ABI 1.1: 39 required se_* functions + 3 optional), library loader
 ```
 
 No FFI call runs on the UI isolate. The one opt-in exception is `EngineTokenCounter(useSyncTokenizer: true)`
@@ -223,7 +223,10 @@ SwiftPM refuses binary targets outside the package root). SwiftPM uses a `.binar
 **Host tests:** `tool/build_host_engine.sh` builds a shared engine (`BUILD_SHARED_LIBS=ON`) into
 `/opt/vendor-src/sherpa-engine-build/host-shared/`; tests find it via `SHERPA_ENGINE_LIB` (default: that path)
 and the model via `SHERPA_TEST_MODEL` (default `/opt/models/Qwen3-0.6B-Q4_K_M.gguf`), and skip cleanly
-without either. `SHERPA_TEST_THREADS` (default 2).
+without either. `SHERPA_TEST_THREADS` (default 2). The image-input test also needs a vision model and its
+projector: `SHERPA_TEST_VLM` / `SHERPA_TEST_MMPROJ` (default SmolVLM-256M-Instruct Q8_0 from
+`ggml-org/SmolVLM-256M-Instruct-GGUF` in `/opt/models/smolvlm-256m/`, ~280 MB for both); the build script
+enables `SHERPA_ENGINE_MTMD`.
 
 ```sh
 cd packages/sherpa_inference
@@ -283,7 +286,13 @@ arm64-v8a`); build `native/llama/build_android.sh` before `flutter build apk`. i
   should filter on the main process name.
 
 * iOS packaging and the progress callback path on device are unverified (no macOS/devices here).
-* Vision (mmproj) needs a `SHERPA_ENGINE_MTMD` engine build; images are dropped with a notice until then.
+* Vision: a `LocalModelSpec.mmprojPath` projector on an mtmd engine build (ABI 1.1, `mmproj.image_input`) makes
+  `capabilities.vision` true, and `ImagePart`s (JPEG, PNG, BMP, GIF) go to the engine as data-URL parts.
+  Verified on the host with SmolVLM-256M; not yet on a phone (the Android jniLibs must be rebuilt with
+  `native/llama/build_android.sh`, mtmd is on by default there). On an engine that cannot take images (no mtmd,
+  or ABI 1.0) the lifecycle leaves the projector out, so the model still loads text-only (a plan note says
+  so). Audio input is not wired; per-message token counts add a flat 1,100 per image instead of the projector's
+  real count.
 * LoRA: loaded per spec at load time; no hot-swap API on the provider yet.
 * Speculative decoding is not enabled by default (`SessionConfig.speculative`); no policy picks n-gram/MTP yet.
 * Per-message token counts are template renders of the message alone (slight overcount vs. the full render);

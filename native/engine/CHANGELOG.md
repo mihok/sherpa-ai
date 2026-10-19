@@ -5,6 +5,38 @@ end (callers declare `struct_size`; fields beyond it keep engine defaults); enum
 meanings never change; a removal or semantic change bumps the major ABI version. JSON payloads may gain
 keys at any time, so consumers must ignore unknown keys.
 
+`SE_ABI_VERSION` is the major version. Additions raise `SE_ABI_MINOR` (`se_abi_minor()`, added in 1.1;
+an engine without the symbol is 1.0): a caller written for 1.0 keeps working against a 1.1 engine, and a
+caller that wants an addition checks the minor version (or the symbol) first.
+
+## ABI 1.1 — 2026-10-19 (engine 1.1.0, llama.cpp `0c1e57098`)
+
+Image input through the vision projector (`se_model_params.mmproj_path`, `SHERPA_ENGINE_MTMD` builds).
+
+- **`se_abi_minor()`** and `SE_ABI_MINOR` (1).
+- **Image content parts** in `se_generate_start` / `se_count_chat_tokens` requests:
+  `{type:"image_url", image_url:{url:"data:image/<type>;base64,…"}}` (no remote URLs). Rendered as a per-load
+  random media marker, tokenized by mtmd, encoded and decoded into the KV in prompt order. Refused with
+  `SE_ERR_UNSUPPORTED` without a vision projector (or without mtmd); undecodable bytes are
+  `SE_ERR_INVALID_ARG`.
+- **`se_generate_start_ex(session, se_generate_params*, id*)`** with `se_generate_params`
+  (`struct_size`, `request_json`, `media`, `n_media`, `se_generate_params_init()`) and `se_media`
+  (`struct_size`, `type` = `SE_MEDIA_IMAGE`, `data`, `size`; array stride = `media[0].struct_size`):
+  raw image buffers referenced from the request as `{type:"media", index:N}`, copied before the call
+  returns.
+- **Prompt cache with images**: an image's positions hold a pseudo token (≤ -2) derived from the SHA-256
+  of its bytes, so an unchanged image is reused from the KV (and from state files, whose token check
+  accepts pseudo tokens) and a changed one re-decodes from there; the cache never resumes inside an image.
+  With a projector loaded, the state identity header also carries its fingerprint (`mmproj`), so a
+  state file is not restored through another projector.
+  Speculative decoding is skipped when the prompt holds images. `USAGE.prompt_tokens` /
+  `cached_tokens` and `PROMPT_PROGRESS` count KV cells (an M-RoPE image takes more cells than positions).
+- Images whose chunk needs non-causal attention (Gemma 3) and exceeds `n_batch`/`n_ubatch` are refused
+  (`SE_ERR_INVALID_ARG`) instead of hitting llama.cpp's `n_ubatch >= n_tokens` assertion.
+- JSON: `se_model_info_json` `mmproj.image_input` (true only with a loaded vision projector) and
+  `mmproj.mrope`; `se_system_info_json` `abi_minor` and `image_input` (an mtmd build). mtmd/clip logs go
+  through the engine's log callback. The version string reads `abi 1.1`.
+
 ## ABI 1 — 2026-10-18 (engine 1.0.0, llama.cpp `0c1e57098`)
 
 First version, built on llama.cpp `0c1e57098bba43ac29e6e3b677cdceebdd22334f` + `common/`.

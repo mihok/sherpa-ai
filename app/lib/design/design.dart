@@ -11,6 +11,7 @@ export 'semantic_palette.dart';
 export 'theme.dart';
 export 'tokens.dart';
 export 'typography.dart';
+export 'widgets/a11y.dart';
 export 'widgets/privacy_badge.dart';
 export 'widgets/section_header.dart';
 export 'widgets/sherpa_mark.dart';

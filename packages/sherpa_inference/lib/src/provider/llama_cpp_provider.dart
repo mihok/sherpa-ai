@@ -105,6 +105,10 @@ final class LlamaCppProvider implements ModelProvider {
         providerId: id,
         useSyncTokenizer: useSyncTokenizer,
         tokenizerFamily: lifecycle.loaded?.spec.id == modelId ? lifecycle.loaded!.info.tokenizerFamily : null,
+        vision: () {
+          final loaded = lifecycle.loaded;
+          return loaded != null && loaded.spec.id == modelId && loaded.info.vision;
+        },
         resolveModel: () async {
           final lease = await _acquire(modelId);
           lease.release();

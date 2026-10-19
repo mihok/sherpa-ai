@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../../design/widgets/state_views.dart';
 import '../../../routing/routes.dart';
 import '../../../state/services.dart';
@@ -128,7 +129,7 @@ class _HandoffScreenState extends ConsumerState<HandoffScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Semantics(headingLevel: 1, child: const Text('Hand off'))),
+      appBar: AppBar(title: Heading(level: 1, child: const Text('Hand off'))),
       body: FutureBuilder<HandoffBundle>(
         future: _built,
         builder: (context, snap) {
@@ -259,7 +260,7 @@ class _ReviewState extends State<_Review> {
               ],
             ),
             SizedBox(height: t.space.lg),
-            Semantics(headingLevel: 2, child: Text('Continue', style: theme.textTheme.titleMedium)),
+            Heading(level: 2, child: Text('Continue', style: theme.textTheme.titleMedium)),
             SizedBox(height: t.space.xs),
             Card(
               margin: EdgeInsets.zero,
@@ -323,7 +324,7 @@ class _ReviewState extends State<_Review> {
               ),
             ),
             SizedBox(height: t.space.lg),
-            Semantics(headingLevel: 2, child: Text('What it contains', style: theme.textTheme.titleMedium)),
+            Heading(level: 2, child: Text('What it contains', style: theme.textTheme.titleMedium)),
             SizedBox(height: t.space.sm),
             HandoffMarkdownView(bundle: bundle),
           ],

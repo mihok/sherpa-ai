@@ -126,11 +126,18 @@ placeholders it uploads measured baselines (`frame-bench` artifact,
 ## What is gated
 
 Per scenario, the medians of `average_frame_build_time_millis`, the 90th and
-99th percentile frame build times and the 90th and 99th percentile raster
-times; `frame_count` validates the run (`min_frames`). The worst frames,
-missed-budget counts, GC counts and missed vsyncs are in each result's `info`
-block, reported but not gated: perf_gate's relative bound is zero for a zero
-baseline, so "0 missed frames" would become a zero-tolerance gate.
+99th percentile frame build times, the 90th and 99th percentile raster
+times, the missed frame-build and raster budgets
+(`missed_frame_build_budget_count`, `missed_frame_rasterizer_budget_count`)
+and the new- and old-generation GC counts; `frame_count` validates the run
+(`min_frames`). The counts carry an absolute tolerance floor
+(`min_abs_tolerance`: 3 missed budgets, 5 young and 2 old GCs): perf_gate
+allows `max(baseline × max_regression_pct, min_abs_tolerance)` on top of the
+baseline, so a scenario that measured "0 missed frames" tolerates a few
+instead of failing on the first one. `timeline_to_result.dart` suggests the
+floors in each result and `--rebaseline` keeps them (and never caps a zero
+baseline at zero). The worst frames and missed vsyncs stay in each result's
+`info` block, reported but not gated.
 
 Traces record only the `Dart`, `Embedder` and `GC` timeline streams, which is
 everything `TimelineSummary` reads; with all streams the VM's ring buffer

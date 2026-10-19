@@ -82,4 +82,13 @@ final class _Backend implements PlatformBackend {
 
   @override
   Future<void> endLease(String id) async {}
+
+  @override
+  Future<bool> requestNotificationsPermission() async => false;
+
+  @override
+  Future<bool> notifyRunFinished(FinishedNotice notice) async => false;
+
+  @override
+  Future<void> clearFinishedNotices() async {}
 }

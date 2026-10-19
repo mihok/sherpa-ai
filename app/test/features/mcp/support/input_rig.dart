@@ -65,15 +65,25 @@ final class InputRig {
         ...extra,
       ];
 
-  Future<void> pumpApp(WidgetTester tester, {Widget? home}) async {
-    tester.view.physicalSize = const Size(420, 900);
+  Future<void> pumpApp(
+    WidgetTester tester, {
+    Widget? home,
+    Size size = const Size(420, 900),
+    double textScale = 1,
+    ThemeMode themeMode = ThemeMode.light,
+  }) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = textScale;
     addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     await tester.pumpWidget(ProviderScope(
       overrides: overrides,
       retry: noRetry,
       child: MaterialApp(
         theme: SherpaTheme.light(),
+        darkTheme: SherpaTheme.dark(),
+        themeMode: themeMode,
         builder: (context, child) => McpInputHost(child: child ?? const SizedBox.shrink()),
         home: home ?? const Scaffold(body: Center(child: Text('home'))),
       ),

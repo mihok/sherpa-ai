@@ -4,8 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/section_header.dart';
+import '../../design/widgets/state_views.dart';
 import '../../state/ui_preferences.dart';
 import '../mcp/consent_sheet.dart';
 import '../mcp/widgets/mcp_widgets.dart' show NoteBox;
@@ -108,8 +111,9 @@ class _HuggingFaceAccountScreenState extends ConsumerState<HuggingFaceAccountScr
   Future<void> _signOut() async {
     final ok = await showDialog<bool>(
       context: context,
+      animationStyle: motionStyleOf(context),
       builder: (context) => AlertDialog(
-        title: const Text('Sign out of Hugging Face?'),
+        title: const Heading(child: Text('Sign out of Hugging Face?')),
         content: const Text('The token is deleted from this phone. Downloads of gated models will stop working '
             'until you sign in again.'),
         actions: [
@@ -130,12 +134,12 @@ class _HuggingFaceAccountScreenState extends ConsumerState<HuggingFaceAccountScr
     final p = profile.value;
     final children = <Widget>[];
     if (profile.isLoading && p == null) {
-      children.add(const Padding(padding: EdgeInsets.all(48), child: Center(child: CircularProgressIndicator())));
+      children.add(const Padding(padding: EdgeInsets.all(48), child: LoadingState(label: 'Checking your Hugging Face account…')));
     } else if (p != null) {
       children.addAll([
         const SectionHeader('Signed in'),
         ListTile(
-          leading: CircleAvatar(child: Text(p.name.isEmpty ? '?' : p.name.characters.first.toUpperCase())),
+          leading: ExcludeSemantics(child: CircleAvatar(child: Text(p.name.isEmpty ? '?' : p.name.characters.first.toUpperCase()))),
           title: Text(p.fullName?.isNotEmpty ?? false ? p.fullName! : p.name),
           subtitle: Text([
             '@${p.name}',

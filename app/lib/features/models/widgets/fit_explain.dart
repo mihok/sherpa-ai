@@ -1,7 +1,9 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_hub/sherpa_hub.dart';
 
+import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../state/model_fit.dart';
 import 'format.dart';
 
@@ -49,6 +51,7 @@ String contextExplanation(FitResult f, {int? trained}) {
 Future<bool> confirmRiskyDownload(BuildContext context, VariantRow row) async {
   final ok = await showModalBottomSheet<bool>(
     context: context,
+    sheetAnimationStyle: motionStyleOf(context),
     showDragHandle: true,
     isScrollControlled: true,
     builder: (context) => _RiskSheet(row: row),
@@ -72,8 +75,9 @@ class _RiskSheet extends StatelessWidget {
         ? "Sherpa couldn't read this model's header, so it doesn't know how much memory ${row.label} needs. "
             'The download is ${formatBytes(row.downloadBytes)}.'
         : '${row.reason} The model may be stopped if the phone runs low, and other apps may be closed while it runs.';
+    // Scrolls at large text sizes instead of running off the sheet.
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: EdgeInsets.fromLTRB(t.space.xl, 0, t.space.xl, t.space.lg),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -81,7 +85,7 @@ class _RiskSheet extends StatelessWidget {
           children: [
             Icon(unknown ? Icons.help_outline_rounded : Icons.error_outline_rounded, color: t.semantic.warning, size: 32),
             SizedBox(height: t.space.md),
-            Semantics(headingLevel: 2, child: Text(title, style: theme.textTheme.titleLarge)),
+            Heading(level: 2, child: Text(title, style: theme.textTheme.titleLarge)),
             SizedBox(height: t.space.sm),
             Text(body, style: theme.textTheme.bodyMedium),
             if (fit != null) ...[
@@ -92,11 +96,14 @@ class _RiskSheet extends StatelessWidget {
               ),
             ],
             SizedBox(height: t.space.xl),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            // Wraps (rather than overflows) at large text sizes.
+            OverflowBar(
+              alignment: MainAxisAlignment.end,
+              overflowAlignment: OverflowBarAlignment.end,
+              spacing: t.space.sm,
+              overflowSpacing: t.space.xs,
               children: [
                 TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-                SizedBox(width: t.space.sm),
                 FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Download anyway')),
               ],
             ),

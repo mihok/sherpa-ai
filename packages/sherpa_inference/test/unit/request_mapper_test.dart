@@ -16,11 +16,16 @@ EngineRequestMapper _mapper({
   bool thinking = true,
   bool parallel = true,
   Map<String, String> sampling = const {},
+  bool vision = false,
 }) =>
     EngineRequestMapper(
       providerId: 'llama_cpp',
-      model: EngineModelInfo.parse(
-          fakeModelInfoJson(nParams: nParams, thinking: thinking, templateParallel: parallel, recommendedSampling: sampling)),
+      model: EngineModelInfo.parse(fakeModelInfoJson(
+          nParams: nParams,
+          thinking: thinking,
+          templateParallel: parallel,
+          recommendedSampling: sampling,
+          vision: vision)),
     );
 
 const _weather = ToolDefinition(
@@ -191,6 +196,72 @@ void main() {
       expect(m.body['cache_prompt'], isFalse, reason: 'extra is an explicit override');
     });
 
+    test('a vision model gets images as data-URL parts in order; what it cannot take is dropped with a reason', () {
+      final jpeg = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9]);
+      final m = _mapper(vision: true).map(ModelRequest(modelId: 'm', messages: [
+        _msg('u', Role.user, [
+          const TextPart('What is in these?'),
+          ImagePart(mimeType: 'image/jpeg', data: jpeg),
+          const TextPart('and'),
+          EmbeddedResourcePart(uri: 'file:///a/shot.png', mimeType: 'image/png', blob: Uint8List.fromList([1, 2])),
+          ImagePart(mimeType: 'image/webp', data: Uint8List(3)),
+          ImagePart(mimeType: 'image/jpeg', uri: Uri.parse('https://example.com/x.jpg')),
+          EmbeddedResourcePart(uri: 'file:///a/report.pdf', mimeType: 'application/pdf', blob: Uint8List(5)),
+          AudioPart(mimeType: 'audio/wav', data: Uint8List(2)),
+        ]),
+      ]));
+      final user = (m.body['messages']! as List).single as Map;
+      expect(user['content'], [
+        {'type': 'text', 'text': 'What is in these?'},
+        {
+          'type': 'image_url',
+          'image_url': {'url': 'data:image/jpeg;base64,${base64Encode(jpeg)}'},
+        },
+        {'type': 'text', 'text': 'and'},
+        {
+          'type': 'image_url',
+          'image_url': {'url': 'data:image/png;base64,AQI='},
+        },
+      ]);
+      final reasons = [for (final n in m.notices) n.message];
+      expect(m.notices.map((n) => n.code).toSet(), {'content_dropped'});
+      expect(reasons, [
+        contains('image/webp images are not supported on this device'),
+        contains('on-device models do not download images'),
+        allOf(contains('a PDF'), contains('read text and images only')),
+        contains('do not take audio'),
+      ]);
+    });
+
+    test('text-only history stays a plain string with vision (the KV prefix does not change)', () {
+      final request = ModelRequest(modelId: 'm', messages: [
+        _msg('u', Role.user, const [TextPart('hi'), TextPart('there')]),
+      ]);
+      expect(_mapper(vision: true).map(request).body['messages'], _mapper().map(request).body['messages']);
+    });
+
+    test('tool-result images follow the tool messages as one user message (vision only)', () {
+      final png = Uint8List.fromList([0x89, 0x50]);
+      final request = ModelRequest(modelId: 'm', messages: [
+        _msg('u', Role.user, const [TextPart('screenshot?')]),
+        _msg('a', Role.assistant, const [ToolCallPart(ToolCall(id: 'c1', name: 'shot', arguments: {}))]),
+        _msg('t', Role.tool, [
+          ToolResultPart(callId: 'c1', toolName: 'shot', content: [const TextPart('done'), ImagePart(mimeType: 'image/png', data: png)]),
+        ]),
+      ]);
+      final withVision = (_mapper(vision: true).map(request).body['messages']! as List).cast<Map<String, Object?>>();
+      expect(withVision[2], {'role': 'tool', 'tool_call_id': 'c1', 'name': 'shot', 'content': 'done'});
+      expect(withVision[3]['role'], 'user');
+      final parts = (withVision[3]['content']! as List).cast<Map<String, Object?>>();
+      expect(parts.first['text'], contains('untrusted data'));
+      expect(parts.last, {
+        'type': 'image_url',
+        'image_url': {'url': 'data:image/png;base64,${base64Encode(png)}'},
+      });
+      final blind = _mapper().map(request);
+      expect((blind.body['messages']! as List), hasLength(3));
+    });
+
     test('tool results misfiled on a user message still answer their calls', () {
       final out = const EngineMessageMapper('llama_cpp').mapMessage(_msg('u', Role.user, const [
         ToolResultPart(callId: 'c1', toolName: 't', content: [TextPart('r')]),
@@ -236,6 +307,19 @@ void main() {
           ToolCallFormat.prompted);
       expect(EngineModelInfo.parse(fakeModelInfoJson(toolSupport: 'none')).toolCallFormat, ToolCallFormat.none);
       expect(EngineModelInfo.parse(fakeModelInfoJson(nParams: 9000000000)).allowParallelToolCalls, isTrue);
+    });
+
+    test('vision needs a loaded projector the engine takes images through (ABI 1.1)', () {
+      expect(EngineModelInfo.parse(fakeModelInfoJson()).vision, isFalse);
+      final vlm = EngineModelInfo.parse(fakeModelInfoJson(vision: true));
+      expect(vlm.vision, isTrue);
+      expect(vlm.capabilities(contextLength: 4096).vision, isTrue);
+      // A 1.0 engine with a projector loaded: it would drop the images.
+      final old = (jsonDecode(fakeModelInfoJson()) as Map).cast<String, Object?>()
+        ..['mmproj'] = {'loaded': true, 'vision': true, 'audio': true};
+      final info = EngineModelInfo.parse(jsonEncode(old));
+      expect((info.vision, info.audio), (false, false));
+      expect(info.capabilities(contextLength: 4096).audioInput, isFalse, reason: 'no audio input path yet');
     });
 
     test('ignores unknown keys', () {

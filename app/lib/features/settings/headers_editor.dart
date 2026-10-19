@@ -116,7 +116,7 @@ class _HeadersEditorState extends State<HeadersEditor> {
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Remove header',
+                  tooltip: r.name.text.trim().isEmpty ? 'Remove header ${i + 1}' : 'Remove header ${r.name.text.trim()}',
                   icon: const Icon(Icons.remove_circle_outline),
                   onPressed: () {
                     _rows.removeAt(i).dispose();

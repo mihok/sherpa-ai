@@ -263,8 +263,8 @@ final class ModelsRig {
 
   Widget widget() => ProviderScope(overrides: overrides, retry: noRetry, child: const SherpaApp());
 
-  Future<void> pump(WidgetTester tester, {Size size = phone, String? location}) async {
-    setWindow(tester, size);
+  Future<void> pump(WidgetTester tester, {Size size = phone, String? location, double textScale = 1}) async {
+    setWindow(tester, size, textScale: textScale);
     await tester.pumpWidget(widget());
     await tester.pumpAndSettle();
     if (location != null) await goTo(tester, location);

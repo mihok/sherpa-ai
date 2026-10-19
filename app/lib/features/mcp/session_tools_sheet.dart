@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../state/ui_preferences.dart';
 import 'state/mcp_providers.dart';
 import 'widgets/mcp_widgets.dart';
@@ -26,6 +28,7 @@ class SessionToolsSheet extends ConsumerWidget {
   static Future<void> show(BuildContext context, {required String sessionId, VoidCallback? onManage}) =>
       showModalBottomSheet<void>(
         context: context,
+        sheetAnimationStyle: motionStyleOf(context),
         isScrollControlled: true,
         useSafeArea: true,
         builder: (context) => SessionToolsSheet(sessionId: sessionId, onManage: onManage),
@@ -49,7 +52,7 @@ class SessionToolsSheet extends ConsumerWidget {
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(t.space.xl, t.space.sm, t.space.xl, t.space.xs),
-            child: Semantics(headingLevel: 2, child: Text('Tools in this chat', style: theme.textTheme.titleLarge)),
+            child: Heading(level: 2, child: Text('Tools in this chat', style: theme.textTheme.titleLarge)),
           ),
           Padding(
             padding: EdgeInsets.symmetric(horizontal: t.space.xl),

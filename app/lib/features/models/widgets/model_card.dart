@@ -28,6 +28,7 @@ class ModelCard extends StatelessWidget {
     final downloads = entry.downloads;
     final likes = entry.likes;
     final est = estimate;
+    final large = isLargeText(context);
     final spoken = [
       '${name.displayName} by ${name.owner}',
       for (final c in modelNameChipData(name)) '${c.kind} ${c.label}',
@@ -36,7 +37,32 @@ class ModelCard extends StatelessWidget {
       if (est != null) '${_fitWord(est.verdict)}, about ${formatBytes(est.estimatedBytes)} at 4-bit, estimated',
     ].join('. ');
 
+    final metrics = Wrap(
+      spacing: t.space.md,
+      runSpacing: t.space.xs,
+      children: [
+        if (downloads != null)
+          Metric(
+            icon: Icons.download_rounded,
+            value: formatCount(downloads),
+            explanation: 'Downloads in the last 30 days',
+          ),
+        if (likes != null)
+          Metric(icon: Icons.favorite_border_rounded, value: formatCount(likes), explanation: 'Likes on Hugging Face'),
+        if (entry.toolUseHint)
+          const Metric(
+            icon: Icons.build_outlined,
+            value: 'Tools',
+            explanation: 'Its chat template or tags mention tool calling. A hint from the repo, '
+                'confirmed from the downloaded file itself.',
+          ),
+      ],
+    );
+
+    // One node for the whole card: the spoken summary replaces the chips'
+    // abbreviations, so it must carry the tap itself.
     return Semantics(
+      container: true,
       button: true,
       label: spoken,
       excludeSemantics: true,
@@ -59,12 +85,17 @@ class ModelCard extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(name.displayName, style: theme.textTheme.titleMedium, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          Text(
+                            name.displayName,
+                            style: theme.textTheme.titleMedium,
+                            maxLines: scaledMaxLines(context),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                           SizedBox(height: t.space.xxs),
                           Text(
                             entry.id,
                             style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                            maxLines: 1,
+                            maxLines: scaledMaxLines(context),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ],
@@ -72,7 +103,7 @@ class ModelCard extends StatelessWidget {
                     ),
                     if (entry.gating.isGated)
                       Padding(
-                        padding: EdgeInsets.only(left: t.space.sm),
+                        padding: EdgeInsetsDirectional.only(start: t.space.sm),
                         child: InfoPill(
                           label: 'Gated',
                           icon: Icons.lock_outline_rounded,
@@ -85,37 +116,24 @@ class ModelCard extends StatelessWidget {
                 SizedBox(height: t.space.md),
                 ModelNameChips(name: name, max: 5),
                 SizedBox(height: t.space.md),
-                Row(
+                // At large text sizes the estimate goes on its own line, so
+                // the metrics keep the card's width.
+                Flex(
+                  direction: large ? Axis.vertical : Axis.horizontal,
+                  crossAxisAlignment: large ? CrossAxisAlignment.start : CrossAxisAlignment.center,
                   children: [
-                    Expanded(
-                      child: Wrap(
-                        spacing: t.space.md,
-                        runSpacing: t.space.xs,
+                    if (large) metrics else Expanded(child: metrics),
+                    if (est != null) ...[
+                      SizedBox(width: t.space.sm, height: t.space.sm),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (downloads != null)
-                            Metric(
-                              icon: Icons.download_rounded,
-                              value: formatCount(downloads),
-                              explanation: 'Downloads in the last 30 days',
-                            ),
-                          if (likes != null)
-                            Metric(icon: Icons.favorite_border_rounded, value: formatCount(likes), explanation: 'Likes on Hugging Face'),
-                          if (entry.toolUseHint)
-                            const Metric(
-                              icon: Icons.build_outlined,
-                              value: 'Tools',
-                              explanation: 'Its chat template or tags mention tool calling. A hint from the repo, '
-                                  'confirmed from the downloaded file itself.',
-                            ),
+                          Text('≈${formatBytes(est.estimatedBytes)}',
+                              style: theme.textTheme.metricSmall.copyWith(color: scheme.onSurfaceVariant)),
+                          SizedBox(width: t.space.xs),
+                          FitBadge(kind: FitBadgeKind.of(est.verdict), estimated: true, explanation: est.explanation),
                         ],
                       ),
-                    ),
-                    if (est != null) ...[
-                      SizedBox(width: t.space.sm),
-                      Text('≈${formatBytes(est.estimatedBytes)}',
-                          style: theme.textTheme.metricSmall.copyWith(color: scheme.onSurfaceVariant)),
-                      SizedBox(width: t.space.xs),
-                      FitBadge(kind: FitBadgeKind.of(est.verdict), estimated: true, explanation: est.explanation),
                     ],
                   ],
                 ),

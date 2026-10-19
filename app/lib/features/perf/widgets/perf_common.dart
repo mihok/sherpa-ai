@@ -300,7 +300,7 @@ class LabMessageCard extends ConsumerWidget {
       LabMessageTone.error => (Icons.error_outline_rounded, t.semantic.danger),
     };
     return PerfCard(
-      padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.xs, t.space.md),
+      padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, t.space.md, t.space.xs, t.space.md),
       child: Semantics(
         liveRegion: true,
         container: true,

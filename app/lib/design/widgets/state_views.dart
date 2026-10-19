@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../tokens.dart';
+import 'a11y.dart';
 
 /// Shared layout for empty, error, offline and loading states, so every
 /// "nothing to show" moment in the app looks deliberate and offers a way on.
@@ -30,7 +31,8 @@ class StateView extends StatelessWidget {
   final Widget? secondaryAction;
   final StateTone tone;
 
-  /// Announce the title when it appears (errors, offline).
+  /// Announce the title when it appears (errors, offline); the message is
+  /// read next, on focus.
   final bool liveRegion;
 
   @override
@@ -48,9 +50,11 @@ class StateView extends StatelessWidget {
         padding: EdgeInsets.all(t.space.xl),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
+          // Title (a heading), message and actions are read in that order,
+          // as separate nodes; a live state announces its title.
           child: Semantics(
-            liveRegion: liveRegion,
             container: true,
+            explicitChildNodes: true,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -66,9 +70,11 @@ class StateView extends StatelessWidget {
                     ),
                   ),
                 SizedBox(height: t.space.xl),
-                Semantics(
-                  headingLevel: 2,
-                  child: Text(title, style: theme.textTheme.titleLarge, textAlign: TextAlign.center),
+                Heading(
+                  child: Semantics(
+                    liveRegion: liveRegion,
+                    child: Text(title, style: theme.textTheme.titleLarge, textAlign: TextAlign.center),
+                  ),
                 ),
                 if (message != null) ...[
                   SizedBox(height: t.space.sm),

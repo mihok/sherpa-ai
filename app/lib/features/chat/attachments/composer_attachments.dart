@@ -15,8 +15,9 @@ import 'image_prep.dart';
 /// What an attachment is, which decides how it is sent:
 /// * [image]: an [ImagePart] (downscaled JPEG, stored as a file);
 /// * [text]: an [EmbeddedResourcePart] with the file's text and name;
-/// * [pdf]: an [EmbeddedResourcePart] pointing at the stored PDF, sent as
-///   a `document` block (Anthropic only).
+/// * [pdf]: an [EmbeddedResourcePart] pointing at the stored PDF (with its
+///   size and page count, which the token estimate uses), sent as a
+///   document to models whose capabilities say `pdfInput`.
 ///
 /// Text and PDFs count as untrusted content for the agent loop, like MCP
 /// resources: a file can carry instructions its author hid in it.
@@ -406,7 +407,9 @@ Future<({List<ContentPart> parts, List<JsonMap> listed})> attachmentParts(
         listed.add(_entry(a, uri.toString()));
       case AttachmentKind.pdf:
         final uri = await store.save(sessionId: sessionId, id: a.id, fileName: a.name, bytes: a.bytes!);
-        parts.add(EmbeddedResourcePart(uri: uri.toString(), mimeType: a.mimeType));
+        parts.add(
+          EmbeddedResourcePart(uri: uri.toString(), mimeType: a.mimeType, size: a.size, pages: pdfPageCount(a.bytes!)),
+        );
         listed.add(_entry(a, uri.toString()));
       case AttachmentKind.text:
         // The name is what the model sees in "[resource …]".

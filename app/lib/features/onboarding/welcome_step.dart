@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/sherpa_mark.dart';
 import '../providers/fields.dart';
 import 'onboarding_scaffold.dart';
@@ -26,7 +27,7 @@ class WelcomeStep extends StatelessWidget {
         SizedBox(height: t.space.xl),
         const Align(alignment: AlignmentDirectional.centerStart, child: SherpaMark(size: 80)),
         SizedBox(height: t.space.xl),
-        Semantics(headingLevel: 1, child: Text('Meet Sherpa', style: theme.textTheme.displaySmall)),
+        Heading(level: 1, child: Text('Meet Sherpa', style: theme.textTheme.displaySmall)),
         SizedBox(height: t.space.md),
         Text(
           'An open agent that lives on your phone and works with the models you choose.',

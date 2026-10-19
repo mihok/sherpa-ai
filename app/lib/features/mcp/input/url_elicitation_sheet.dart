@@ -7,21 +7,15 @@ import '../../../design/tokens.dart';
 import '../../../services/mcp/input/input_queue.dart';
 import '../../../services/mcp/input/url_opener.dart';
 import '../../../state/ui_preferences.dart';
+import '../../chat/links/link_warnings.dart' show webAddressWarnings;
 import '../state/input_providers.dart';
 import '../widgets/mcp_widgets.dart';
 import 'server_content.dart';
 
-/// Warnings about a URL before anyone opens it.
-List<String> urlWarnings(Uri url) {
-  final host = url.host.toLowerCase();
-  return [
-    if (url.scheme.toLowerCase() != 'https') 'This page is not encrypted (http). Anyone on the network could see or change it.',
-    if (host.split('.').any((l) => l.startsWith('xn--')) || host.runes.any((r) => r > 0x7f))
-      'The address uses international characters (${url.host}). Look closely: it may imitate a site you know.',
-    if (url.userInfo.isNotEmpty) 'The address hides a user name before the site name. That is a common phishing trick.',
-    if (RegExp(r'^\d+(\.\d+){3}$').hasMatch(host) || host.contains(':')) 'The address is a bare IP address, not a site name.',
-  ];
-}
+/// Warnings about a URL before anyone opens it: the same checks as links
+/// in replies ([webAddressWarnings]), so a non-ASCII host (which `Uri`
+/// percent-encodes) and a decimal or hex IP are caught here too.
+List<String> urlWarnings(Uri url) => webAddressWarnings(url);
 
 /// URL-mode elicitation consent (client/elicitation.md): the full URL and
 /// its domain, highlighted, the server's reason, and nothing opens (or is
@@ -98,6 +92,7 @@ class _UrlElicitationSheetState extends ConsumerState<UrlElicitationSheet> {
               serverName: _p.serverName,
               trusted: _p.serverTrusted,
               toolName: _p.toolName,
+              announceTitle: true,
             ),
             SizedBox(height: t.space.lg),
             InputFact(label: 'Site', value: url.host, emphasize: true),

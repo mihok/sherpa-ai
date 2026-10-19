@@ -1,5 +1,5 @@
 /*
- * sherpa_engine.h - Sherpa on-device inference engine, C ABI version 1.
+ * sherpa_engine.h - Sherpa on-device inference engine, C ABI version 1.1.
  *
  * One C++17 shim over llama.cpp + common (pinned in native/llama/llama.lock). Dart (FFI), Kotlin (JNI) and
  * Swift see only this header. Design rules (docs/research/04-llamacpp-api.md §20):
@@ -38,7 +38,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Major ABI version: bumped only for a removal or a semantic change (CHANGELOG rules). Callers check
+ * se_abi_version() == SE_ABI_VERSION. */
 #define SE_ABI_VERSION 1u
+/* Minor ABI version: additions that older callers can ignore. 1 = media input (se_generate_start_ex,
+ * image content parts). Engines older than 1.1 have no se_abi_minor symbol; treat that as 0. */
+#define SE_ABI_MINOR 1u
 
 #if defined(_WIN32)
 #  if defined(SE_BUILDING_LIBRARY)
@@ -94,6 +99,8 @@ SE_API const char * se_status_name(se_status status);
 /* ===================================================================================================== */
 
 SE_API uint32_t     se_abi_version(void);
+/* SE_ABI_MINOR of the engine (added in 1.1). */
+SE_API uint32_t     se_abi_minor(void);
 /* "sherpa_engine <semver> (abi <n>, llama.cpp <commit7>, ggml <version>)" - static storage. */
 SE_API const char * se_version_string(void);
 
@@ -206,7 +213,8 @@ SE_API int32_t se_tokenize(const se_model * m, const char * text, int32_t text_l
  * Returns the byte count (excluding NUL); written with a NUL if it fits. */
 SE_API int32_t se_detokenize(const se_model * m, const int32_t * tokens, int32_t n_tokens, int32_t render_special,
                              char * buf, int32_t cap);
-/* Render a chat request (same JSON as se_generate_start) through the template and count prompt tokens. */
+/* Render a chat request (same JSON as se_generate_start) through the template and count prompt tokens.
+ * Images given as data URLs count as the KV cells their chunks take (decoded, not encoded). */
 SE_API int32_t se_count_chat_tokens(const se_model * m, const char * request_json);
 
 /* ===================================================================================================== */
@@ -342,7 +350,10 @@ typedef struct se_event {
  * session's worker thread. Request JSON (unknown keys are ignored):
  *   messages[]            role system|user|assistant|tool; content (string or [{type:"text",text}]);
  *                         assistant tool_calls[{id,type:"function",function:{name,arguments}}] and
- *                         reasoning_content; tool messages tool_call_id (+ name)
+ *                         reasoning_content; tool messages tool_call_id (+ name). Since 1.1 a content array
+ *                         may also hold images (see "Media input" below):
+ *                         {type:"image_url", image_url:{url:"data:image/<type>;base64,<bytes>"}} or
+ *                         {type:"media", index:N} (the N-th se_media of se_generate_start_ex)
  *   tools[]               [{type:"function", function:{name, description, parameters}}]
  *   tool_choice           "auto" (default) | "none" | "required" | {type:"function",function:{name}}
  *   parallel_tool_calls   bool (default: what the template supports)
@@ -362,6 +373,50 @@ typedef struct se_event {
  * Returns SE_ERR_BUSY if a generation is running and SE_ERR_INVALID_ARG for malformed JSON. Template,
  * grammar, context and decode errors are reported as ERROR + FINISH(error) events. */
 SE_API se_status se_generate_start(se_session * s, const char * request_json, uint32_t * generation_id_out);
+
+/* ===================================================================================================== */
+/* Media input (ABI 1.1)                                                                                   */
+/* ===================================================================================================== */
+
+/* Images reach the model through the vision projector loaded with se_model_params.mmproj_path (a
+ * SHERPA_ENGINE_MTMD build; se_model_info_json reports mmproj.image_input). Each image content part of a
+ * request is rendered as the projector's media marker by the chat template, tokenized by mtmd into image
+ * chunks, encoded and decoded into the KV cache in prompt order. A request with images on a model without a
+ * vision projector (or on a build without mtmd) is refused with SE_ERR_UNSUPPORTED; bytes that are not a
+ * decodable image (JPEG, PNG, BMP, GIF, TGA, PSD, HDR, PNM: what stb_image reads; not WebP or HEIC) are
+ * SE_ERR_INVALID_ARG (reported as ERROR + FINISH(error) when found by the worker).
+ *
+ * Prompt cache: an image occupies its chunk's positions in the token history under a pseudo token derived
+ * from the SHA-256 of its bytes, so a later request with the same image at the same place reuses its KV
+ * (no re-encode); a different image, or one at another position, re-decodes from there. The cache never
+ * resumes inside an image. Speculative decoding is skipped for replies whose context holds images (neither
+ * draft models nor n-gram tables can see them). State files keep the pseudo tokens; with a projector
+ * loaded their identity header includes its fingerprint. */
+
+typedef enum se_media_type {
+  SE_MEDIA_IMAGE = 1   /* an encoded image file */
+} se_media_type;
+
+/* One media input. Elements of an array are media[0].struct_size bytes apart: set every struct_size to
+ * sizeof(se_media). The engine copies the bytes before se_generate_start_ex returns. */
+typedef struct se_media {
+  uint32_t        struct_size;
+  int32_t         type;        /* se_media_type                                                        */
+  const uint8_t * data;        /* encoded bytes                                                        */
+  uint64_t        size;        /* bytes at data                                                        */
+} se_media;
+
+typedef struct se_generate_params {
+  uint32_t         struct_size;
+  const char *     request_json;  /* the se_generate_start request; {type:"media",index:N} parts refer to
+                                     media[N]                                                          */
+  const se_media * media;         /* optional array of n_media elements                                */
+  int32_t          n_media;
+} se_generate_params;
+
+SE_API void      se_generate_params_init(se_generate_params * p);
+/* se_generate_start with media buffers (no base64). Same return values and events. */
+SE_API se_status se_generate_start_ex(se_session * s, const se_generate_params * p, uint32_t * generation_id_out);
 
 /* Drain up to max_events (<= 0: all available) events. Blocks up to timeout_ms (0: don't block, < 0: wait
  * forever) when none are queued. On return *events points to an engine-owned array of *n_events events,

@@ -79,7 +79,7 @@ class UntrustedFrame extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: color.withValues(alpha: kSemanticTintAlpha),
-          border: Border(left: BorderSide(color: color, width: t.space.xs - 1)),
+          border: BorderDirectional(start: BorderSide(color: color, width: t.space.xs - 1)),
           borderRadius: BorderRadius.circular(t.radius.sm),
         ),
         child: Padding(

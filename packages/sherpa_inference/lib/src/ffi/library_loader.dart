@@ -52,6 +52,8 @@ final class EngineLibrary {
     } on Object catch (e) {
       throw EngineUnavailableException('the engine library is missing se_* symbols ($locator)', cause: e);
     }
+    // The major version must match; minor versions only add (ABI 1.1's
+    // media input is optional, see [abiMinor]).
     final abi = b.se_abi_version();
     if (abi != kSeAbiVersion) {
       throw EngineUnavailableException(
@@ -62,6 +64,10 @@ final class EngineLibrary {
 
   final DynamicLibrary library;
   final SherpaEngineBindings bindings;
+
+  /// The engine's minor ABI version (0 for a 1.0 engine, which takes no
+  /// images; model info then never reports `mmproj.image_input`).
+  int get abiMinor => bindings.abiMinor;
 
   /// What was opened: a path, a bare name, or `<process>`.
   final String locator;

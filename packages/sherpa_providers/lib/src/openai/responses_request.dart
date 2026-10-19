@@ -1,10 +1,14 @@
+import 'dart:convert';
+
 import 'package:sherpa_core/sherpa_core.dart';
 
 import '../common/hashing.dart';
 import '../common/openai_messages.dart';
 import '../common/tool_names.dart';
+import '../config.dart';
 import 'chat_request.dart';
 import 'known_models.dart';
+import 'quirks.dart';
 
 /// A Responses request body plus notices about unsupported settings.
 final class ResponsesRequestBody {
@@ -64,7 +68,11 @@ ResponsesRequestBody buildResponsesRequest({
   final notices = <ProviderNotice>[];
   final params = request.params;
   final tools = visibleTools(request);
-  final input = ResponsesInputMapper(providerId: providerId, names: names).map(request.messages, notices);
+  final input = ResponsesInputMapper(
+    providerId: providerId,
+    names: names,
+    pdfUnsupportedReason: ServerQuirks.of(ServerProfile.openAi).pdfRefusal(request.modelId),
+  ).map(request.messages, notices);
 
   final body = <String, Object?>{
     'model': request.modelId,
@@ -166,11 +174,30 @@ ResponsesRequestBody buildResponsesRequest({
 /// [ReasoningPart.signature] is the item's `encrypted_content`, verbatim,
 /// and whose [ReasoningPart.text] is the concatenated summary text. Only
 /// parts whose [ReasoningPart.providerId] is this provider are replayed.
+///
+/// PDFs go out as `{type: input_file, filename, file_data}` with a
+/// `data:application/pdf;base64,` URL (developers.openai.com/api/docs/guides/
+/// pdf-files), in user content and inside `function_call_output`, unless
+/// [pdfUnsupportedReason] says the model cannot read them.
 final class ResponsesInputMapper {
-  const ResponsesInputMapper({required this.providerId, required this.names});
+  const ResponsesInputMapper({required this.providerId, required this.names, this.pdfUnsupportedReason});
 
   final String providerId;
   final ToolNameMapper names;
+
+  /// Why PDFs cannot be sent to this model; null when they can.
+  final String? pdfUnsupportedReason;
+
+  /// The `input_file` part for a PDF, or null (with a notice).
+  JsonMap? pdfPart(EmbeddedResourcePart p, List<ProviderNotice> notices) {
+    final why = pdfUnsupportedReason;
+    final blob = p.blob;
+    if (why != null || blob == null) {
+      notices.add(pdfDropped(p.uri, why ?? 'the file could not be read'));
+      return null;
+    }
+    return {'type': 'input_file', 'filename': pdfFileName(p.uri), 'file_data': pdfDataUrl(blob)};
+  }
 
   List<JsonMap> map(List<Message> messages, List<ProviderNotice> notices) {
     final out = <JsonMap>[];
@@ -206,6 +233,11 @@ final class ResponsesInputMapper {
           }
         case EmbeddedResourcePart(:final uri, :final text?):
           parts.add({'type': 'input_text', 'text': '[resource $uri]\n$text'});
+        case EmbeddedResourcePart(:final mimeType) when isPdf(mimeType):
+          final part = pdfPart(c, notices);
+          if (part != null) parts.add(part);
+        case EmbeddedResourcePart(:final mimeType, :final blob?) when (mimeType ?? '').startsWith('image/'):
+          parts.add({'type': 'input_image', 'image_url': 'data:$mimeType;base64,${base64Encode(blob)}'});
         case ResourceLinkPart(:final uri, :final name):
           parts.add({'type': 'input_text', 'text': '[resource link${name == null ? '' : ' "$name"'}: $uri]'});
         case MediaPart() || EmbeddedResourcePart():
@@ -267,11 +299,13 @@ final class ResponsesInputMapper {
       ];
 
   /// Plain text when possible; a content list when the result has images
-  /// (Responses accepts `input_image` inside `function_call_output`).
+  /// or PDFs (Responses accepts `input_image` and `input_file` inside
+  /// `function_call_output`).
   Object _output(ToolResultPart r, List<ProviderNotice> notices) {
     final text = toolResultText(r);
     final images = toolResultImages(r);
-    if (images.isEmpty) return text;
+    final pdfs = toolResultPdfs(r);
+    if (images.isEmpty && pdfs.isEmpty) return text;
     final parts = <JsonMap>[
       if (text.isNotEmpty) {'type': 'input_text', 'text': text},
     ];
@@ -282,6 +316,10 @@ final class ResponsesInputMapper {
       } else {
         parts.add({'type': 'input_image', 'image_url': url});
       }
+    }
+    for (final pdf in pdfs) {
+      final part = pdfPart(pdf, notices);
+      if (part != null) parts.add(part);
     }
     return parts.isEmpty ? text : parts;
   }

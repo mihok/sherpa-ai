@@ -569,6 +569,47 @@ void main() {
     }
   }, skip: skip, timeout: _timeout);
 
+  test('a KV prefix saved with a draft model loads without one and back (the state identity has no draft)', () async {
+    await h.lifecycle.unload(reason: 'draft state test');
+    final path = testModelPath()!;
+    final drafting = await h.host.loadModel(ModelLoadOptions(path: path, draftModelPath: path));
+    final plain = await h.host.loadModel(ModelLoadOptions(path: path));
+    final config = SessionConfig(nCtx: 1024, nThreads: testThreads, nThreadsBatch: testThreads, seed: 1);
+    final a = await h.host.createSession(drafting.ref, config.copyWith(speculative: SpeculativeMode.draft));
+    final b = await h.host.createSession(plain.ref, config);
+    final body = {
+      'messages': [
+        {'role': 'user', 'content': 'List the days of the week, one per line.'},
+      ],
+      'max_tokens': 12,
+      'temperature': 0,
+      'enable_thinking': false,
+    };
+    int cached(List<EngineEvent> events) => events.firstWhere((e) => e.type == EngineEventType.usage).cachedTokens;
+    try {
+      final first = await h.host.generate(a.ref, jsonEncode(body)).toList();
+      expect(first.where((e) => e.type == EngineEventType.error), isEmpty);
+      final fromDraft = '${tmp.path}/drafting.kv';
+      expect(await h.host.saveState(a.ref, fromDraft), greaterThan(0));
+      expect(await h.host.loadState(b.ref, fromDraft), greaterThan(0), reason: 'no mismatch without the draft');
+      expect(cached(await h.host.generate(b.ref, jsonEncode(body)).toList()), greaterThan(0));
+
+      final fromPlain = '${tmp.path}/plain.kv';
+      expect(await h.host.saveState(b.ref, fromPlain), greaterThan(0));
+      expect(await h.host.loadState(a.ref, fromPlain), greaterThan(0), reason: 'nor with one');
+      // The draft context has no KV of its own after a load, so a drafted
+      // reply re-prefills (the engine keeps target and draft in lockstep);
+      // without speculation the restored target KV is reused as is.
+      final back = await h.host.generate(a.ref, jsonEncode({...body, 'speculative': false})).toList();
+      expect(cached(back), greaterThan(0));
+    } finally {
+      await h.host.freeSession(a.ref);
+      await h.host.freeSession(b.ref);
+      await h.host.freeModel(drafting.ref);
+      await h.host.freeModel(plain.ref);
+    }
+  }, skip: skip, timeout: _timeout);
+
   test('a dead worker isolate surfaces as engineCrashed and the host restarts', () async {
     final lease = await h.lifecycle.acquire(_modelId);
     try {

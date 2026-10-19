@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../../design/widgets/section_header.dart';
 import '../../models/widgets/format.dart';
 import '../state/perf_models.dart';
@@ -33,55 +34,57 @@ class BenchTab extends ConsumerWidget {
       children: [
         SizedBox(height: t.space.sm),
         PerfCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Semantics(
-                headingLevel: 2,
-                child: Text('Benchmark the current settings', style: Theme.of(context).textTheme.titleSmall),
-              ),
-              SizedBox(height: t.space.xxs),
-              LabNote(config.summary),
-              SizedBox(height: t.space.md),
-              FieldGrid(children: [
-                (w) => LabDropdown<int>(
-                      width: w,
-                      label: 'Prompt tokens',
-                      value: spec.promptTokens,
-                      options: [for (final v in BenchSpec.promptChoices) (v, '$v')],
-                      onChanged: s.busy ? null : (v) => c.setBenchSpec(spec.copyWith(promptTokens: v)),
-                    ),
-                (w) => LabDropdown<int>(
-                      width: w,
-                      label: 'Generated tokens',
-                      value: spec.genTokens,
-                      options: [for (final v in BenchSpec.genChoices) (v, '$v')],
-                      onChanged: s.busy ? null : (v) => c.setBenchSpec(spec.copyWith(genTokens: v)),
-                    ),
-                (w) => LabDropdown<int>(
-                      width: w,
-                      label: 'Runs',
-                      value: spec.reps,
-                      options: [for (final v in BenchSpec.repChoices) (v, '$v')],
-                      onChanged: s.busy ? null : (v) => c.setBenchSpec(spec.copyWith(reps: v)),
-                    ),
-              ]),
-              SizedBox(height: t.space.md),
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: FilledButton.icon(
-                  onPressed: s.busy ? null : () => unawaited(c.runBench()),
-                  icon: const Icon(Icons.speed_rounded),
-                  label: const Text('Run benchmark'),
+          child: HeadingGroup(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Heading(
+                  level: 2,
+                  child: Text('Benchmark the current settings', style: Theme.of(context).textTheme.titleSmall),
                 ),
-              ),
-              SizedBox(height: t.space.xs),
-              LabNote(config.needsGeneration
-                  ? 'Speculative decoding is on, so this runs real generations (copying a list), one warm-up '
-                      'excluded. It runs in the background and pauses for chat replies.'
-                  : 'One warm-up run, then the measured runs, averaged. It runs in the background and pauses for '
-                      'chat replies.'),
-            ],
+                SizedBox(height: t.space.xxs),
+                LabNote(config.summary),
+                SizedBox(height: t.space.md),
+                FieldGrid(children: [
+                  (w) => LabDropdown<int>(
+                        width: w,
+                        label: 'Prompt tokens',
+                        value: spec.promptTokens,
+                        options: [for (final v in BenchSpec.promptChoices) (v, '$v')],
+                        onChanged: s.busy ? null : (v) => c.setBenchSpec(spec.copyWith(promptTokens: v)),
+                      ),
+                  (w) => LabDropdown<int>(
+                        width: w,
+                        label: 'Generated tokens',
+                        value: spec.genTokens,
+                        options: [for (final v in BenchSpec.genChoices) (v, '$v')],
+                        onChanged: s.busy ? null : (v) => c.setBenchSpec(spec.copyWith(genTokens: v)),
+                      ),
+                  (w) => LabDropdown<int>(
+                        width: w,
+                        label: 'Runs',
+                        value: spec.reps,
+                        options: [for (final v in BenchSpec.repChoices) (v, '$v')],
+                        onChanged: s.busy ? null : (v) => c.setBenchSpec(spec.copyWith(reps: v)),
+                      ),
+                ]),
+                SizedBox(height: t.space.md),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: FilledButton.icon(
+                    onPressed: s.busy ? null : () => unawaited(c.runBench()),
+                    icon: const Icon(Icons.speed_rounded),
+                    label: const Text('Run benchmark'),
+                  ),
+                ),
+                SizedBox(height: t.space.xs),
+                LabNote(config.needsGeneration
+                    ? 'Speculative decoding is on, so this runs real generations (copying a list), one warm-up '
+                        'excluded. It runs in the background and pauses for chat replies.'
+                    : 'One warm-up run, then the measured runs, averaged. It runs in the background and pauses for '
+                        'chat replies.'),
+              ],
+            ),
           ),
         ),
         JobBanner(modelId: id, kinds: const {LabJobKind.bench}),

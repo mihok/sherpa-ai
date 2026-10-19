@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:material_ui/material_ui.dart' show Size, ThemeMode;
 import 'package:sherpa/app.dart';
 import 'package:sherpa/bootstrap.dart' show noRetry;
 import 'package:sherpa/features/mcp/add_server_screen.dart';
@@ -14,6 +15,7 @@ import 'package:sherpa/services/mcp/mcp_records.dart';
 import 'package:sherpa/services/mcp/mcp_runtime.dart';
 import 'package:sherpa/services/mcp/registry_client.dart';
 import 'package:sherpa/services/mcp/server_probe.dart';
+import 'package:sherpa/state/ui_preferences.dart';
 import 'package:sherpa_core/sherpa_core.dart' show ToolAnnotations;
 import 'package:sherpa_mcp/sherpa_mcp.dart';
 
@@ -49,8 +51,9 @@ final class McpRig {
     http.Client? registryHttp,
     http.Client? httpClient,
     FakeBrowser? browser,
+    ThemeMode mode = ThemeMode.system,
   }) async {
-    final app = Harness();
+    final app = Harness(ui: UiSettings(themeMode: mode));
     final servers = remote ?? FakeRemoteServers();
     final records = InMemoryMcpRecords();
     final b = browser ?? FakeBrowser();
@@ -96,8 +99,8 @@ final class McpRig {
         ...extra,
       ];
 
-  Future<void> pump(WidgetTester tester, {String? location, double textScale = 1}) async {
-    setWindow(tester, phone, textScale: textScale);
+  Future<void> pump(WidgetTester tester, {String? location, double textScale = 1, Size size = phone}) async {
+    setWindow(tester, size, textScale: textScale);
     await tester.pumpWidget(ProviderScope(overrides: overrides, retry: noRetry, child: const SherpaApp()));
     await tester.pumpAndSettle();
     if (location != null) await goTo(tester, location);

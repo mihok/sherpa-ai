@@ -22,7 +22,16 @@ void main() {
   }
 
   tearDown(() {
-    for (final m in ['sampleMemory', 'beginLease', 'setProcessStateSummary', 'excludeFromBackup', 'endLease']) {
+    for (final m in [
+      'sampleMemory',
+      'beginLease',
+      'setProcessStateSummary',
+      'excludeFromBackup',
+      'endLease',
+      'requestNotificationsPermission',
+      'notifyRunFinished',
+      'clearFinishedNotices',
+    ]) {
       messenger.setMockMessageHandler('$_prefix.$m', null);
     }
   });
@@ -78,6 +87,29 @@ void main() {
     final b = PigeonPlatformBackend();
     expect(await b.setProcessStateSummary(Uint8List.fromList([1, 2, 3])), isTrue);
     expect(await b.excludeFromBackup('/db', includeSqliteSidecars: true), ['/db', '/db-wal']);
+  });
+
+  test('notification calls cross the channel', () async {
+    late FinishedNotice seen;
+    var cleared = 0;
+    host('requestNotificationsPermission', (_) => true);
+    host('notifyRunFinished', (args) {
+      seen = args!.single! as FinishedNotice;
+      return true;
+    });
+    host('clearFinishedNotices', (_) {
+      cleared++;
+      return null;
+    });
+    final b = PigeonPlatformBackend();
+    expect(await b.requestNotificationsPermission(), isTrue);
+    expect(
+      await b.notifyRunFinished(FinishedNotice(tag: 's1', title: 'Reply ready', text: 'Open Sherpa', androidChannelName: 'Done')),
+      isTrue,
+    );
+    expect((seen.tag, seen.title, seen.text, seen.androidChannelName), ('s1', 'Reply ready', 'Open Sherpa', 'Done'));
+    await b.clearFinishedNotices();
+    expect(cleared, 1);
   });
 
   test('native errors surface as PlatformException', () async {

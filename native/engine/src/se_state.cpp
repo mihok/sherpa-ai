@@ -56,6 +56,9 @@ common_json state_identity(const SessionImpl & s) {
     loras.push_back(o);
   }
   h["loras"] = loras;
+  // Image positions in the history were decoded through this projector (ABI 1.1). Only present with one,
+  // so text-only models keep their identity (and 1.0 state files stay valid).
+  if (!s.model->mmproj_fingerprint.empty()) h["mmproj"] = s.model->mmproj_fingerprint;
   return h;
 }
 
@@ -190,7 +193,10 @@ SE_API se_status se_state_load(se_session * s, const char * path, int32_t * n_to
     if (n_tokens) read_exact(tokens.data(), n_tokens * sizeof(llama_token));
     const int32_t n_vocab = llama_vocab_n_tokens(S.model->vocab);
     for (const llama_token t : tokens) {
-      if (t < 0 || t >= n_vocab) se::fail(SE_ERR_STATE_MISMATCH, "state file contains invalid token ids");
+      // Image positions hold pseudo tokens (se_media.cpp); they are only compared, never decoded.
+      if ((t < 0 && !se::is_media_token(t)) || t >= n_vocab) {
+        se::fail(SE_ERR_STATE_MISMATCH, "state file contains invalid token ids");
+      }
     }
     uint64_t state_len = 0;
     read_exact(&state_len, sizeof state_len);

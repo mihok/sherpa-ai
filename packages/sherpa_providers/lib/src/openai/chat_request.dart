@@ -44,8 +44,12 @@ ChatRequestBody buildChatRequest({
   final params = request.params;
   var tools = visibleTools(request);
   final replay = quirks.replayReasoningOnlyWithTools && tools.isEmpty ? ReasoningReplay.none : quirks.reasoningReplay;
-  final mapped = OpenAiChatMessageMapper(providerId: providerId, names: names, reasoningReplay: replay)
-      .map(systemPrompt: request.systemPrompt, messages: request.messages);
+  final mapped = OpenAiChatMessageMapper(
+    providerId: providerId,
+    names: names,
+    reasoningReplay: replay,
+    pdfUnsupportedReason: quirks.pdfRefusal(request.modelId),
+  ).map(systemPrompt: request.systemPrompt, messages: request.messages);
   notices.addAll(mapped.notices);
 
   final body = <String, Object?>{

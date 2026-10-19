@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../design/motion.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../../routing/routes.dart';
 import '../../../state/ui_preferences.dart';
 import '../handoff/handoff_platform.dart';
@@ -19,8 +21,9 @@ import 'data_export.dart';
 Future<void> exportAllData(BuildContext context, WidgetRef ref) async {
   final go = await showDialog<bool>(
     context: context,
+    animationStyle: motionStyleOf(context),
     builder: (dialog) => AlertDialog(
-      title: const Text('Export your data?'),
+      title: const Heading(child: Text('Export your data?')),
       content: const SingleChildScrollView(
         child: Text(
           'Sherpa makes one JSON file with every chat (all branches), its summaries and plans, the activity log, '
@@ -59,9 +62,10 @@ Future<void> deleteAllData(BuildContext context, WidgetRef ref) async {
   final scheme = Theme.of(context).colorScheme;
   final first = await showDialog<_First>(
     context: context,
+    animationStyle: motionStyleOf(context),
     builder: (dialog) => AlertDialog(
       icon: Icon(Icons.delete_forever_outlined, color: scheme.error),
-      title: const Text('Delete all data?'),
+      title: const Heading(child: Text('Delete all data?')),
       content: const SingleChildScrollView(
         child: Text(
           'This removes from this phone:\n'
@@ -88,8 +92,9 @@ Future<void> deleteAllData(BuildContext context, WidgetRef ref) async {
   if (first != _First.next) return;
   final sure = await showDialog<bool>(
     context: context,
+    animationStyle: motionStyleOf(context),
     builder: (dialog) => AlertDialog(
-      title: const Text('Are you sure?'),
+      title: const Heading(child: Text('Are you sure?')),
       content: const Text('Everything listed will be deleted now. There is no copy to restore from.'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Keep my data')),
@@ -123,6 +128,7 @@ Future<T> _withProgress<T>(BuildContext context, String label, Future<T> Functio
   final navigator = Navigator.of(context, rootNavigator: true);
   unawaited(showDialog<void>(
     context: context,
+    animationStyle: motionStyleOf(context),
     barrierDismissible: false,
     useRootNavigator: true,
     builder: (_) => PopScope(

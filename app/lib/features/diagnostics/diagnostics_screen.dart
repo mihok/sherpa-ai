@@ -4,7 +4,9 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/state_views.dart';
 import '../models/widgets/format.dart' show formatBytes;
@@ -78,8 +80,8 @@ class DiagnosticsScreen extends ConsumerWidget {
     return [
       Padding(
         padding: EdgeInsets.fromLTRB(t.space.lg, t.space.lg, t.space.lg, 0),
-        child: Semantics(
-          headingLevel: 2,
+        child: Heading(
+          level: 2,
           child: Text('This is everything that will be shared', style: theme.textTheme.titleMedium),
         ),
       ),
@@ -113,10 +115,11 @@ class DiagnosticsScreen extends ConsumerWidget {
       ),
       for (final s in b.sections)
         ExpansionTile(
+          expansionAnimationStyle: motionStyleOf(context),
           title: Text(sectionLabels[s.key] ?? s.key),
           subtitle: Text(_hint(s.value), maxLines: 1, overflow: TextOverflow.ellipsis),
           childrenPadding: EdgeInsets.fromLTRB(t.space.lg, 0, t.space.lg, t.space.md),
-          expandedAlignment: Alignment.centerLeft,
+          expandedAlignment: AlignmentDirectional.centerStart,
           children: [
             SizedBox(
               width: double.infinity,

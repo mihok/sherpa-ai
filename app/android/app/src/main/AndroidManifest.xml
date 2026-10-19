@@ -1,8 +1,18 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Dictation in the composer (asked on first use; on-device recognition preferred). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Background runs ("Keep working in the background"): sherpa_platform's
+         RunService. Its manifest already declares these; repeated here so the
+         app's own manifest says what it asks for. shortService (finish a
+         reply, ~3 min) needs no type permission; specialUse (agent runs) does.
+         POST_NOTIFICATIONS is asked at runtime on API 33+, from the chat,
+         after saying why. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="Sherpa"
         android:enableOnBackInvokedCallback="true"
@@ -58,6 +68,23 @@
                 <data android:scheme="io.github.mihok.sherpa" />
             </intent-filter>
         </activity>
+        <!-- The foreground service that keeps a reply or agent run alive after
+             the user leaves (started only while Sherpa is visible). The plugin
+             declares it with foregroundServiceType="shortService|specialUse"
+             (not repeated here: the merger would concatenate the flags). The
+             specialUse subtype is what Google Play reviews (with the Play
+             Console FGS declaration and a video, R07 §4.1); it replaces the
+             plugin's default, which names on-device inference only, because
+             the service also covers tool calls and requests to the model
+             provider the user chose. -->
+        <service
+            android:name="io.github.mihok.sherpa_platform.RunService"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Finishes an AI agent task the user started in the app (on-device model inference, tool calls and requests to the model provider the user chose) after the user leaves the app"
+                tools:replace="android:value" />
+        </service>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

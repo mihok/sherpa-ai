@@ -280,6 +280,22 @@ class LeaseResult {
   bool notificationsVisible;
 }
 
+/// A one-off "your reply is ready" notification (Android). Never carries
+/// message content: the app passes a chat's title at most.
+class FinishedNotice {
+  FinishedNotice({required this.tag, required this.title, required this.text});
+
+  /// Replaces an earlier notice with the same tag (one per chat).
+  String tag;
+  String title;
+  String text;
+
+  /// User-visible name of the channel finished-run notices use (localized
+  /// by the app); separate from the ongoing-run channel so people can mute
+  /// one without the other.
+  String? androidChannelName;
+}
+
 @HostApi()
 abstract class SherpaPlatformHostApi {
   @TaskQueue(type: TaskQueueType.serialBackgroundThread)
@@ -300,6 +316,23 @@ abstract class SherpaPlatformHostApi {
   List<String> excludeFromBackup(String path, bool includeSqliteSidecars);
 
   bool notificationsPermitted();
+
+  /// Android 13+ (API 33): asks for POST_NOTIFICATIONS with the system
+  /// dialog, through the current activity; completes with
+  /// [notificationsPermitted] once the user answers. Below 33, when already
+  /// granted, or without an activity, completes at once without a dialog.
+  /// iOS: true (no notification is involved).
+  @asyncCallback
+  bool requestNotificationsPermission();
+
+  /// Android: posts [notice] (dismissed on tap, opens the app) when
+  /// notifications are permitted; returns whether it was posted. iOS: false
+  /// (not supported; the Live Activity shows the end of a continued task).
+  bool notifyRunFinished(FinishedNotice notice);
+
+  /// Removes every [notifyRunFinished] notice still showing (the app is on
+  /// screen again). iOS: no-op.
+  void clearFinishedNotices();
 
   @asyncCallback
   LeaseResult beginLease(LeaseRequest request);

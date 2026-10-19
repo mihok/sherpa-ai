@@ -153,6 +153,10 @@ void do_init(const se_init_params & p) {
 
   // llama_log_set is global and not thread-safe (llama.h:1663-1667): set it once, here.
   llama_log_set(llama_log_bridge, nullptr);
+#if SE_HAVE_MTMD
+  // mtmd and clip log through their own logger (stderr by default, every image at INFO).
+  mtmd_helper_log_set(llama_log_bridge, nullptr);
+#endif
   ggml_set_abort_callback(crash_breadcrumb);
   // common/ logs through its own singleton (worker thread, stdout). Keep it to warnings and errors.
   common_log_set_verbosity_thold(g_state.log_level <= SE_LOG_INFO ? LOG_LEVEL_INFO : LOG_LEVEL_WARN);
@@ -348,7 +352,10 @@ std::string system_info_json() {
   j["llama_commit"] = SE_LLAMA_COMMIT;
   j["ggml_version"] = ggml_version();
   j["backend_dl"]   = (bool) SE_BACKEND_DL;
+  j["abi_minor"]    = (int) SE_ABI_MINOR;
   j["mtmd"]         = (bool) SE_HAVE_MTMD;
+  // Image content parts are accepted (with a vision projector loaded): ABI 1.1 + an mtmd build.
+  j["image_input"]  = (bool) SE_HAVE_MTMD;
   j["backend_init"] = g_state.init_report;
   j["cpu_variant"]  = g_state.cpu_variant;
 

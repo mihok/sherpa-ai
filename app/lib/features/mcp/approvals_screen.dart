@@ -2,7 +2,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
+import '../../design/widgets/section_header.dart';
 import '../../design/widgets/state_views.dart';
 import '../../state/providers.dart';
 import '../../state/ui_preferences.dart';
@@ -25,8 +28,9 @@ class ApprovalsScreen extends ConsumerWidget {
   Future<void> _revokeAll(BuildContext context, WidgetRef ref) async {
     final ok = await showDialog<bool>(
       context: context,
+      animationStyle: motionStyleOf(context),
       builder: (context) => AlertDialog(
-        title: const Text('Revoke all approvals?'),
+        title: const Heading(child: Text('Revoke all approvals?')),
         content: const Text('Every tool asks again before it runs.'),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
@@ -47,7 +51,7 @@ class ApprovalsScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     if (grants.isEmpty) {
       return const SettingsPage(
-        title: 'Approvals',
+        title: 'Remembered approvals',
         children: [
           SizedBox(height: 48),
           StateView(
@@ -59,7 +63,7 @@ class ApprovalsScreen extends ConsumerWidget {
       );
     }
     return SettingsPage(
-      title: 'Approvals',
+      title: 'Remembered approvals',
       actions: [
         TextButton(onPressed: () => _revokeAll(context, ref), child: const Text('Revoke all')),
       ],
@@ -73,6 +77,10 @@ class ApprovalsScreen extends ConsumerWidget {
               style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
           ),
+        ),
+        SectionHeader(
+          'Allowed without asking',
+          count: grants.length == 1 ? '1 tool' : '${grants.length} tools',
         ),
         for (final g in grants)
           _GrantTile(

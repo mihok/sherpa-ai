@@ -8,7 +8,9 @@ import 'package:sherpa_net/sherpa_net.dart' show UrlPolicyViolation;
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 import '../../design/haptics.dart';
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/state_views.dart';
@@ -308,8 +310,9 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
   Future<void> _confirmLeave() async {
     final leave = await showDialog<bool>(
       context: context,
+      animationStyle: motionStyleOf(context),
       builder: (dialog) => AlertDialog(
-        title: const Text('Discard changes?'),
+        title: const Heading(child: Text('Discard changes?')),
         content: Text(_isEdit ? 'Your edits to this provider are not saved.' : 'This provider will not be added.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Keep editing')),
@@ -480,6 +483,7 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
           // ExpansionTile draws dividers when open; keep the page calm.
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
           child: ExpansionTile(
+            expansionAnimationStyle: motionStyleOf(context),
             title: const Text('Advanced'),
             subtitle: const Text('API type and extra headers'),
             initiallyExpanded: _headers.isNotEmpty || preset.group == PresetGroup.custom,

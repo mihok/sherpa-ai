@@ -111,6 +111,7 @@ class _SamplingSheetState extends ConsumerState<SamplingSheet> {
                   serverName: _p.serverName,
                   trusted: _p.serverTrusted,
                   toolName: _p.toolName,
+                  announceTitle: true,
                 ),
                 SizedBox(height: t.space.md),
                 ...switch (_p.stage) {
@@ -254,7 +255,7 @@ class _SamplingSheetState extends ConsumerState<SamplingSheet> {
   List<Widget> _running(BuildContext context) {
     final t = SherpaTokens.of(context);
     return [
-      const LinearProgressIndicator(),
+      const LinearProgressIndicator(semanticsLabel: 'The model is writing'),
       SizedBox(height: t.space.md),
       Text(
         'The model is writing (at most ${_p.limits.maxTokens} tokens). You will see the answer before it is sent.',

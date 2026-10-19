@@ -2,7 +2,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../design/widgets/section_header.dart';
 import '../../state/app_providers.dart';
@@ -19,6 +21,7 @@ import '../chat/local_model_picker_section.dart';
 /// also choosing where new chats go.
 Future<void> showDefaultModelSheet(BuildContext context) => showModalBottomSheet<void>(
       context: context,
+      sheetAnimationStyle: motionStyleOf(context),
       isScrollControlled: true,
       useSafeArea: true,
       builder: (context) => const _DefaultModelSheet(),
@@ -55,8 +58,8 @@ class _DefaultModelSheet extends ConsumerWidget {
           children: [
             Padding(
               padding: EdgeInsets.symmetric(horizontal: t.space.xl),
-              child: Semantics(
-                headingLevel: 2,
+              child: Heading(
+                level: 2,
                 child: Text('Default model', style: Theme.of(context).textTheme.titleLarge),
               ),
             ),
@@ -88,42 +91,44 @@ class _ProviderModels extends ConsumerWidget {
     final models = ref.watch(providerModelsProvider(config.id));
     ref.watch(localHostVerdictsProvider);
     ensureLocalHostVerified(config, ref.read(hostResolverProvider));
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SectionHeader(
-          config.displayName,
-          trailing: PrivacyBadge(location: locationOf(config), host: privacyHostLabel(config)),
-        ),
-        ...switch (models) {
-          AsyncData(:final value) when value.isEmpty => [
-              ListTile(title: const Text('No models listed'), subtitle: Text(config.baseUrl.host)),
-            ],
-          AsyncData(:final value) => [
-              for (final m in value)
-                RadioListTile<ModelChoice>(
-                  value: ModelChoice(providerId: config.id, modelId: m.id),
-                  title: Text(m.displayName, maxLines: 2, overflow: TextOverflow.ellipsis),
+    return HeadingGroup(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SectionHeader(
+            config.displayName,
+            trailing: PrivacyBadge(location: locationOf(config), host: privacyHostLabel(config)),
+          ),
+          ...switch (models) {
+            AsyncData(:final value) when value.isEmpty => [
+                ListTile(title: const Text('No models listed'), subtitle: Text(config.baseUrl.host)),
+              ],
+            AsyncData(:final value) => [
+                for (final m in value)
+                  RadioListTile<ModelChoice>(
+                    value: ModelChoice(providerId: config.id, modelId: m.id),
+                    title: Text(m.displayName, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+            AsyncError() => [
+                ListTile(
+                  leading: const Icon(Icons.error_outline_rounded),
+                  title: const Text("Couldn't load models"),
+                  trailing: TextButton(
+                    onPressed: () => ref.invalidate(providerModelsProvider(config.id)),
+                    child: const Text('Retry'),
+                  ),
                 ),
-            ],
-          AsyncError() => [
-              ListTile(
-                leading: const Icon(Icons.error_outline_rounded),
-                title: const Text("Couldn't load models"),
-                trailing: TextButton(
-                  onPressed: () => ref.invalidate(providerModelsProvider(config.id)),
-                  child: const Text('Retry'),
+              ],
+            _ => [
+                Padding(
+                  padding: EdgeInsets.all(t.space.lg),
+                  child: Center(child: CircularProgressIndicator(semanticsLabel: 'Loading models from ${config.displayName}')),
                 ),
-              ),
-            ],
-          _ => [
-              Padding(
-                padding: EdgeInsets.all(t.space.lg),
-                child: const Center(child: CircularProgressIndicator()),
-              ),
-            ],
-        },
-      ],
+              ],
+          },
+        ],
+      ),
     );
   }
 }

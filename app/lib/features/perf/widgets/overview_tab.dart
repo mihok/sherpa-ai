@@ -7,6 +7,7 @@ import 'package:sherpa_hub/sherpa_hub.dart' show CpuClass, DevicePlatform;
 import 'package:sherpa_inference/sherpa_inference.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../../design/widgets/section_header.dart';
 import '../../../state/providers.dart' show clockProvider;
 import '../../models/widgets/format.dart';
@@ -72,82 +73,84 @@ class LiveMonitor extends ConsumerWidget {
       MemoryPressure.critical => ('Critical', PillTone.danger),
     };
     return PerfCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Semantics(headingLevel: 2, child: Text('Live', style: theme.textTheme.titleSmall)),
-          SizedBox(height: t.space.xs),
-          if (p == null)
-            const LabNote('No on-device reply yet since Sherpa started. Chat with a local model and its speed shows here.')
-          else ...[
-            LabNote(
-              'Last reply${last!.modelId == overview.modelId ? '' : ' (another model)'}'
-              '${last.background ? ', background work' : ''}, ${formatWhen(last.at, now)}'
-              '${p.backend == null ? '' : ' on ${p.backend}'}',
-            ),
+      child: HeadingGroup(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Heading(level: 2, child: Text('Live', style: theme.textTheme.titleSmall)),
+            SizedBox(height: t.space.xs),
+            if (p == null)
+              const LabNote('No on-device reply yet since Sherpa started. Chat with a local model and its speed shows here.')
+            else ...[
+              LabNote(
+                'Last reply${last!.modelId == overview.modelId ? '' : ' (another model)'}'
+                '${last.background ? ', background work' : ''}, ${formatWhen(last.at, now)}'
+                '${p.backend == null ? '' : ' on ${p.backend}'}',
+              ),
+              Wrap(
+                spacing: t.space.lg,
+                children: [
+                  MetricTile(label: 'First token', value: formatMs(p.timeToFirstTokenMs)),
+                  MetricTile(
+                    label: 'Prefill',
+                    value: formatTps(p.prefillTokensPerSec),
+                    spoken: spokenTps(p.prefillTokensPerSec),
+                    detail: p.promptTokens == null
+                        ? null
+                        : '${p.promptTokens} prompt tokens'
+                            '${(p.cachedPromptTokens ?? 0) > 0 ? ', ${p.cachedPromptTokens} cached' : ''}',
+                  ),
+                  MetricTile(
+                    label: 'Decode',
+                    value: formatTps(p.decodeTokensPerSec),
+                    spoken: spokenTps(p.decodeTokensPerSec),
+                    detail: last.usage == null
+                        ? null
+                        : '${last.usage!.outputTokens} token${last.usage!.outputTokens == 1 ? '' : 's'}',
+                  ),
+                  if (p.draftAcceptRate != null)
+                    MetricTile(label: 'Draft accepted', value: formatPercent(p.draftAcceptRate!)),
+                ],
+              ),
+            ],
+            SizedBox(height: t.space.sm),
             Wrap(
-              spacing: t.space.lg,
+              spacing: t.space.xs,
+              runSpacing: t.space.xs,
               children: [
-                MetricTile(label: 'First token', value: formatMs(p.timeToFirstTokenMs)),
-                MetricTile(
-                  label: 'Prefill',
-                  value: formatTps(p.prefillTokensPerSec),
-                  spoken: spokenTps(p.prefillTokensPerSec),
-                  detail: p.promptTokens == null
-                      ? null
-                      : '${p.promptTokens} prompt tokens'
-                          '${(p.cachedPromptTokens ?? 0) > 0 ? ', ${p.cachedPromptTokens} cached' : ''}',
+                ThermalPill(thermal),
+                InfoPill(
+                  label: pressure.$1,
+                  icon: Icons.memory_rounded,
+                  tone: pressure.$2,
+                  semanticPrefix: 'Memory pressure',
+                  explanation: 'How hard the system is pushing apps to free memory.',
                 ),
-                MetricTile(
-                  label: 'Decode',
-                  value: formatTps(p.decodeTokensPerSec),
-                  spoken: spokenTps(p.decodeTokensPerSec),
-                  detail: last.usage == null
-                      ? null
-                      : '${last.usage!.outputTokens} token${last.usage!.outputTokens == 1 ? '' : 's'}',
-                ),
-                if (p.draftAcceptRate != null)
-                  MetricTile(label: 'Draft accepted', value: formatPercent(p.draftAcceptRate!)),
+                if (mem.availableBytes != null)
+                  InfoPill(
+                    label: '${formatBytes(mem.availableBytes!)} free',
+                    icon: Icons.sd_card_outlined,
+                    semanticPrefix: 'Available memory',
+                    explanation: 'Memory Sherpa can still use before the system steps in.',
+                  ),
+                if (mem.appFootprintBytes != null)
+                  InfoPill(
+                    label: 'App ${formatBytes(mem.appFootprintBytes!)}',
+                    icon: Icons.apps_rounded,
+                    semanticPrefix: 'App memory',
+                    explanation: 'Memory the Sherpa app process uses now.',
+                  ),
+                if (mem.lowPowerMode)
+                  const InfoPill(
+                    label: 'Battery saver',
+                    icon: Icons.battery_saver_rounded,
+                    tone: PillTone.warning,
+                    explanation: 'Battery saver slows the CPU; measurements will be lower.',
+                  ),
               ],
             ),
           ],
-          SizedBox(height: t.space.sm),
-          Wrap(
-            spacing: t.space.xs,
-            runSpacing: t.space.xs,
-            children: [
-              ThermalPill(thermal),
-              InfoPill(
-                label: pressure.$1,
-                icon: Icons.memory_rounded,
-                tone: pressure.$2,
-                semanticPrefix: 'Memory pressure',
-                explanation: 'How hard the system is pushing apps to free memory.',
-              ),
-              if (mem.availableBytes != null)
-                InfoPill(
-                  label: '${formatBytes(mem.availableBytes!)} free',
-                  icon: Icons.sd_card_outlined,
-                  semanticPrefix: 'Available memory',
-                  explanation: 'Memory Sherpa can still use before the system steps in.',
-                ),
-              if (mem.appFootprintBytes != null)
-                InfoPill(
-                  label: 'App ${formatBytes(mem.appFootprintBytes!)}',
-                  icon: Icons.apps_rounded,
-                  semanticPrefix: 'App memory',
-                  explanation: 'Memory the Sherpa app process uses now.',
-                ),
-              if (mem.lowPowerMode)
-                const InfoPill(
-                  label: 'Battery saver',
-                  icon: Icons.battery_saver_rounded,
-                  tone: PillTone.warning,
-                  explanation: 'Battery saver slows the CPU; measurements will be lower.',
-                ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }

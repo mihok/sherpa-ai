@@ -7,8 +7,10 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 import 'package:sherpa_hub/sherpa_hub.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/skeleton.dart';
@@ -62,7 +64,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
     final details = ref.watch(modelDetailsProvider(widget.repoId));
     final title = parseModelName(widget.repoId).displayName;
     return Scaffold(
-      appBar: AppBar(title: Semantics(headingLevel: 1, child: Text(title))),
+      appBar: AppBar(title: Heading(level: 1, child: Text(title))),
       body: switch (details) {
         AsyncData(:final value) => _body(context, value),
         AsyncError(:final error) => _DetailFailure(error: error, onRetry: () => ref.invalidate(modelDetailsProvider(widget.repoId))),
@@ -190,8 +192,9 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
 
   Future<void> _showRefusal(List<String> reasons) => showDialog<void>(
         context: context,
+        animationStyle: motionStyleOf(context),
         builder: (context) => AlertDialog(
-          title: const Text("Can't download this"),
+          title: const Heading(child: Text("Can't download this")),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -331,53 +334,57 @@ class _GatedCard extends ConsumerWidget {
         ),
         child: Padding(
           padding: EdgeInsets.all(t.space.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                Icon(Icons.lock_outline_rounded, color: theme.colorScheme.onTertiaryContainer),
-                SizedBox(width: t.space.sm),
-                Expanded(
-                  child: Semantics(
-                    headingLevel: 2,
-                    child: Text('Accept the terms on huggingface.co',
-                        style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.onTertiaryContainer)),
-                  ),
-                ),
-              ]),
-              SizedBox(height: t.space.sm),
-              Text(
-                '1. Open the link below in your browser and sign in.\n'
-                '2. Accept the author\'s license form.${manual ? ' This author approves requests by hand, which can take days.' : ' Access is granted at once.'}\n'
-                '3. ${profile == null ? 'Add a Hugging Face token here so Sherpa can download for you.' : 'Come back and download. Sherpa uses your token (${profile.name}).'}',
-                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onTertiaryContainer),
-              ),
-              SizedBox(height: t.space.sm),
-              SelectableText(url, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onTertiaryContainer)),
-              SizedBox(height: t.space.sm),
-              Wrap(
-                spacing: t.space.sm,
-                runSpacing: t.space.sm,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: url));
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied')));
-                      }
-                    },
-                    icon: const Icon(Icons.link_rounded),
-                    label: const Text('Copy link'),
-                  ),
-                  if (profile == null)
-                    FilledButton.tonalIcon(
-                      onPressed: () => context.go(Routes.huggingFace),
-                      icon: const Icon(Icons.key_outlined),
-                      label: const Text('Add token'),
+          child: HeadingGroup(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(Icons.lock_outline_rounded, color: theme.colorScheme.onTertiaryContainer),
+                  SizedBox(width: t.space.sm),
+                  Expanded(
+                    child: Heading(
+                      level: 2,
+                      child: Text('Accept the terms on huggingface.co',
+                          style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.onTertiaryContainer)),
                     ),
-                ],
-              ),
-            ],
+                  ),
+                ]),
+                SizedBox(height: t.space.sm),
+                Text(
+                  '1. Open the link below in your browser and sign in.\n'
+                  '2. Accept the author\'s license form.${manual ? ' This author approves requests by hand, which can take days.' : ' Access is granted at once.'}\n'
+                  '3. ${profile == null ? 'Add a Hugging Face token here so Sherpa can download for you.' : 'Come back and download. Sherpa uses your token (${profile.name}).'}',
+                  style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onTertiaryContainer),
+                ),
+                SizedBox(height: t.space.sm),
+                // Plain text: "Copy link" below copies it (a selectable field
+                // would be one more, 16 dp tall, tap target).
+                Text(url, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onTertiaryContainer)),
+                SizedBox(height: t.space.sm),
+                Wrap(
+                  spacing: t.space.sm,
+                  runSpacing: t.space.sm,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        await Clipboard.setData(ClipboardData(text: url));
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied')));
+                        }
+                      },
+                      icon: const Icon(Icons.link_rounded),
+                      label: const Text('Copy link'),
+                    ),
+                    if (profile == null)
+                      FilledButton.tonalIcon(
+                        onPressed: () => context.go(Routes.huggingFace),
+                        icon: const Icon(Icons.key_outlined),
+                        label: const Text('Add token'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -445,7 +452,10 @@ class _FitSummary extends StatelessWidget {
                       ),
                     ),
                     SizedBox(height: t.space.xxs),
-                    Text(text, style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                    Semantics(
+                      liveRegion: true,
+                      child: Text(text, style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                    ),
                     if (shapeError != null && onRetry != null)
                       Padding(
                         padding: EdgeInsets.only(top: t.space.xs),
@@ -499,7 +509,7 @@ class _VariantTile extends StatelessWidget {
             children: [
               if (!blocked)
                 Padding(
-                  padding: EdgeInsets.only(right: t.space.sm),
+                  padding: EdgeInsetsDirectional.only(end: t.space.sm),
                   child: Icon(
                     selected ? Icons.radio_button_checked_rounded : Icons.radio_button_unchecked_rounded,
                     size: 20,
@@ -641,6 +651,7 @@ class _VariantTile extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: t.space.lg, vertical: t.space.xs),
       child: Semantics(
+        container: true,
         label: semantics,
         selected: selected,
         button: !blocked,
@@ -676,6 +687,7 @@ class _OtherFiles extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: t.space.sm),
       child: ExpansionTile(
+        expansionAnimationStyle: motionStyleOf(context),
         title: Text('Other files (${files.length})', style: theme.textTheme.titleSmall),
         subtitle: const Text('Not offered: companions, configs or unsafe formats'),
         children: [
@@ -737,22 +749,29 @@ class _DownloadBar extends ConsumerWidget {
         label: Text('Download ${row.label} · ${formatBytes(row.downloadBytes)}'),
       );
     }
+    // Full-width bar, but the button keeps to the reading column on tablets.
     return Material(
       color: theme.colorScheme.surfaceContainer,
       child: SafeArea(
         top: false,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.lg, t.space.md),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (note != null) ...[
-                Text(note, style: theme.textTheme.bodySmall?.copyWith(color: SherpaTokens.of(context).semantic.danger)),
-                SizedBox(height: t.space.sm),
-              ],
-              ConstrainedBox(constraints: BoxConstraints(minHeight: t.space.minTouchTarget), child: button),
-            ],
+        child: Center(
+          heightFactor: 1,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: t.layout.maxContentWidth),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.lg, t.space.md),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (note != null) ...[
+                    Text(note, style: theme.textTheme.bodySmall?.copyWith(color: SherpaTokens.of(context).semantic.danger)),
+                    SizedBox(height: t.space.sm),
+                  ],
+                  ConstrainedBox(constraints: BoxConstraints(minHeight: t.space.minTouchTarget), child: button),
+                ],
+              ),
+            ),
           ),
         ),
       ),

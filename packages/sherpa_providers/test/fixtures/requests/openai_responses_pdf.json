@@ -1,0 +1,68 @@
+{
+  "model": "gpt-5",
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Summarize the attached report, then fetch Q3."
+        },
+        {
+          "type": "input_file",
+          "filename": "att1-report.pdf",
+          "file_data": "data:application/pdf;base64,JVBERi0xLjQKJSVFT0YK"
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "call_id": "call_1",
+      "name": "fetch_doc",
+      "arguments": "{\"id\":\"q3\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_1",
+      "output": [
+        {
+          "type": "input_text",
+          "text": "Fetched q3."
+        },
+        {
+          "type": "input_file",
+          "filename": "q3.pdf",
+          "file_data": "data:application/pdf;base64,JVBERi0xLjQKJSVFT0YK"
+        }
+      ]
+    }
+  ],
+  "stream": true,
+  "store": false,
+  "instructions": "You are Sherpa.",
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "reasoning": {
+    "summary": "auto"
+  },
+  "tools": [
+    {
+      "type": "function",
+      "name": "fetch_doc",
+      "description": "Fetch a document by id.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "strict": false
+    }
+  ]
+}

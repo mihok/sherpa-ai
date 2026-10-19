@@ -82,13 +82,13 @@ final class AttachmentInliningProvider implements ModelProvider {
         return bytes == null
             ? TextPart('[An attached image is no longer on this device: ${uri.pathSegments.lastOrNull ?? 'image'}]')
             : ImagePart(mimeType: mimeType, data: bytes);
-      case EmbeddedResourcePart(text: null, blob: null, :final uri, :final mimeType):
+      case EmbeddedResourcePart(text: null, blob: null, :final uri, :final mimeType, :final pages):
         final parsed = Uri.tryParse(uri);
         if (parsed == null || parsed.scheme != 'file') return p;
         final bytes = await _read(parsed);
         return bytes == null
             ? TextPart('[An attached file is no longer on this device: ${parsed.pathSegments.lastOrNull ?? 'file'}]')
-            : EmbeddedResourcePart(uri: uri, mimeType: mimeType, blob: bytes);
+            : EmbeddedResourcePart(uri: uri, mimeType: mimeType, blob: bytes, size: bytes.length, pages: pages);
       case ToolResultPart(:final content) when content.any(_needsBytes):
         return p.copyWith(content: [for (final c in content) await _inline(c)]);
       default:

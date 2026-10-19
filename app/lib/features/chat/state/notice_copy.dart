@@ -7,6 +7,25 @@ import 'chat_view_state.dart';
 // text is written for logs and models (`rateLimited: retrying in 800 ms`,
 // JSON-schema keywords); the chat shows a calm sentence instead.
 
+/// `ProviderNotice.code` of an on-device provider that holds the reply
+/// until Sherpa is on screen (MLX and llama.cpp on iPhone: no background
+/// GPU; Gemini Nano: AICore refuses background use; LiteRT-LM after it
+/// released memory).
+const String kWaitingForForegroundNotice = 'waiting_for_foreground';
+
+/// The chat's own notice for a run stopped because Sherpa's background
+/// time ended (`RunActivity`); its action continues the run.
+const String kBackgroundPausedNotice = 'background_paused';
+
+/// "Paused when the app was in the background; tap to continue", with
+/// Continue.
+ChatNotice backgroundPausedNotice() => const ChatNotice(
+      code: kBackgroundPausedNotice,
+      message: 'Paused when the app was in the background. Tap Continue to pick up where it stopped.',
+      kind: ChatNoticeKind.warning,
+      action: ChatNoticeAction.continueRun,
+    );
+
 /// The chat notice for a runner [RunNotice].
 ChatNotice runNoticeFor(String code, String message) => switch (code) {
       'retrying' => ChatNotice(code: code, message: _retryingCopy(message), kind: ChatNoticeKind.progress),
@@ -36,6 +55,13 @@ ChatNotice runNoticeFor(String code, String message) => switch (code) {
 /// The chat notice for a provider's [ProviderNotice], or null for the many
 /// that are diagnostics only (cache hits, dropped headers…).
 ChatNotice? providerNoticeFor(ProviderNotice notice) => switch (notice.code) {
+      // The provider's own sentence is technical ("the GPU is unavailable in
+      // the background"); the reply simply continues once Sherpa is back.
+      kWaitingForForegroundNotice => ChatNotice(
+          code: notice.code,
+          message: _waitingCopy(notice.message),
+          kind: ChatNoticeKind.progress,
+        ),
       'tool_args_truncated' => ChatNotice(
           code: notice.code,
           message: 'A tool call was cut off ${_cutoffCopy(notice.data['cutoff'])} before its input was complete, '
@@ -69,6 +95,12 @@ String _crashCopy(String report) {
     'Your chats are safe. If it happens again, try a smaller model or close other apps.',
   ].join(' ');
 }
+
+/// LiteRT-LM says it unloaded the model to free memory; everyone else
+/// pauses because Sherpa left the screen.
+String _waitingCopy(String message) => message.toLowerCase().contains('memory')
+    ? 'The on-device model was unloaded to free memory. It loads again and continues when Sherpa is on screen.'
+    : 'Paused while Sherpa is in the background. The reply continues when you come back.';
 
 String _retryingCopy(String message) {
   if (message.startsWith('${ProviderErrorKind.rateLimited.name}:')) return 'Rate limited — retrying shortly…';

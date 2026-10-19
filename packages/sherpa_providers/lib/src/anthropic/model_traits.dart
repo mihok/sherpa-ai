@@ -50,6 +50,7 @@ final class AnthropicModelTraits {
     this.contextLength = 200000,
     this.maxOutputTokens = 32000,
     this.known = false,
+    this.pdfInput = true,
   });
 
   /// Derives traits from a model id. Accepts dateless ids, dated snapshots
@@ -75,6 +76,9 @@ final class AnthropicModelTraits {
         contextLength: 200000,
         maxOutputTokens: 8192,
         known: true,
+        // PDF support arrived with Claude 3.5 Sonnet; the 3.x Haiku and Opus
+        // models predate it.
+        pdfInput: m.group(3) == 'sonnet' && v >= const _Version(3, 5),
       );
     }
     return unknown;
@@ -191,6 +195,11 @@ final class AnthropicModelTraits {
   /// False for [unknown] (the id did not match any family).
   final bool known;
 
+  /// PDFs as `document` blocks. Every 4.x and later model reads them (text
+  /// and an image per page); `/v1/models` `capabilities.pdf_input` refines
+  /// it ([refine]). Unknown ids are assumed newer, so true.
+  final bool pdfInput;
+
   bool get supportsAdaptive => switch (thinking) {
         AnthropicThinkingStyle.alwaysOn ||
         AnthropicThinkingStyle.betweenToolsOff ||
@@ -251,6 +260,7 @@ final class AnthropicModelTraits {
       contextLength: contextLength,
       maxOutputTokens: maxOutputTokens,
       known: known,
+      pdfInput: leaf(capabilities.optObj('pdf_input')) ?? pdfInput,
     );
   }
 
@@ -264,6 +274,7 @@ final class AnthropicModelTraits {
         toolCallFormat: ToolCallFormat.native,
         parallelToolCalls: true,
         vision: vision ?? true,
+        pdfInput: pdfInput,
         reasoning: reasoning ?? reasoningSupport,
         tokenizerFamily: 'claude',
         supportsSystemRole: true,

@@ -5,8 +5,9 @@ import 'package:material_ui/material_ui.dart' show ThemeMode, immutable;
 
 import '../design/haptics.dart';
 
-/// Device-local preferences: look and feel, plus how long chats are
-/// summarized ([modelSummaries]).
+/// Device-local preferences: look and feel, how long chats are summarized
+/// ([modelSummaries]) and whether runs continue in the background
+/// ([backgroundRuns]).
 ///
 /// Kept apart from `PreferencesStore` on purpose: that interface is a shared
 /// contract with other implementations (Drift, test fakes), and adding
@@ -18,6 +19,8 @@ final class UiSettings {
     this.dynamicColor = true,
     this.themeMode = ThemeMode.system,
     this.modelSummaries = false,
+    this.backgroundRuns = true,
+    this.backgroundNotificationsAsked = false,
   });
 
   final bool hapticsEnabled;
@@ -34,12 +37,32 @@ final class UiSettings {
   /// compaction without opt-in).
   final bool modelSummaries;
 
-  UiSettings copyWith({bool? hapticsEnabled, bool? dynamicColor, ThemeMode? themeMode, bool? modelSummaries}) =>
+  /// "Keep working in the background": a reply or agent run that is in
+  /// flight when the user leaves Sherpa keeps going (Android foreground
+  /// service, iOS background task / continued processing). On by default
+  /// (PLAN §7 decision 2: Android yes; iOS continues remote models, and
+  /// on-device models on iPhone pause until Sherpa is back either way).
+  final bool backgroundRuns;
+
+  /// The chat already asked whether Sherpa may post notifications for
+  /// background runs (Android 13+), so it doesn't ask again.
+  final bool backgroundNotificationsAsked;
+
+  UiSettings copyWith({
+    bool? hapticsEnabled,
+    bool? dynamicColor,
+    ThemeMode? themeMode,
+    bool? modelSummaries,
+    bool? backgroundRuns,
+    bool? backgroundNotificationsAsked,
+  }) =>
       UiSettings(
         hapticsEnabled: hapticsEnabled ?? this.hapticsEnabled,
         dynamicColor: dynamicColor ?? this.dynamicColor,
         themeMode: themeMode ?? this.themeMode,
         modelSummaries: modelSummaries ?? this.modelSummaries,
+        backgroundRuns: backgroundRuns ?? this.backgroundRuns,
+        backgroundNotificationsAsked: backgroundNotificationsAsked ?? this.backgroundNotificationsAsked,
       );
 
   Map<String, Object?> toJson() => {
@@ -47,6 +70,8 @@ final class UiSettings {
         'dynamicColor': dynamicColor,
         'themeMode': themeMode.name,
         'modelSummaries': modelSummaries,
+        'backgroundRuns': backgroundRuns,
+        'backgroundNotificationsAsked': backgroundNotificationsAsked,
       };
 
   static UiSettings fromJson(Map<String, Object?> j) => UiSettings(
@@ -54,6 +79,8 @@ final class UiSettings {
         dynamicColor: j['dynamicColor'] as bool? ?? true,
         themeMode: ThemeMode.values.asNameMap()[j['themeMode']] ?? ThemeMode.system,
         modelSummaries: j['modelSummaries'] as bool? ?? false,
+        backgroundRuns: j['backgroundRuns'] as bool? ?? true,
+        backgroundNotificationsAsked: j['backgroundNotificationsAsked'] as bool? ?? false,
       );
 
   @override
@@ -62,10 +89,13 @@ final class UiSettings {
       other.hapticsEnabled == hapticsEnabled &&
       other.dynamicColor == dynamicColor &&
       other.themeMode == themeMode &&
-      other.modelSummaries == modelSummaries;
+      other.modelSummaries == modelSummaries &&
+      other.backgroundRuns == backgroundRuns &&
+      other.backgroundNotificationsAsked == backgroundNotificationsAsked;
 
   @override
-  int get hashCode => Object.hash(hapticsEnabled, dynamicColor, themeMode, modelSummaries);
+  int get hashCode =>
+      Object.hash(hapticsEnabled, dynamicColor, themeMode, modelSummaries, backgroundRuns, backgroundNotificationsAsked);
 }
 
 /// Persistence for [UiSettings]. `toJson`/`fromJson` make a key-value or

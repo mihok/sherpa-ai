@@ -18,7 +18,7 @@ memory pressure, and is a full **MCP** host: tools, resources, prompts, elicitat
 | M3 | Context manager: pruning, compaction, handoff, memory monitor | Core ladder landed; UI and memory plugin pending |
 | M4 | MCP client, OAuth, approvals, tool budget | In progress (MCP client and OAuth packages landed) |
 | M5 | MCP Apps host, elicitation, sampling | Planned |
-| M6 | Polish, accessibility, background execution, perf budgets, evals | Planned |
+| M6 | Polish, accessibility, background execution, perf budgets, evals | In progress ([accessibility audit](docs/milestones/M6-accessibility.md) done outside chat, home and the shell) |
 
 ## Repository layout
 
@@ -51,6 +51,42 @@ cd app && flutter run      # run the app
 
 The database is encrypted with SQLite3MultipleCiphers. The `hooks.user_defines` block that selects it must
 stay in the **root** `pubspec.yaml`; in a member pubspec it is silently ignored.
+
+### Accessibility
+
+Every screen outside chat, home and the shell is audited by widget tests (M6, see
+[docs/milestones/M6-accessibility.md](docs/milestones/M6-accessibility.md)). The shared helper is
+`app/test/support/a11y_audit.dart`: `auditScreen('name', open)` registers one test per view of the matrix
+(phone 360×740 and tablet 1200×840, text at 1× and 2×, plus phone in dark mode), opens the screen through
+the feature's own rig, and calls `expectAudit`, which checks the screen at the top and after each scroll
+step to its end:
+
+- Flutter's `androidTapTargetGuideline` (48×48), `iOSTapTargetGuideline` (44×44),
+  `labeledTapTargetGuideline` and `textContrastGuideline`;
+- exact text contrast from the colours in the widget tree (`expectExactTextContrast`), because the
+  pixel-sampling contrast guideline misreads 12 px text at 1× (anti-aliasing, a neighbouring surface or a
+  button outline wins its sample). Where it does, the screen lists that view in `pixelContrastSkip` with a
+  `contrastNote`; the exact check still runs there;
+- no RenderFlex overflow (every visible `Row`/`Column` measured) and no exception, so no "A RenderFlex
+  overflowed" report either;
+- every icon-only button has a tooltip, `excludeSemantics` over something tappable keeps the action, and
+  every screen has a heading that isn't read after the text around it.
+
+`test/a11y/` also holds the RTL pass (`rtl_test.dart`), reduced motion for sheets, dialogs, expansion tiles
+and pushed pages (`reduced_motion_test.dart`), focused semantics checks (`semantics_test.dart`) and source
+rules (`source_rules_test.dart`: no hard-coded left/right, every framework animation given
+`motionStyleOf(context)`, headings through `Heading`).
+
+```sh
+cd app
+flutter test --no-pub --concurrency=2 test/a11y                     # the audit and its rules
+flutter test --no-pub --concurrency=2 test/a11y/audit_models_test.dart --plain-name 'downloads'
+```
+
+When you add a screen, add an `auditScreen` line next to its feature's rig and use the design system's
+pieces: `Heading` / `HeadingGroup` for headings, `LiveAnnouncement` for progress that should be announced
+at milestones, `SectionHeader(count:)` for list lengths, `motionStyleOf(context)` / `MotionPageRoute` for
+anything that animates.
 
 ## License
 

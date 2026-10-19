@@ -46,6 +46,7 @@ final class ModelCapabilities {
     this.parallelToolCalls = true,
     this.vision = false,
     this.audioInput = false,
+    this.pdfInput = false,
     this.reasoning = ReasoningSupport.none,
     this.quantization,
     this.parameterCount,
@@ -64,6 +65,7 @@ final class ModelCapabilities {
         parallelToolCalls: j.opt<bool>('parallelToolCalls') ?? true,
         vision: j.opt<bool>('vision') ?? false,
         audioInput: j.opt<bool>('audioInput') ?? false,
+        pdfInput: j.opt<bool>('pdfInput') ?? false,
         reasoning: ReasoningSupport.values.byName(j.opt<String>('reasoning') ?? 'none'),
         quantization: j.opt<String>('quantization'),
         parameterCount: j.optInt('parameterCount'),
@@ -83,6 +85,12 @@ final class ModelCapabilities {
   final bool parallelToolCalls;
   final bool vision;
   final bool audioInput;
+
+  /// PDFs can be sent as documents (Anthropic `document` blocks, OpenAI
+  /// `file` / `input_file` parts) for the model to read, text and page
+  /// images. False for servers that would reject them; the app refuses to
+  /// attach a PDF unless the chat's model says true.
+  final bool pdfInput;
   final ReasoningSupport reasoning;
   final String? quantization;
   final int? parameterCount;
@@ -101,7 +109,9 @@ final class ModelCapabilities {
     int? maxOutputTokens,
     ToolCallFormat? toolCallFormat,
     bool? vision,
+    bool? pdfInput,
     ReasoningSupport? reasoning,
+    HistoryPolicy? historyPolicy,
   }) =>
       ModelCapabilities(
         contextLength: contextLength ?? this.contextLength,
@@ -110,6 +120,7 @@ final class ModelCapabilities {
         parallelToolCalls: parallelToolCalls,
         vision: vision ?? this.vision,
         audioInput: audioInput,
+        pdfInput: pdfInput ?? this.pdfInput,
         reasoning: reasoning ?? this.reasoning,
         quantization: quantization,
         parameterCount: parameterCount,
@@ -117,7 +128,7 @@ final class ModelCapabilities {
         tokenizerFamily: tokenizerFamily,
         supportsSystemRole: supportsSystemRole,
         supportsPromptCache: supportsPromptCache,
-        historyPolicy: historyPolicy,
+        historyPolicy: historyPolicy ?? this.historyPolicy,
       );
 
   JsonMap toJson() => compact({
@@ -127,6 +138,7 @@ final class ModelCapabilities {
         'parallelToolCalls': parallelToolCalls,
         'vision': vision,
         'audioInput': audioInput,
+        'pdfInput': pdfInput,
         'reasoning': reasoning.name,
         'quantization': quantization,
         'parameterCount': parameterCount,

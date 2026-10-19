@@ -29,6 +29,18 @@ final class FakePlatformBackend implements PlatformBackend {
   final List<String> ended = [];
   bool notifications = true;
 
+  /// What the permission dialog answers; null leaves [notifications] as it
+  /// is (the dialog was dismissed or is not shown).
+  bool? grantOnRequest = true;
+  int permissionRequests = 0;
+
+  /// Posted finished-run notices, oldest first.
+  final List<FinishedNotice> notices = [];
+
+  /// Whether [notifyRunFinished] is supported (false: iOS).
+  bool finishedNoticesSupported = true;
+  int clearedNotices = 0;
+
   final StreamController<PlatformSignal> _signals = StreamController.broadcast();
 
   /// Whether anything listens to [signals] (native registration state).
@@ -73,6 +85,24 @@ final class FakePlatformBackend implements PlatformBackend {
 
   @override
   Future<bool> notificationsPermitted() async => notifications;
+
+  @override
+  Future<bool> requestNotificationsPermission() async {
+    permissionRequests++;
+    final answer = grantOnRequest;
+    if (answer != null) notifications = answer;
+    return notifications;
+  }
+
+  @override
+  Future<bool> notifyRunFinished(FinishedNotice notice) async {
+    if (!finishedNoticesSupported || !notifications) return false;
+    notices.add(notice);
+    return true;
+  }
+
+  @override
+  Future<void> clearFinishedNotices() async => clearedNotices++;
 
   @override
   Future<LeaseResult> beginLease(LeaseRequest request) async {

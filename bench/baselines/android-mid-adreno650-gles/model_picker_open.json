@@ -6,7 +6,7 @@
   "placeholder": true,
   "placeholder_note": "PLACEHOLDER, not measured: no device was available when this was written. The baselines are 60 Hz frame budgets, not measurements, so do not gate against them. bench/app/run_frame_bench.sh sees this flag and writes measured medians instead (keeping margins, min_samples, optional and the note); review and commit those with the perf-rebaseline label.",
   "min_samples": 5,
-  "note": "Reference phone class (R12 §3.10 device matrix): Adreno <= 650, Impeller on the GLES path. Physical device, median of 5 launches; relative margin +15% with absolute caps of two frames (p90) and four frames (p99) at 60 Hz (R12 §3.8). min_frames is set to 90% of the measured frame count by the first rebaseline.",
+  "note": "Reference phone class (R12 §3.10 device matrix): Adreno <= 650, Impeller on the GLES path. Physical device, median of 5 launches; relative margin +15% with absolute caps of two frames (p90) and four frames (p99) at 60 Hz (R12 §3.8). min_frames is set to 90% of the measured frame count by the first rebaseline. Missed-frame-budget and GC counts are gated with a relative margin and an absolute floor (min_abs_tolerance: a few missed frames or GCs pass even against a zero baseline).",
   "metrics": {
     "average_frame_build_time_millis": {
       "baseline": 4.0,
@@ -37,6 +37,30 @@
       "unit": "ms",
       "max_regression_pct": 15,
       "abs_max": 66.0
+    },
+    "missed_frame_build_budget_count": {
+      "baseline": 0,
+      "unit": "count",
+      "max_regression_pct": 50,
+      "min_abs_tolerance": 3
+    },
+    "missed_frame_rasterizer_budget_count": {
+      "baseline": 0,
+      "unit": "count",
+      "max_regression_pct": 50,
+      "min_abs_tolerance": 3
+    },
+    "new_gen_gc_count": {
+      "baseline": 0,
+      "unit": "count",
+      "max_regression_pct": 50,
+      "min_abs_tolerance": 5
+    },
+    "old_gen_gc_count": {
+      "baseline": 0,
+      "unit": "count",
+      "max_regression_pct": 50,
+      "min_abs_tolerance": 2
     }
   }
 }

@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../design/widgets/section_header.dart';
 import 'presets.dart';
@@ -128,6 +130,7 @@ class _LocalModelsTeaser extends StatelessWidget {
 
   Future<void> _explain(BuildContext context) => showModalBottomSheet<void>(
         context: context,
+        sheetAnimationStyle: motionStyleOf(context),
         builder: (sheet) {
           final t = SherpaTokens.of(sheet);
           final theme = Theme.of(sheet);
@@ -137,7 +140,7 @@ class _LocalModelsTeaser extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Semantics(headingLevel: 2, child: Text('On-device models are next', style: theme.textTheme.titleLarge)),
+                  Heading(level: 2, child: Text('On-device models are next', style: theme.textTheme.titleLarge)),
                   SizedBox(height: t.space.md),
                   Text(
                     'Sherpa will download open models from Hugging Face, check they fit your phone, '

@@ -4,13 +4,16 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_webview/sherpa_webview.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../mcp/input/server_content.dart';
 import '../mcp/input/url_elicitation_sheet.dart' show urlWarnings;
 import '../mcp/widgets/mcp_widgets.dart';
 
 Future<T?> _sheet<T>(BuildContext context, Widget child) => showModalBottomSheet<T>(
       context: context,
+      sheetAnimationStyle: motionStyleOf(context),
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
@@ -64,8 +67,8 @@ Future<ApprovalResponse?> showAppToolApprovalSheet(
     Builder(
       builder: (context) => _SheetBody(
         children: [
-          Semantics(
-            headingLevel: 2,
+          Heading(
+            level: 2,
             child: Text('Allow “${safeServerText(request.tool.displayName, max: 80, keepNewlines: false)}”?', style: theme.textTheme.titleLarge),
           ),
           Text('${tool.name} · ${request.identity.serverName}', style: theme.textTheme.bodySmall),
@@ -103,7 +106,7 @@ Future<bool> showAppMessageSheet(BuildContext context, McpAppMessageRequest requ
     Builder(
       builder: (context) => _SheetBody(
         children: [
-          Semantics(headingLevel: 2, child: Text('Send this message?', style: theme.textTheme.titleLarge)),
+          Heading(level: 2, child: Text('Send this message?', style: theme.textTheme.titleLarge)),
           SizedBox(height: t.space.xs),
           Text(appAttribution(request.identity), style: theme.textTheme.bodyLarge),
           SizedBox(height: t.space.md),
@@ -139,7 +142,7 @@ Future<bool> showAppLinkSheet(BuildContext context, McpAppLinkRequest request) a
     Builder(
       builder: (context) => _SheetBody(
         children: [
-          Semantics(headingLevel: 2, child: Text('Open this link?', style: theme.textTheme.titleLarge)),
+          Heading(level: 2, child: Text('Open this link?', style: theme.textTheme.titleLarge)),
           SizedBox(height: t.space.xs),
           Text(appAttribution(request.identity), style: theme.textTheme.bodyLarge),
           SizedBox(height: t.space.md),
@@ -179,7 +182,7 @@ Future<Set<String>?> showAppNetworkSheet(BuildContext context, McpAppNetworkRequ
     Builder(
       builder: (context) => _SheetBody(
         children: [
-          Semantics(headingLevel: 2, child: Text('Let this view use the internet?', style: theme.textTheme.titleLarge)),
+          Heading(level: 2, child: Text('Let this view use the internet?', style: theme.textTheme.titleLarge)),
           SizedBox(height: t.space.xs),
           Text('Interactive content from ${request.serverName}', style: theme.textTheme.bodyLarge),
           SizedBox(height: t.space.md),

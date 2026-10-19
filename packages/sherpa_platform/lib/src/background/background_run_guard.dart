@@ -25,12 +25,17 @@ import '../messages.pigeon.dart';
 ///
 /// When the OS ends a lease first, [BackgroundLease.expired] completes and
 /// the app should checkpoint and stop.
+///
+/// When a run finishes while the app is away, [notifyFinished] posts a
+/// one-off notice on Android (iOS: unsupported, returns false; end the
+/// lease with a final `text` so the Live Activity says it instead).
 final class BackgroundRunGuard {
   BackgroundRunGuard({
     PlatformBackend? backend,
     this.iosContinuedTaskPrefix,
     this.iosRequestGpu = false,
     this.androidChannelName,
+    this.androidFinishedChannelName,
     this.androidSmallIcon,
     this.updateInterval = const Duration(seconds: 1),
     Random? random,
@@ -53,6 +58,9 @@ final class BackgroundRunGuard {
   /// User-visible notification channel name (Android).
   final String? androidChannelName;
 
+  /// User-visible name of the channel [notifyFinished] posts on (Android).
+  final String? androidFinishedChannelName;
+
   /// Drawable resource name for the notification's status-bar icon.
   final String? androidSmallIcon;
 
@@ -67,6 +75,41 @@ final class BackgroundRunGuard {
   /// Android: POST_NOTIFICATIONS granted and notifications enabled. iOS:
   /// always true (no notification is involved).
   Future<bool> notificationsPermitted() => _backend.notificationsPermitted();
+
+  /// Android 13+: shows the system POST_NOTIFICATIONS dialog (call it after
+  /// explaining why, from a user action) and completes with
+  /// [notificationsPermitted]. Elsewhere it completes at once. Never throws.
+  Future<bool> requestNotificationsPermission() async {
+    try {
+      return await _backend.requestNotificationsPermission();
+    } on Object {
+      return false;
+    }
+  }
+
+  /// Posts a dismissible "finished" notice that opens the app (Android,
+  /// when permitted); a notice with the same [tag] replaces the earlier
+  /// one. Returns false when nothing was posted (iOS, no permission, a
+  /// platform error). Put no message content in [title] or [text].
+  Future<bool> notifyFinished({required String tag, required String title, required String text}) async {
+    try {
+      return await _backend.notifyRunFinished(
+        FinishedNotice(tag: tag, title: title, text: text, androidChannelName: androidFinishedChannelName),
+      );
+    } on Object {
+      return false;
+    }
+  }
+
+  /// Removes the [notifyFinished] notices still showing (the app is back
+  /// on screen). Never throws.
+  Future<void> clearFinishedNotices() async {
+    try {
+      await _backend.clearFinishedNotices();
+    } on Object {
+      // Best effort.
+    }
+  }
 
   /// Starts a lease. Never throws for OS refusals: check
   /// [BackgroundLease.granted] and [BackgroundLease.error].
@@ -191,14 +234,23 @@ final class BackgroundLease {
     if (p != null && _active) unawaited(update(progress: p.progress, text: p.text));
   }
 
-  /// Releases the lease. Idempotent.
-  Future<void> end() async {
+  /// Releases the lease. Idempotent. A final [text] / [progress] is sent
+  /// first, past the throttle (an iOS Live Activity shows it as the task
+  /// completes); without them pending updates are dropped.
+  Future<void> end({double? progress, String? text}) async {
     if (!_active) return;
     _active = false;
     _cooldown?.cancel();
     _cooldown = null;
     _pending = null;
     try {
+      if (progress != null || text != null) {
+        try {
+          await _guard._backend.updateLease(id, progress?.clamp(0.0, 1.0), text);
+        } on Object {
+          // The end matters more than its last words.
+        }
+      }
       await _guard._backend.endLease(id);
     } finally {
       await _guard._forget(id);

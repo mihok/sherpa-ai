@@ -2,6 +2,7 @@
 //
 //   sherpa_engine_tests --model /opt/models/Qwen3-0.6B-Q4_K_M.gguf [--lora adapter.gguf] [--threads N]
 //                       [--filter substring] [--bench-json out.json]
+//                       [--vlm vision-model.gguf --mmproj projector.gguf]   (vision test; skipped without)
 //
 // Every test prints PASS/FAIL; a benchmark table (TTFT, prefill/decode tok/s with and without the prefix
 // cache and speculation, plus se_bench) is printed at the end - those numbers seed tools/bench budgets.
@@ -11,6 +12,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -34,6 +36,7 @@ std::string g_tmp = "/tmp";
 int         g_threads = 4;
 std::string g_filter;
 std::string g_bench_json;
+std::string g_vlm, g_mmproj;
 
 int g_failed = 0, g_passed = 0;
 std::vector<std::string> g_failures;
@@ -903,6 +906,193 @@ void test_lora() {
   se_session_free(s);
 }
 
+// ---- media input (ABI 1.1) ----------------------------------------------------------------------------
+
+// A w x h 24-bit BMP of one colour (stb_image reads BMP; no encoder needed).
+std::string solid_bmp(int w, int h, uint8_t r, uint8_t g, uint8_t b) {
+  const int row = (w * 3 + 3) & ~3;
+  const uint32_t data = (uint32_t) (row * h), size = 54 + data;
+  std::string f(size, '\0');
+  auto u32 = [&](size_t o, uint32_t v) { for (int i = 0; i < 4; ++i) f[o + i] = (char) ((v >> (8 * i)) & 0xFF); };
+  auto u16 = [&](size_t o, uint16_t v) { f[o] = (char) (v & 0xFF); f[o + 1] = (char) (v >> 8); };
+  f[0] = 'B'; f[1] = 'M';
+  u32(2, size); u32(10, 54); u32(14, 40); u32(18, (uint32_t) w); u32(22, (uint32_t) h);
+  u16(26, 1); u16(28, 24); u32(34, data);
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const size_t o = 54 + (size_t) y * row + (size_t) x * 3;
+      f[o] = (char) b; f[o + 1] = (char) g; f[o + 2] = (char) r;
+    }
+  }
+  return f;
+}
+
+std::string b64(const std::string & in) {
+  static const char * k = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  size_t i = 0;
+  for (; i + 2 < in.size(); i += 3) {
+    const uint32_t v = ((uint8_t) in[i] << 16) | ((uint8_t) in[i + 1] << 8) | (uint8_t) in[i + 2];
+    out += k[v >> 18]; out += k[(v >> 12) & 63]; out += k[(v >> 6) & 63]; out += k[v & 63];
+  }
+  if (i + 1 == in.size()) {
+    const uint32_t v = (uint8_t) in[i] << 16;
+    out += k[v >> 18]; out += k[(v >> 12) & 63]; out += "==";
+  } else if (i + 2 == in.size()) {
+    const uint32_t v = ((uint8_t) in[i] << 16) | ((uint8_t) in[i + 1] << 8);
+    out += k[v >> 18]; out += k[(v >> 12) & 63]; out += k[(v >> 6) & 63]; out += '=';
+  }
+  return out;
+}
+
+json image_part(const std::string & bytes, const char * mime = "image/bmp") {
+  return json{{"type", "image_url"}, {"image_url", {{"url", std::string("data:") + mime + ";base64," + b64(bytes)}}}};
+}
+
+json user_with(const std::string & text, const json & media_part) {
+  return json{{"role", "user"}, {"content", json::array({json{{"type", "text"}, {"text", text}}, media_part})}};
+}
+
+// Without a projector, image parts are refused synchronously and nothing starts.
+void test_media_refused() {
+  const json info = json::parse(model_info(g_m));
+  EXPECT(info["mmproj"].value("image_input", false) == false);
+  EXPECT_EQ(se_abi_minor(), SE_ABI_MINOR);
+  const json sys = json::parse(jget(se_system_info_json));
+  EXPECT_EQ(sys["abi_minor"].get<int>(), (int) SE_ABI_MINOR);
+  se_session * s = make_session(g_m);
+  const std::string red = solid_bmp(32, 32, 255, 0, 0);
+  const json req = chat({user_with("What colour is this?", image_part(red))});
+  uint32_t id = 0;
+  EXPECT_EQ(se_generate_start(s, req.dump().c_str(), &id), SE_ERR_UNSUPPORTED);
+  EXPECT(std::string(se_last_error()).find("projector") != std::string::npos ||
+         std::string(se_last_error()).find("multimodal") != std::string::npos);
+  EXPECT(se_count_chat_tokens(g_m, req.dump().c_str()) == SE_ERR_UNSUPPORTED);
+
+  se_media media{sizeof(se_media), SE_MEDIA_IMAGE, reinterpret_cast<const uint8_t *>(red.data()), red.size()};
+  se_generate_params gp;
+  se_generate_params_init(&gp);
+  const std::string by_index = chat({user_with("What colour is this?", json{{"type", "media"}, {"index", 0}})}).dump();
+  gp.request_json = by_index.c_str();
+  gp.media = &media;
+  gp.n_media = 1;
+  EXPECT_EQ(se_generate_start_ex(s, &gp, &id), SE_ERR_UNSUPPORTED);
+  gp.n_media = -1;
+  EXPECT_EQ(se_generate_start_ex(s, &gp, &id), SE_ERR_INVALID_ARG);
+  gp.n_media = 1;
+  media.struct_size = 4;  // older than any se_media
+  EXPECT_EQ(se_generate_start_ex(s, &gp, &id), SE_ERR_ABI);
+  // Text-only requests through the _ex entry point behave like se_generate_start.
+  se_generate_params plain;
+  se_generate_params_init(&plain);
+  json t = chat({msg("user", "Say OK.")});
+  t["max_tokens"] = 4;
+  t["enable_thinking"] = false;
+  const std::string tj = t.dump();
+  plain.request_json = tj.c_str();
+  EXPECT_OK(se_generate_start_ex(s, &plain, &id));
+  const Gen g = drain(s);
+  EXPECT(g.finish == SE_FINISH_STOP || g.finish == SE_FINISH_LENGTH);
+  se_session_free(s);
+}
+
+std::string lower(std::string s) {
+  for (auto & c : s) c = (char) std::tolower((unsigned char) c);
+  return s;
+}
+
+// A real VLM (e.g. SmolVLM-256M + its mmproj): images go through mtmd, are cached by content and survive
+// state files. Skipped unless --vlm and --mmproj are given.
+void test_vision() {
+  if (g_vlm.empty() || g_mmproj.empty()) {
+    std::printf("    SKIP: pass --vlm and --mmproj\n");
+    return;
+  }
+  se_model_params mp;
+  se_model_params_init(&mp);
+  mp.mmproj_path = g_mmproj.c_str();
+  se_model * vm = nullptr;
+  EXPECT_OK(se_model_load(g_vlm.c_str(), &mp, &vm));
+  const json info = json::parse(model_info(vm));
+  EXPECT(info["mmproj"]["loaded"] == true);
+  EXPECT(info["mmproj"]["vision"] == true);
+  EXPECT(info["mmproj"]["image_input"] == true);
+  se_session * s = make_session(vm, [](se_session_params & p) { p.n_ctx = 4096; });
+
+  const std::string red = solid_bmp(64, 64, 230, 20, 20), blue = solid_bmp(64, 64, 20, 40, 230);
+  const char * q = "What colour is this image? Answer with one word.";
+  json a = chat({user_with(q, image_part(red))});
+  a["max_tokens"] = 8;
+  const int32_t counted = se_count_chat_tokens(vm, a.dump().c_str());
+  const Gen ga = run(s, a);
+  EXPECT(ga.errors.empty());
+  EXPECT_EQ(ga.prompt, counted);   // the counter sees the image's KV cells
+  EXPECT(ga.prompt > 64);          // the image is in the prompt, not just its marker
+  EXPECT_EQ(ga.cached, 0);
+  std::printf("    red image: %d prompt tokens, reply \"%s\" (ttft %.0f ms)\n", ga.prompt, ga.text.c_str(), ga.ttft);
+  EXPECT(lower(ga.text).find("red") != std::string::npos);
+
+  // A follow-up with a second image reuses the first image's KV (no re-encode) and sees the new one.
+  json b = a;
+  b["messages"].push_back(json::parse(ga.final_json));
+  b["messages"].push_back(user_with(q, image_part(blue)));
+  const Gen gb = run(s, b);
+  EXPECT(gb.errors.empty());
+  EXPECT(gb.cached >= ga.prompt - 1);
+  std::printf("    blue image: %d prompt, %d cached, reply \"%s\"\n", gb.prompt, gb.cached, gb.text.c_str());
+  EXPECT(lower(gb.text).find("blue") != std::string::npos);
+
+  // The same red image by se_media index matches the data-URL request's cache (content-addressed).
+  se_media media{sizeof(se_media), SE_MEDIA_IMAGE, reinterpret_cast<const uint8_t *>(red.data()), red.size()};
+  json c = chat({user_with(q, json{{"type", "media"}, {"index", 0}})});
+  c["max_tokens"] = 8;
+  const std::string cj = c.dump();
+  se_generate_params gp;
+  se_generate_params_init(&gp);
+  gp.request_json = cj.c_str();
+  gp.media = &media;
+  gp.n_media = 1;
+  uint32_t id = 0;
+  EXPECT_OK(se_generate_start_ex(s, &gp, &id));
+  const Gen gc = drain(s);
+  EXPECT(gc.errors.empty());
+  EXPECT_EQ(gc.prompt, ga.prompt);
+  EXPECT_EQ(gc.cached, ga.prompt - 1);
+  EXPECT_EQ(gc.text, ga.text);
+
+  // A different image at the same place re-decodes from the image on.
+  json d = chat({user_with(q, image_part(blue))});
+  d["max_tokens"] = 8;
+  const Gen gd = run(s, d);
+  EXPECT(gd.cached < ga.prompt - 1);
+
+  // State files keep the image positions: a restored session reuses them.
+  const std::string path = g_tmp + "/sherpa-vision.state";
+  EXPECT_OK(se_state_save(s, path.c_str()));
+  se_session * s2 = make_session(vm, [](se_session_params & p) { p.n_ctx = 4096; });
+  int32_t n = 0;
+  EXPECT_OK(se_state_load(s2, path.c_str(), &n));
+  EXPECT(n >= gd.prompt);
+  const Gen ge = run(s2, d);
+  EXPECT_EQ(ge.cached, gd.prompt - 1);
+  EXPECT_EQ(ge.text, gd.text);
+  std::remove(path.c_str());
+
+  // Bytes that are not an image fail the generation (ERROR + FINISH(error)); the session stays usable.
+  json bad = chat({user_with(q, image_part("definitely not an image", "image/png"))});
+  const Gen gbad = run(s2, bad);
+  EXPECT_EQ(gbad.finish, SE_FINISH_ERROR);
+  EXPECT(!gbad.errors.empty() && gbad.errors[0].find("SE_ERR_INVALID_ARG") == 0);
+  json url = chat({user_with(q, json{{"type", "image_url"}, {"image_url", {{"url", "https://example.com/a.png"}}}})});
+  EXPECT_EQ(se_generate_start(s2, url.dump().c_str(), &id), SE_ERR_INVALID_ARG);  // no fetching
+  const Gen again = run(s2, d);
+  EXPECT_EQ(again.text, gd.text);
+
+  se_session_free(s2);
+  se_session_free(s);
+  se_model_free(vm);
+}
+
 void test_handles_lifetime() {
   // Free the model before its session: the session keeps the weights alive.
   se_model * m = nullptr;
@@ -974,6 +1164,8 @@ int main(int argc, char ** argv) {
     else if (a == "--filter") g_filter = next();
     else if (a == "--tmp") g_tmp = next();
     else if (a == "--bench-json") g_bench_json = next();
+    else if (a == "--vlm") g_vlm = next();
+    else if (a == "--mmproj") g_mmproj = next();
   }
   if (g_model.empty()) {
     std::fprintf(stderr, "usage: %s --model model.gguf [--lora adapter.gguf] [--threads N] [--filter name]\n", argv[0]);
@@ -1008,6 +1200,7 @@ int main(int argc, char ** argv) {
       {"backpressure", test_backpressure},     {"kv_quant", test_kv_quant},
       {"speculative", test_speculative},       {"speculative_draft", test_speculative_draft},
       {"lora", test_lora},
+      {"media_refused", test_media_refused}, {"vision", test_vision},
       {"handles_lifetime", test_handles_lifetime}, {"bench_api", test_bench_api},
   };
   for (const auto & t : tests) {

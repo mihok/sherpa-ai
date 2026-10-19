@@ -5,8 +5,10 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_inference/sherpa_inference.dart' show EngineCrashReport, InferencePhase;
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
@@ -65,8 +67,9 @@ class _ModelLibraryScreenState extends ConsumerState<ModelLibraryScreen> {
           haptics.error();
           await showDialog<void>(
             context: context,
+            animationStyle: motionStyleOf(context),
             builder: (context) => AlertDialog(
-              title: const Text("Couldn't add this file"),
+              title: const Heading(child: Text("Couldn't add this file")),
               content: Text(reason),
               actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK'))],
             ),
@@ -93,7 +96,7 @@ class _ModelLibraryScreenState extends ConsumerState<ModelLibraryScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Semantics(headingLevel: 1, child: const Text('Models & downloads')),
+        title: Heading(level: 1, child: const Text('Models & downloads')),
         bottom: _importing
             ? const PreferredSize(preferredSize: Size.fromHeight(4), child: LinearProgressIndicator(semanticsLabel: 'Adding model'))
             : null,
@@ -137,7 +140,7 @@ class _ModelLibraryScreenState extends ConsumerState<ModelLibraryScreen> {
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => context.go(Routes.downloads),
               ),
-              const SectionHeader('On this phone'),
+              SectionHeader('On this phone', count: list.isEmpty ? null : _models(list.length)),
               if (models.isLoading && list.isEmpty)
                 const Padding(padding: EdgeInsets.only(top: 48), child: LoadingState(label: 'Loading your models…'))
               else if (list.isEmpty)
@@ -152,6 +155,8 @@ class _ModelLibraryScreenState extends ConsumerState<ModelLibraryScreen> {
     );
   }
 }
+
+String _models(int n) => n == 1 ? '1 model' : '$n models';
 
 class _UsageHeader extends StatelessWidget {
   const _UsageHeader({required this.models, required this.freeBytes});
@@ -235,7 +240,7 @@ class LocalEngineBanner extends ConsumerWidget {
                 border: Border.all(color: color.withValues(alpha: 0.5)),
               ),
               child: Padding(
-                padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.sm, t.space.sm),
+                padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, t.space.md, t.space.sm, t.space.sm),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -423,7 +428,7 @@ class LibraryModelTile extends ConsumerWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(color: scheme.surfaceContainerLow, borderRadius: BorderRadius.circular(t.radius.lg)),
         child: Padding(
-          padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.xs, t.space.md),
+          padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, t.space.md, t.space.xs, t.space.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -433,11 +438,16 @@ class LibraryModelTile extends ConsumerWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(m.displayName, style: theme.textTheme.titleSmall, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        Text(
+                          m.displayName,
+                          style: theme.textTheme.titleSmall,
+                          maxLines: scaledMaxLines(context),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         if (m.repo != null)
                           Text(m.repo!,
                               style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                              maxLines: 1,
+                              maxLines: scaledMaxLines(context),
                               overflow: TextOverflow.ellipsis),
                       ],
                     ),
@@ -451,7 +461,7 @@ class LibraryModelTile extends ConsumerWidget {
               ),
               SizedBox(height: t.space.sm),
               Padding(
-                padding: EdgeInsets.only(right: t.space.md),
+                padding: EdgeInsetsDirectional.only(end: t.space.md),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -513,8 +523,9 @@ class LibraryModelTile extends ConsumerWidget {
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
     final ok = await showDialog<bool>(
       context: context,
+      animationStyle: motionStyleOf(context),
       builder: (context) => AlertDialog(
-        title: Text('Delete ${model.displayName}?'),
+        title: Heading(child: Text('Delete ${model.displayName}?')),
         content: Text('This frees ${formatBytes(model.sizeBytes)}. You can download it again later.'),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),

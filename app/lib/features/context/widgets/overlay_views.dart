@@ -3,6 +3,7 @@ import 'package:sherpa_core/sherpa_core.dart';
 
 import '../../../design/semantic_palette.dart';
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../home/relative_time.dart';
 import '../state/context_actions.dart';
 import '../state/format.dart';
@@ -77,7 +78,7 @@ class OverlayCard extends StatelessWidget {
     return Card(
       margin: EdgeInsets.symmetric(horizontal: t.space.lg, vertical: t.space.xs),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.sm, t.space.xs),
+        padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, t.space.md, t.space.sm, t.space.xs),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -87,7 +88,7 @@ class OverlayCard extends StatelessWidget {
                   'Saves ${groupDigits(saved)} tokens. ${diff.reason}',
               excludeSemantics: true,
               child: Padding(
-                padding: EdgeInsets.only(right: t.space.sm),
+                padding: EdgeInsetsDirectional.only(end: t.space.sm),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -354,7 +355,6 @@ class RecommendationBanner extends StatelessWidget {
       padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.lg, 0),
       child: Semantics(
         container: true,
-        liveRegion: true,
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: color.withValues(alpha: kSemanticTintAlpha),
@@ -363,49 +363,55 @@ class RecommendationBanner extends StatelessWidget {
           ),
           child: Padding(
             padding: EdgeInsets.all(t.space.lg),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Icon(stop ? Icons.block_rounded : Icons.lightbulb_outline_rounded, color: color),
-                    SizedBox(width: t.space.sm),
-                    Expanded(
-                      child: Semantics(
-                        headingLevel: 2,
-                        child: Text(
-                          stop ? 'This chat no longer fits' : 'Consider continuing in a new chat',
-                          style: theme.textTheme.titleMedium,
+            child: HeadingGroup(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Icon(stop ? Icons.block_rounded : Icons.lightbulb_outline_rounded, color: color),
+                      SizedBox(width: t.space.sm),
+                      Expanded(
+                        // The title announces itself when the banner appears.
+                        child: Heading(
+                          level: 2,
+                          child: Semantics(
+                            liveRegion: true,
+                            child: Text(
+                              stop ? 'This chat no longer fits' : 'Consider continuing in a new chat',
+                              style: theme.textTheme.titleMedium,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: t.space.sm),
-                Text(recommendation.message, style: theme.textTheme.bodyMedium),
-                SizedBox(height: t.space.md),
-                Wrap(
-                  spacing: t.space.sm,
-                  runSpacing: t.space.sm,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: onHandOff,
-                      icon: const Icon(Icons.move_up_rounded),
-                      label: const Text('Hand off…'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: onCompact,
-                      icon: const Icon(Icons.compress_rounded),
-                      label: const Text('Compact'),
-                    ),
-                    TextButton.icon(
-                      onPressed: onSwitchModel,
-                      icon: const Icon(Icons.swap_horiz_rounded),
-                      label: const Text('Switch model'),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                  SizedBox(height: t.space.sm),
+                  Text(recommendation.message, style: theme.textTheme.bodyMedium),
+                  SizedBox(height: t.space.md),
+                  Wrap(
+                    spacing: t.space.sm,
+                    runSpacing: t.space.sm,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: onHandOff,
+                        icon: const Icon(Icons.move_up_rounded),
+                        label: const Text('Hand off…'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: onCompact,
+                        icon: const Icon(Icons.compress_rounded),
+                        label: const Text('Compact'),
+                      ),
+                      TextButton.icon(
+                        onPressed: onSwitchModel,
+                        icon: const Icon(Icons.swap_horiz_rounded),
+                        label: const Text('Switch model'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),

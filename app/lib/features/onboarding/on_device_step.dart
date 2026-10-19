@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../design/widgets/section_header.dart';
 import '../../services/downloads/downloads.dart';
@@ -16,6 +17,7 @@ import '../models/state/local_model_fit.dart';
 import '../models/state/models_providers.dart';
 import '../models/state/platform_models_providers.dart';
 import '../models/state/variant_download.dart';
+import '../models/widgets/download_announcement.dart';
 import '../models/widgets/format.dart';
 import '../models/widgets/pills.dart';
 import 'onboarding_scaffold.dart';
@@ -256,9 +258,8 @@ class _JobProgress extends StatelessWidget {
       JobPhase.paused => 'Paused.',
       _ => 'Downloading: ${formatBytesOf(job.bytesDone, job.totalBytes)}',
     };
-    return Semantics(
-      liveRegion: true,
-      container: true,
+    return LiveAnnouncement(
+      message: downloadAnnouncement('The model', p, progress: job.progress),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -321,7 +322,10 @@ class _SystemModelTile extends ConsumerWidget {
             ],
             if (download.running) ...[
               SizedBox(height: t.space.sm),
-              LinearProgressIndicator(value: download.fraction, semanticsLabel: 'Downloading Gemini Nano'),
+              LiveAnnouncement(
+                message: 'Gemini Nano: downloading, ${progressMilestone(download.fraction)}%',
+                child: LinearProgressIndicator(value: download.fraction, semanticsLabel: 'Downloading Gemini Nano'),
+              ),
             ],
             SizedBox(height: t.space.sm),
             if (o.selectable)

@@ -128,9 +128,53 @@ void main() {
     expect(lease.notificationsVisible, isFalse);
   });
 
+  test('end() with final words sends them past the throttle, then ends', () async {
+    final lease = await guard().begin(title: 't', reason: 'r');
+    await lease.update(text: 'working');
+    await lease.update(text: 'dropped'); // pending behind the cooldown
+    await lease.end(progress: 1, text: 'Reply ready');
+    expect(backend.updates.map((u) => u.text), ['working', 'Reply ready']);
+    expect(backend.updates.last.progress, 1.0);
+    expect(backend.ended, [lease.id]);
+    await lease.end(text: 'again');
+    expect(backend.updates, hasLength(2), reason: 'idempotent');
+  });
+
+  test('permission request and finished notices pass through, never throwing', () async {
+    backend
+      ..notifications = false
+      ..grantOnRequest = true;
+    final g = BackgroundRunGuard(backend: backend, androidFinishedChannelName: 'Finished replies');
+    expect(await g.requestNotificationsPermission(), isTrue);
+    expect(backend.permissionRequests, 1);
+    expect(await g.notifyFinished(tag: 's1', title: 'Reply ready', text: 'Open Sherpa to read it.'), isTrue);
+    expect(backend.notices.single.androidChannelName, 'Finished replies');
+    expect(backend.notices.single.tag, 's1');
+    await g.clearFinishedNotices();
+    expect(backend.clearedNotices, 1);
+    backend.finishedNoticesSupported = false;
+    expect(await g.notifyFinished(tag: 's1', title: 't', text: 'x'), isFalse);
+    final failing = BackgroundRunGuard(backend: _Throwing());
+    expect(await failing.requestNotificationsPermission(), isFalse);
+    expect(await failing.notifyFinished(tag: 't', title: 't', text: 't'), isFalse);
+    await failing.clearFinishedNotices();
+  });
+
+  test('unsupported platforms refuse leases and post nothing', () async {
+    const unsupported = UnsupportedPlatformBackend();
+    expect(await unsupported.requestNotificationsPermission(), isFalse);
+    expect(await unsupported.notifyRunFinished(FinishedNotice(tag: 't', title: 't', text: 't')), isFalse);
+  });
+
   test('unsupported platforms refuse leases', () async {
     final lease = await BackgroundRunGuard(backend: const UnsupportedPlatformBackend()).begin(title: 't', reason: 'r');
     expect(lease.granted, isFalse);
     expect(lease.mode, LeaseMode.none);
   });
+}
+
+/// Every notification call fails (a missing plugin, a channel error).
+final class _Throwing implements PlatformBackend {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => Future<Never>.error(StateError('channel-error'));
 }

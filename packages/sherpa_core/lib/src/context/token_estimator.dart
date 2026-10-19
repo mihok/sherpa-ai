@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../model/content.dart';
 import '../model/message.dart';
@@ -38,11 +39,29 @@ const int _perImageTokens = 1100;
 /// Audio clips: a flat cost (providers that take audio bill per second).
 const int _perAudioTokens = 600;
 
-/// Embedded PDFs go out as document blocks (Anthropic: about 1,500–3,000
-/// text tokens per page plus a page image). Estimated from the size at
-/// roughly 20 KB and 2,500 tokens per page, i.e. one token per 8 bytes,
-/// never below one image.
-const int _bytesPerDocumentToken = 8;
+/// Tokens per PDF page. Both APIs that read PDFs send each page's text AND
+/// an image of the page:
+/// * Anthropic: "Each page typically uses 1,500–3,000 tokens per page
+///   depending on content density", plus image tokens because "each page is
+///   converted into an image" (platform.claude.com/docs/en/build-with-claude/
+///   pdf-support, "Estimate your costs", read 2026-10-19);
+/// * OpenAI: "the API extracts both text and page images and sends both to
+///   the model" (developers.openai.com/api/docs/guides/pdf-files), no
+///   per-page figure.
+/// So a page is the documented low end of the text (1,500) plus one page
+/// image at this estimator's flat image cost.
+const int pdfTokensPerPage = 1500 + _perImageTokens;
+
+/// When the page count is unknown (compressed page tree): pages from the
+/// size at roughly 20 KB per page, capped at Anthropic's 100-page request
+/// limit (for windows under 1M tokens) so a large scan is not priced as
+/// thousands of pages.
+const int _bytesPerPdfPage = 20 * 1024;
+const int _maxPdfPages = 100;
+
+/// A PDF referenced by file with no recorded size or page count (older
+/// transcripts): assume a short document rather than nothing.
+const int _unknownPdfPages = 5;
 
 /// Token counter used when no native tokenizer is available.
 ///
@@ -115,25 +134,49 @@ final class HeuristicTokenCounter implements TokenCounter {
         AudioPart() => _perAudioTokens,
         ResourceLinkPart(:final uri, :final name, :final title, :final description) =>
           countText(uri) + countText(title ?? name ?? '') + countText(description ?? '') + 4,
-        EmbeddedResourcePart(:final uri, :final mimeType, :final text, :final blob) =>
-          countText(uri) + 4 + (text != null ? countText(text) : _blobTokens(mimeType, blob)),
+        EmbeddedResourcePart(:final uri, :final text) =>
+          countText(uri) + 4 + (text != null ? countText(text) : _binaryTokens(p)),
         UiResourcePart() => 0,
         UnknownPart(:final raw) => countText(jsonEncode(raw)),
         // Nested messages-in-results do not exist; count anything else as JSON.
         _ => countText(jsonEncode(p.toJson())),
       };
 
-  static int _blobTokens(String? mimeType, List<int>? blob) {
-    if (blob == null) return 0;
-    final mime = (mimeType ?? '').toLowerCase();
+  /// A binary resource: inline ([EmbeddedResourcePart.blob]) or a file
+  /// reference the app inlines at send time (only size and pages known).
+  static int _binaryTokens(EmbeddedResourcePart p) {
+    final mime = (p.mimeType ?? '').toLowerCase();
+    final blob = p.blob;
+    if (mime == 'application/pdf') return pdfTokens(pages: p.pages ?? _pages(blob), bytes: p.size ?? blob?.length);
+    if (blob == null && p.size == null) return 0; // nothing behind it: providers send a short note
     if (mime.startsWith('image/')) return _perImageTokens;
     if (mime.startsWith('audio/')) return _perAudioTokens;
-    if (mime == 'application/pdf') {
-      final n = (blob.length / _bytesPerDocumentToken).ceil();
-      return n < _perImageTokens ? _perImageTokens : n;
-    }
     // Other binary content is replaced by a one-line note.
     return 12;
+  }
+
+  /// Page counts of inline PDFs, so a transcript re-counted on every turn
+  /// does not rescan the bytes.
+  static final Expando<int> _pageCache = Expando('pdfPages');
+
+  static int? _pages(Uint8List? blob) {
+    if (blob == null) return null;
+    final cached = _pageCache[blob];
+    if (cached != null) return cached < 0 ? null : cached;
+    final n = pdfPageCount(blob);
+    _pageCache[blob] = n ?? -1;
+    return n;
+  }
+
+  /// Estimated tokens of a PDF with [pages] pages (else [bytes] bytes, else
+  /// unknown): [pdfTokensPerPage] per page.
+  static int pdfTokens({int? pages, int? bytes}) {
+    final n = pages != null && pages > 0
+        ? pages
+        : bytes != null && bytes > 0
+            ? (bytes / _bytesPerPdfPage).ceil().clamp(1, _maxPdfPages)
+            : _unknownPdfPages;
+    return n * pdfTokensPerPage;
   }
 
   @override

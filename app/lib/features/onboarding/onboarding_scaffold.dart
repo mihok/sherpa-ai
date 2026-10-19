@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 
 /// Layout shared by onboarding steps: a scrolling, width-capped body and a
 /// bottom action area that stays put, so the primary button is always in
@@ -29,7 +30,7 @@ class OnboardingStepLayout extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (title != null)
-                      Semantics(headingLevel: 1, child: Text(title!, style: theme.textTheme.headlineSmall)),
+                      Heading(level: 1, child: Text(title!, style: theme.textTheme.headlineSmall)),
                     if (lead != null) ...[
                       SizedBox(height: t.space.sm),
                       Text(lead!, style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant)),

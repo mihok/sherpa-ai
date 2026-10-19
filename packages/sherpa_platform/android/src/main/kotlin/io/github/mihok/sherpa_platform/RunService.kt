@@ -144,6 +144,10 @@ class RunService : Service() {
   companion object {
     private const val NOTIFICATION_ID = 0x5e7a
     private const val CHANNEL_ID = "sherpa_background_runs"
+
+    /** Finished-run notices: one per tag (chat), on their own channel. */
+    private const val FINISHED_ID = 0x5e7b
+    private const val FINISHED_CHANNEL_ID = "sherpa_finished_runs"
     private const val START_TIMEOUT_MS = 8000L
 
     private val main = Handler(Looper.getMainLooper())
@@ -198,6 +202,42 @@ class RunService : Service() {
       if (leases.isEmpty()) running.stopNow() else running.refreshNotification()
     }
 
+    /**
+     * Posts a dismissible "reply ready" notice that opens the app; false
+     * when notifications are not permitted. DEFAULT importance (unlike the
+     * silent ongoing channel): the person left and asked to be told.
+     */
+    fun notifyFinished(context: Context, notice: FinishedNotice): Boolean {
+      if (!notificationsPermitted(context)) return false
+      val nm = context.getSystemService(NotificationManager::class.java) ?: return false
+      nm.createNotificationChannel(NotificationChannel(
+        FINISHED_CHANNEL_ID,
+        notice.androidChannelName ?: "Finished replies",
+        NotificationManager.IMPORTANCE_DEFAULT,
+      ))
+      val b = Notification.Builder(context, FINISHED_CHANNEL_ID)
+        .setSmallIcon(iconId(context))
+        .setContentTitle(notice.title)
+        .setContentText(notice.text)
+        .setAutoCancel(true)
+        .setCategory(Notification.CATEGORY_STATUS)
+        .setPublicVersion(publicVersion(context, FINISHED_CHANNEL_ID))
+      launchIntent(context)?.let { b.setContentIntent(it) }
+      return try {
+        nm.notify(notice.tag, FINISHED_ID, b.build())
+        true
+      } catch (e: SecurityException) {
+        false
+      }
+    }
+
+    fun clearFinished(context: Context) {
+      val nm = context.getSystemService(NotificationManager::class.java) ?: return
+      for (n in nm.activeNotifications) {
+        if (n.id == FINISHED_ID) nm.cancel(n.tag, n.id)
+      }
+    }
+
     fun notificationsPermitted(context: Context): Boolean {
       val nm = context.getSystemService(NotificationManager::class.java) ?: return false
       if (!nm.areNotificationsEnabled()) return false
@@ -232,13 +272,17 @@ class RunService : Service() {
         .setOnlyAlertOnce(true)
         .setCategory(Notification.CATEGORY_PROGRESS)
       if (Build.VERSION.SDK_INT >= 31) {
-        // Android 12 defers FGS notifications by up to 10 s; a 3-minute
-        // reply should say at once why the app is still running.
-        b.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        // Android 12+ may defer an FGS notification by up to 10 s. The app
+        // begins a lease with every reply (it must, while visible), so most
+        // leases end within seconds with the user still in the app: the
+        // deferral keeps those from flashing a notification, and one that
+        // outlives it appears soon after the user leaves.
+        b.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_DEFERRED)
       }
-      context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
-        b.setContentIntent(PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
-      }
+      launchIntent(context)?.let { b.setContentIntent(it) }
+      // The title names the chat, which people may not want on the lock
+      // screen: when they hide sensitive content, it shows only the app.
+      b.setPublicVersion(publicVersion(context, CHANNEL_ID))
       val p = lease?.progress
       if (lease != null && (p != null || lease.long)) {
         val pct = ((p ?: 0.0) * 100).roundToInt().coerceIn(0, 100)
@@ -255,6 +299,18 @@ class RunService : Service() {
       }
       return b.build()
     }
+
+    private fun launchIntent(context: Context): PendingIntent? =
+      context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+        PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+      }
+
+    /** What a locked screen that hides sensitive content shows: the app's name. */
+    private fun publicVersion(context: Context, channel: String): Notification =
+      Notification.Builder(context, channel)
+        .setSmallIcon(iconId(context))
+        .setContentTitle(context.applicationInfo.loadLabel(context.packageManager))
+        .build()
 
     private fun iconId(context: Context): Int {
       smallIcon?.let { name ->

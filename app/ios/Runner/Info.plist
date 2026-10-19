@@ -36,6 +36,21 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Sherpa connects to model and tool servers you run on your local network.</string>
+	<!-- Background runs ("Keep working in the background", sherpa_platform's
+	     BackgroundRunGuard): on iOS 26+ an agent run continues as a
+	     BGContinuedProcessingTask (system Live Activity) submitted as
+	     io.github.mihok.sherpa.agentrun.<lease id> while Sherpa is visible.
+	     Apple requires the wildcard form <bundle id>.<context>.* here. No
+	     UIBackgroundModes entry: continued-processing tasks need none
+	     (WWDC25 session 227; "processing" is for BGProcessingTask, which
+	     Sherpa doesn't use), and a reply that only needs seconds uses
+	     beginBackgroundTask, which needs none either. Background GPU would
+	     add the Background GPU Access capability (not requested: no iPhone
+	     supports it, and local inference pauses in the background). -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>io.github.mihok.sherpa.agentrun.*</string>
+	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_inference/sherpa_inference.dart';
 
+import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../../design/widgets/section_header.dart';
 import '../../models/widgets/format.dart';
 import '../../models/widgets/pills.dart';
@@ -159,81 +161,83 @@ class ConfigEditor extends StatelessWidget {
     void set(LabConfig n) => onChanged?.call(n);
     final enabled = onChanged != null;
     return PerfCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Semantics(headingLevel: 2, child: Text('Setting $side', style: theme.textTheme.titleSmall)),
-          SizedBox(height: t.space.md),
-          FieldGrid(children: [
-            (w) => LabDropdown<int>(
-                  width: w,
-                  label: 'Threads',
-                  value: c.nThreads,
-                  options: [(0, 'Auto'), for (var i = 1; i <= maxThreads; i++) (i, '$i')],
-                  onChanged: enabled ? (v) => set(c.copyWith(nThreads: v)) : null,
-                ),
-            (w) => LabDropdown<KvType>(
-                  width: w,
-                  label: 'KV cache',
-                  value: c.kv,
-                  options: [for (final k in const [KvType.f16, KvType.q8_0, KvType.q4_0]) (k, k.label)],
-                  onChanged: enabled ? (v) => set(c.copyWith(kv: v)) : null,
-                ),
-            (w) => LabDropdown<int>(
-                  width: w,
-                  label: 'Batch',
-                  value: c.nBatch,
-                  options: const [(0, 'Auto'), (64, '64'), (128, '128'), (256, '256'), (512, '512'), (1024, '1024'), (2048, '2048')],
-                  onChanged: enabled ? (v) => set(c.copyWith(nBatch: v)) : null,
-                ),
-            (w) => LabDropdown<int>(
-                  width: w,
-                  label: 'Micro-batch',
-                  value: c.nUbatch,
-                  options: const [(0, 'Auto'), (32, '32'), (64, '64'), (128, '128'), (256, '256'), (512, '512')],
-                  onChanged: enabled ? (v) => set(c.copyWith(nUbatch: v)) : null,
-                ),
-            (w) => LabDropdown<FlashAttention>(
-                  width: w,
-                  label: 'Flash attention',
-                  value: c.flashAttention,
-                  options: const [(FlashAttention.auto, 'Auto'), (FlashAttention.on, 'On'), (FlashAttention.off, 'Off')],
-                  onChanged: enabled ? (v) => set(c.copyWith(flashAttention: v)) : null,
-                ),
-            (w) => LabDropdown<SpeculativeChoice>(
-                  width: w,
-                  label: 'Speculative decoding',
-                  value: c.speculative,
-                  options: [
-                    for (final s in SpeculativeChoice.values)
-                      if (s != SpeculativeChoice.draft || drafts.isNotEmpty || c.speculative == s) (s, s.label),
-                  ],
-                  onChanged: enabled
-                      ? (v) => set(v == SpeculativeChoice.draft
-                          ? c.copyWith(speculative: v, draftModelId: c.draftModelId ?? drafts.firstOrNull?.modelId)
-                          : c.copyWith(speculative: v, clearDraft: true))
-                      : null,
-                ),
-            if (c.speculative == SpeculativeChoice.draft && drafts.isNotEmpty)
-              (w) => LabDropdown<String>(
+      child: HeadingGroup(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Heading(level: 2, child: Text('Setting $side', style: theme.textTheme.titleSmall)),
+            SizedBox(height: t.space.md),
+            FieldGrid(children: [
+              (w) => LabDropdown<int>(
                     width: w,
-                    label: 'Draft model',
-                    value: c.draftModelId ?? drafts.first.modelId,
-                    options: [for (final d in drafts) (d.modelId, d.label)],
-                    onChanged: enabled ? (v) => set(c.copyWith(draftModelId: v)) : null,
+                    label: 'Threads',
+                    value: c.nThreads,
+                    options: [(0, 'Auto'), for (var i = 1; i <= maxThreads; i++) (i, '$i')],
+                    onChanged: enabled ? (v) => set(c.copyWith(nThreads: v)) : null,
                   ),
-          ]),
-          SizedBox(height: t.space.sm),
-          FitLine(fit: fit),
-          if (c.kv == KvType.q4_0 && o.toolCalling) ...[
-            SizedBox(height: t.space.xs),
-            LabNote(
-              'A q4_0 KV cache can make tool calls less reliable on small models.',
-              icon: Icons.warning_amber_rounded,
-              color: t.semantic.warning,
-            ),
+              (w) => LabDropdown<KvType>(
+                    width: w,
+                    label: 'KV cache',
+                    value: c.kv,
+                    options: [for (final k in const [KvType.f16, KvType.q8_0, KvType.q4_0]) (k, k.label)],
+                    onChanged: enabled ? (v) => set(c.copyWith(kv: v)) : null,
+                  ),
+              (w) => LabDropdown<int>(
+                    width: w,
+                    label: 'Batch',
+                    value: c.nBatch,
+                    options: const [(0, 'Auto'), (64, '64'), (128, '128'), (256, '256'), (512, '512'), (1024, '1024'), (2048, '2048')],
+                    onChanged: enabled ? (v) => set(c.copyWith(nBatch: v)) : null,
+                  ),
+              (w) => LabDropdown<int>(
+                    width: w,
+                    label: 'Micro-batch',
+                    value: c.nUbatch,
+                    options: const [(0, 'Auto'), (32, '32'), (64, '64'), (128, '128'), (256, '256'), (512, '512')],
+                    onChanged: enabled ? (v) => set(c.copyWith(nUbatch: v)) : null,
+                  ),
+              (w) => LabDropdown<FlashAttention>(
+                    width: w,
+                    label: 'Flash attention',
+                    value: c.flashAttention,
+                    options: const [(FlashAttention.auto, 'Auto'), (FlashAttention.on, 'On'), (FlashAttention.off, 'Off')],
+                    onChanged: enabled ? (v) => set(c.copyWith(flashAttention: v)) : null,
+                  ),
+              (w) => LabDropdown<SpeculativeChoice>(
+                    width: w,
+                    label: 'Speculative decoding',
+                    value: c.speculative,
+                    options: [
+                      for (final s in SpeculativeChoice.values)
+                        if (s != SpeculativeChoice.draft || drafts.isNotEmpty || c.speculative == s) (s, s.label),
+                    ],
+                    onChanged: enabled
+                        ? (v) => set(v == SpeculativeChoice.draft
+                            ? c.copyWith(speculative: v, draftModelId: c.draftModelId ?? drafts.firstOrNull?.modelId)
+                            : c.copyWith(speculative: v, clearDraft: true))
+                        : null,
+                  ),
+              if (c.speculative == SpeculativeChoice.draft && drafts.isNotEmpty)
+                (w) => LabDropdown<String>(
+                      width: w,
+                      label: 'Draft model',
+                      value: c.draftModelId ?? drafts.first.modelId,
+                      options: [for (final d in drafts) (d.modelId, d.label)],
+                      onChanged: enabled ? (v) => set(c.copyWith(draftModelId: v)) : null,
+                    ),
+            ]),
+            SizedBox(height: t.space.sm),
+            FitLine(fit: fit),
+            if (c.kv == KvType.q4_0 && o.toolCalling) ...[
+              SizedBox(height: t.space.xs),
+              LabNote(
+                'A q4_0 KV cache can make tool calls less reliable on small models.',
+                icon: Icons.warning_amber_rounded,
+                color: t.semantic.warning,
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -394,8 +398,9 @@ class AbResultView extends ConsumerWidget {
     if (w.kv == KvType.q4_0 && overview.toolCalling) {
       final ok = await showDialog<bool>(
         context: context,
+        animationStyle: motionStyleOf(context),
         builder: (context) => AlertDialog(
-          title: const Text('Use a q4_0 KV cache?'),
+          title: const Heading(child: Text('Use a q4_0 KV cache?')),
           content: const Text('It is faster and smaller, but small models make more mistakes in tool calls with it.'),
           actions: [
             TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),

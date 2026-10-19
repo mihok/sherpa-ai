@@ -125,18 +125,21 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             ? null
             : AppBar(
                 leading: BackButton(onPressed: _back),
-                title: Text('Step $stepIndex of $steps'),
+                // Steps swap in place (no route change), so the new step
+                // is announced here.
+                title: Semantics(liveRegion: true, child: Text('Step $stepIndex of $steps')),
                 actions: [TextButton(onPressed: () => unawaited(_skip()), child: const Text('Skip'))],
                 bottom: PreferredSize(
                   preferredSize: const Size.fromHeight(4),
-                  child: Semantics(
-                    label: 'Setup progress',
-                    value: 'Step $stepIndex of $steps',
-                    child: TweenAnimationBuilder<double>(
-                      tween: Tween(end: stepIndex / steps),
-                      duration: motion.medium,
-                      curve: motion.standard,
-                      builder: (context, v, _) => LinearProgressIndicator(value: v),
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween(end: stepIndex / steps),
+                    duration: motion.medium,
+                    curve: motion.standard,
+                    // The value must stay a number (progress bar role); the
+                    // step goes in the label.
+                    builder: (context, v, _) => LinearProgressIndicator(
+                      value: v,
+                      semanticsLabel: 'Setup progress, step $stepIndex of $steps',
                     ),
                   ),
                 ),

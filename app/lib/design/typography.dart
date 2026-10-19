@@ -24,3 +24,12 @@ extension SherpaTextStyles on TextTheme {
   TextStyle get metric => (labelMedium ?? const TextStyle()).copyWith(fontFeatures: _tabular);
   TextStyle get metricLarge => (titleMedium ?? const TextStyle()).copyWith(fontFeatures: _tabular);
 }
+
+/// The user's text scale is past 1.3: rows that sit side by side at 1×
+/// should stack, and one-line names may take a few.
+bool isLargeText(BuildContext context) => MediaQuery.textScalerOf(context).scale(10) > 13;
+
+/// [normal] lines at ordinary text sizes, [large] once [isLargeText]: names
+/// and titles that fit on one line at 1× would otherwise be cut to a few
+/// letters at 2× on a phone.
+int scaledMaxLines(BuildContext context, {int normal = 1, int large = 3}) => isLargeText(context) ? large : normal;

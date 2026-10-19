@@ -8,13 +8,17 @@ import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 import 'package:sherpa_webview/sherpa_webview.dart' show McpAppModelContext;
 
-import '../../../services/inference/local_model_provider.dart' show kLocalProviderName;
+import '../../../services/background/background_copy.dart' show expectedChatTitle;
+import '../../../services/background/background_providers.dart';
+import '../../../services/background/run_activity.dart';
+import '../../../services/inference/on_device_ids.dart' show isOnDeviceProviderId, onDeviceProviderIds, onDeviceProviderName;
 import '../../../services/mcp/composer_sources.dart';
 import '../../../state/providers.dart';
 import '../../../state/services.dart';
 import '../../../state/ui_preferences.dart';
 import '../../apps/state/apps_providers.dart';
 import '../../context/state/context_actions.dart';
+import '../../diagnostics/app_error_ring.dart';
 import '../../mcp/state/mcp_providers.dart';
 import '../attachments/attachment_policy.dart';
 import '../attachments/attachment_store.dart';
@@ -60,7 +64,13 @@ enum BranchDirection { previous, next }
 ///   "draft" and "finished"), and the path is re-read from the store at the
 ///   start and end of every run to reconcile.
 /// * No action throws: failures become [ChatViewState.error] with copy and
-///   actions the user can act on.
+///   actions the user can act on. Each is also recorded, by type and code
+///   only, in the diagnostics error ring ([AppErrorRing], source `chat`).
+/// * Every run is registered with [RunActivity], which keeps it alive when
+///   the user leaves the app (a foreground service / background task),
+///   says what it does in the notification, and asks the chat to stop it
+///   with a checkpoint when the OS ends the background time first: the
+///   chat then says so and offers Continue ([kBackgroundPausedNotice]).
 class ChatController extends Notifier<ChatViewState> {
   ChatController(this.sessionId);
 
@@ -75,6 +85,14 @@ class ChatController extends Notifier<ChatViewState> {
   late ChatPlatformActions _platform;
   late UiApprovalHandler _approvals;
   late AgentConfig _config;
+  late RunActivity _activity;
+  late AppErrorRing _errors;
+
+  /// The current run's registration with [_activity].
+  BackgroundRun? _background;
+
+  /// The current run was stopped because the background time ended.
+  bool _pausedForBackground = false;
 
   AgentRunner? _runner;
   ModelChoice? _runnerChoice;
@@ -149,6 +167,8 @@ class ChatController extends Notifier<ChatViewState> {
     _frames = ref.read(chatFrameSchedulerProvider);
     _platform = ref.read(chatPlatformProvider);
     _config = ref.read(chatAgentConfigProvider);
+    _activity = ref.read(runActivityProvider);
+    _errors = ref.read(appErrorRingProvider);
     try {
       _prefs = ref.read(preferencesProvider);
     } on Object {
@@ -421,7 +441,7 @@ class ChatController extends Notifier<ChatViewState> {
 
   /// Regenerates the reply [assistantMessageId] belongs to from its parent,
   /// keeping the old reply as a sibling branch ("‹ 2/2 ›").
-  Future<void> retry(String assistantMessageId) async {
+  Future<void> retry(String assistantMessageId, {bool long = false}) async {
     if (_runActive) return;
     final message = await _message(assistantMessageId);
     final parentId = message?.parentId;
@@ -433,8 +453,9 @@ class ChatController extends Notifier<ChatViewState> {
       anchorAt: _itemIndexOf(assistantMessageId),
       keepThrough: parentId,
       userTurn: true,
+      long: long,
       open: (runner) => runner.regenerate(sessionId, fromMessageId: parentId),
-      again: () => retry(assistantMessageId),
+      again: () => retry(assistantMessageId, long: long),
     );
   }
 
@@ -445,8 +466,9 @@ class ChatController extends Notifier<ChatViewState> {
   ///
   /// "Stopped" counts as partial: after Stop during the text that follows a
   /// tool step, only that step is regenerated, so the tools that already
-  /// ran are kept and never executed a second time.
-  Future<void> retryLast() async {
+  /// ran are kept and never executed a second time. [long]: the user is
+  /// continuing an agent run (see [continueRun]).
+  Future<void> retryLast({bool long = false}) async {
     if (_runActive) return;
     final leaf = _path.isEmpty ? null : _path.last;
     if (leaf == null) return;
@@ -454,27 +476,35 @@ class ChatController extends Notifier<ChatViewState> {
       final partial = leaf.finishReason == FinishReason.error.name ||
           leaf.finishReason == FinishReason.cancelled.name ||
           leaf.metadata['error'] != null;
-      if (partial) return retry(leaf.id);
+      if (partial) return retry(leaf.id, long: long);
       final turn = _turnContaining(leaf.id);
-      return retry(turn?.firstMessageId ?? leaf.id);
+      return retry(turn?.firstMessageId ?? leaf.id, long: long);
     }
     await _launch(
       anchorAt: state.items.length,
       userTurn: true,
+      long: long,
       open: (runner) => runner.regenerate(sessionId, fromMessageId: leaf.id),
-      again: retryLast,
+      again: () => retryLast(long: long),
     );
   }
 
-  /// Continues a run that stopped at the step limit, from its last tool
-  /// results, without inventing a user message.
+  /// Continues a run that stopped at the step limit, or one stopped because
+  /// Sherpa's background time ended ([kBackgroundPausedNotice]), from its
+  /// last tool results (a cut-off reply is regenerated from where it
+  /// started, keeping earlier tool work), without inventing a user
+  /// message. The user asked for more of an agent run, so it may keep a
+  /// long background lease from the start.
   Future<void> continueRun() async {
     if (_runActive || _path.isEmpty) return;
     final leaf = _path.last;
-    if (leaf.role != Role.tool && leaf.role != Role.user) return retryLast();
+    _dismissNotice(kBackgroundPausedNotice);
+    _activity.clearPaused(sessionId);
+    if (leaf.role != Role.tool && leaf.role != Role.user) return retryLast(long: true);
     _dismissNotice('max_steps');
     await _launch(
       anchorAt: _itemIndexOf(leaf.id),
+      long: true,
       open: (runner) => runner.regenerate(sessionId, fromMessageId: leaf.id),
       again: continueRun,
     );
@@ -517,6 +547,7 @@ class ChatController extends Notifier<ChatViewState> {
     String? keepThrough,
     String? keepBefore,
     bool userTurn = false,
+    bool long = false,
   }) async {
     if (_runActive) return;
     final previousPath = _path;
@@ -563,6 +594,7 @@ class ChatController extends Notifier<ChatViewState> {
       }
     } on Object catch (e, st) {
       debugPrint('chat[$sessionId]: $e\n$st');
+      _recordError(e);
       if (_disposed) return;
       rollback(chatErrorFrom(e, model: state.model));
       return;
@@ -579,6 +611,7 @@ class ChatController extends Notifier<ChatViewState> {
       events = await open(runner);
     } on Object catch (e, st) {
       debugPrint('chat[$sessionId]: $e\n$st');
+      _recordError(e);
       if (_disposed) return;
       rollback(chatErrorFrom(e, model: state.model));
       return;
@@ -588,7 +621,7 @@ class ChatController extends Notifier<ChatViewState> {
       rollback(null);
       return;
     }
-    await _run(events, anchorAt: anchorAt);
+    await _run(events, anchorAt: anchorAt, long: long);
   }
 
   /// A new user turn: lets MCP start a new tool segment when servers,
@@ -649,6 +682,7 @@ class ChatController extends Notifier<ChatViewState> {
       await _platform.copyText(text);
       return true;
     } on Object catch (e) {
+      _recordError(e);
       _showError(actionErrorFrom(e, failed: 'copy the text'), again: () => copy(messageId));
       return false;
     }
@@ -697,7 +731,9 @@ class ChatController extends Notifier<ChatViewState> {
       if (_disposed || _runActive) return;
       final last = state.items.isEmpty ? null : state.items.last;
       final anchor = last is AssistantTurnItem ? state.items.length - 1 : state.items.length;
-      await _run(runner.resume(sessionId), anchorAt: anchor);
+      // Resuming an agent run the user asked to continue.
+      final agent = cp.step > 1 || cp.phase == RunPhase.awaitingApproval || cp.phase == RunPhase.executingTools;
+      await _run(runner.resume(sessionId), anchorAt: anchor, long: agent);
     });
   }
 
@@ -734,6 +770,7 @@ class ChatController extends Notifier<ChatViewState> {
       ));
       return id;
     } on Object catch (e) {
+      _recordError(e);
       // Retrying from the card wouldn't navigate; "New chat" goes through
       // the screen, which does.
       _showError(actionErrorFrom(e, failed: 'start a new chat', actions: const [ChatErrorAction.newChat]));
@@ -761,6 +798,7 @@ class ChatController extends Notifier<ChatViewState> {
 
   void dismissNotice(String code) {
     if (_repeatingNotices.contains(code)) _dismissedNotices.add(code);
+    if (code == kBackgroundPausedNotice) _activity.clearPaused(sessionId);
     _dismissNotice(code);
   }
 
@@ -855,10 +893,13 @@ class ChatController extends Notifier<ChatViewState> {
         interrupted: cp != null && !cp.isTerminal && cp.leafMessageId != null
             ? InterruptedRun(phase: cp.phase, updatedAt: cp.updatedAt)
             : null,
+        // Stopped while the chat was closed (its controller was freed).
+        notices: _activity.wasPausedInBackground(sessionId) ? [backgroundPausedNotice()] : state.notices,
       ));
       await _refreshModel(session: session);
       unawaited(_quiet(_estimateBudget));
     } on Object catch (e) {
+      _recordError(e);
       if (_disposed) return;
       _commit(state.copyWith(
         loading: false,
@@ -920,14 +961,14 @@ class ChatController extends Notifier<ChatViewState> {
     } on Object {
       availability = ProviderAvailability.providerMissing;
       final privacy = config == null ? null : privacyForConfig(config);
-      final local = choice.providerId == localProviderId;
+      final onDevice = isOnDeviceProviderId(choice.providerId);
       selection = ModelSelection(
         providerId: choice.providerId,
         modelId: choice.modelId,
-        providerName: config?.displayName ?? (local ? kLocalProviderName : choice.providerId),
+        providerName: config?.displayName ?? onDeviceProviderName(choice.providerId) ?? choice.providerId,
         modelName: previousName ?? choice.modelId,
-        // The built-in provider has no config, but it never leaves the phone.
-        location: privacy?.location ?? (local ? ExecutionLocation.onDevice : ExecutionLocation.remote),
+        // The on-device providers have no config, but never leave the phone.
+        location: privacy?.location ?? (onDevice ? ExecutionLocation.onDevice : ExecutionLocation.remote),
         host: privacy?.host,
       );
     }
@@ -963,13 +1004,20 @@ class ChatController extends Notifier<ChatViewState> {
     if (policy != state.attachmentPolicy) _commit(state.copyWith(attachmentPolicy: policy));
   }
 
-  /// How many models the on-device provider offers (0 when it isn't wired).
+  /// How many models the on-device providers offer together: llama.cpp's
+  /// library, MLX, LiteRT-LM and the system models (Apple Intelligence,
+  /// Gemini Nano). A provider that isn't wired or isn't on this platform
+  /// counts 0.
   Future<int> _onDeviceModelCount() async {
-    try {
-      return (await _registry.models(localProviderId)).length;
-    } on Object {
-      return 0;
+    var n = 0;
+    for (final id in onDeviceProviderIds) {
+      try {
+        n += (await _registry.models(id)).length;
+      } on Object {
+        // Not wired, or not on this platform.
+      }
     }
+    return n;
   }
 
   /// A budget estimate before the first run, so the context ring is
@@ -1120,12 +1168,16 @@ class ChatController extends Notifier<ChatViewState> {
   // ---------------------------------------------------------------------------
   // Running
 
-  Future<void> _run(Stream<AgentEvent> events, {required int anchorAt}) {
+  Future<void> _run(Stream<AgentEvent> events, {required int anchorAt, bool long = false}) {
     final done = Completer<void>();
     _runDone = done;
     _runActive = true;
     _finishing = false;
+    // A Stop (or a background pause) of an earlier run is over; _launch
+    // has already honoured one that came before this run started.
+    _stopping = false;
     _keepAlive ??= ref.keepAlive();
+    _registerBackground(long: long);
     _draft = null;
     _pendingUserId = null;
     _liveTools.clear();
@@ -1167,6 +1219,8 @@ class ChatController extends Notifier<ChatViewState> {
       case RunStarted():
         break;
       case StepStarted(:final step):
+        _background?.update(step: step, phase: RunActivityPhase.working);
+        if (step > 1) _background?.markLong();
         _setStatus(ChatRunStatus.streaming);
         // Results of a step whose calls were all denied are persisted without
         // a ToolCallFinished event; pick them up before the next reply lands.
@@ -1182,10 +1236,17 @@ class ChatController extends Notifier<ChatViewState> {
       case ContextPrepared(:final budget, :final level):
         _flush(base: state.copyWith(budget: budget, contextLevel: level, budgetIsEstimate: false));
       case ModelStreamed(:final messageId, :final event):
+        _background?.update(
+          phase: event is ProviderNotice && event.code == kWaitingForForegroundNotice
+              ? RunActivityPhase.waitingForApp
+              : RunActivityPhase.working,
+        );
         final draft = _draft?.messageId == messageId ? _draft! : (_draft = DraftBuilder(messageId));
         draft.apply(event, _clock.now());
         var notices = state.notices;
-        if (notices.any((n) => n.code == 'retrying')) notices = notices.where((n) => n.code != 'retrying').toList();
+        // Progress lines end when the reply moves on: a retry succeeded, or
+        // the on-device model continues now that Sherpa is back on screen.
+        if (notices.any(_isProgressNotice)) notices = notices.where((n) => !_isProgressNotice(n)).toList();
         final notice = event is ProviderNotice ? providerNoticeFor(event) : null;
         if (notice != null) notices = _withNotice(notices, notice);
         if (!identical(notices, state.notices)) {
@@ -1196,11 +1257,15 @@ class ChatController extends Notifier<ChatViewState> {
       case AssistantMessageCompleted(:final message):
         _onAssistantCompleted(message);
       case ToolApprovalRequested(:final call, :final tool):
+        _background
+          ?..update(phase: RunActivityPhase.awaitingApproval)
+          ..markLong();
         // For a proxy such as `call_tool`, [call] and [tool] are the target.
         _liveTools[call.id] = _toolView(call, ToolRunStatus.awaitingApproval, def: tool);
         _invalidateTools();
         _flush(base: state.copyWith(status: ChatRunStatus.awaitingApproval));
       case ToolApprovalResolved(:final callId, :final approved):
+        _background?.update(phase: approved ? RunActivityPhase.usingTool : RunActivityPhase.working);
         final view = _liveTools[callId];
         if (view != null) {
           _liveTools[callId] = view.copyWith(status: approved ? ToolRunStatus.pending : ToolRunStatus.denied);
@@ -1210,6 +1275,9 @@ class ChatController extends Notifier<ChatViewState> {
           status: state.pendingApproval != null ? ChatRunStatus.awaitingApproval : ChatRunStatus.runningTools,
         ));
       case ToolCallStarted(:final call):
+        _background
+          ?..update(phase: RunActivityPhase.usingTool)
+          ..markLong();
         _liveTools[call.id] = (_liveTools[call.id] ?? _toolView(call, ToolRunStatus.running))
             .copyWith(status: ToolRunStatus.running, startedAt: _clock.now());
         _invalidateTools();
@@ -1276,6 +1344,7 @@ class ChatController extends Notifier<ChatViewState> {
       // Keep what we have; the next open re-reads the store.
     }
     if (_disposed) {
+      _endBackground(e.outcome);
       _completeRun();
       return;
     }
@@ -1288,7 +1357,7 @@ class ChatController extends Notifier<ChatViewState> {
 
     var status = ChatRunStatus.idle;
     ChatError? error;
-    final notices = [...state.notices.where((n) => n.code != 'retrying')];
+    final notices = [...state.notices.where((n) => !_isProgressNotice(n))];
     switch (e.outcome) {
       case RunOutcome.completed:
         if (e.detail == 'reply truncated at max output tokens') {
@@ -1301,7 +1370,10 @@ class ChatController extends Notifier<ChatViewState> {
         unawaited(_platform.haptic(ChatHaptic.runComplete));
       case RunOutcome.cancelled:
         status = ChatRunStatus.cancelled;
-        if (!(e.detail ?? '').startsWith('discarded')) {
+        if (_pausedForBackground || e.detail == kBackgroundPauseReason) {
+          // Checkpointed by the runner; Continue picks it up again.
+          notices.add(backgroundPausedNotice());
+        } else if (!(e.detail ?? '').startsWith('discarded')) {
           notices.add(const ChatNotice(code: 'stopped', message: 'You stopped this response.'));
         }
       case RunOutcome.maxSteps:
@@ -1313,6 +1385,7 @@ class ChatController extends Notifier<ChatViewState> {
         ));
       case RunOutcome.needsUserAction || RunOutcome.failed:
         status = ChatRunStatus.error;
+        _recordError(e.error);
         // A failed run left a reply (or a request) to retry from.
         error = _bindRetry(chatErrorFrom(e.error, outcome: e.outcome, detail: e.detail, model: state.model), retryLast);
     }
@@ -1335,7 +1408,55 @@ class ChatController extends Notifier<ChatViewState> {
       _runnerProvider = null;
       _runnerStale = false;
     }
+    _endBackground(e.outcome);
     _completeRun();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Background execution
+
+  /// Registers the run that starts now with [RunActivity] (the app is
+  /// visible: the user just acted), under the title the chat will have.
+  void _registerBackground({required bool long}) {
+    _background?.end(RunOutcome.cancelled); // a stale one, never expected
+    _pausedForBackground = false;
+    try {
+      _background = _activity.start(
+        sessionId: sessionId,
+        title: expectedChatTitle(state.title, _pendingUser),
+        providerId: _runnerChoice?.providerId ?? state.model?.providerId ?? '',
+        long: long,
+        onExpired: _onBackgroundTimeEnded,
+      );
+    } on Object catch (e) {
+      // Background execution is best effort; the run goes on regardless.
+      debugPrint('chat[$sessionId] (background): ${e.runtimeType}');
+      _background = null;
+    }
+  }
+
+  /// The OS ended Sherpa's background time before the run did: stop it the
+  /// way Stop does (the runner checkpoints the cancelled run and keeps the
+  /// partial reply), but say why and offer Continue.
+  void _onBackgroundTimeEnded(String why) {
+    if (_disposed || !_runActive || _finishing) return;
+    debugPrint('chat[$sessionId]: background time ended ($why); pausing the run');
+    _pausedForBackground = true;
+    _stopping = true;
+    _runner?.cancel(kBackgroundPauseReason);
+    _denyRunApprovals();
+  }
+
+  void _endBackground(RunOutcome outcome) {
+    final run = _background;
+    _background = null;
+    run?.end(outcome);
+  }
+
+  /// Keeps the error's type and code (never its message) for diagnostics.
+  void _recordError(Object? error) {
+    if (error == null || error is CancelledException || error is ChatSetupException) return;
+    _errors.record(error, source: 'chat');
   }
 
   void _completeRun() {
@@ -1411,6 +1532,7 @@ class ChatController extends Notifier<ChatViewState> {
     final seq = ++_reloadSeq;
     final session = await _store.getSession(sessionId);
     if (session == null) return;
+    _background?.title = session.title;
     final leaf = session.activeLeafId;
     final fresh = leaf == null ? <Message>[] : await _store.path(sessionId, leaf);
     // A message we haven't seen means its parent gained a child (send,
@@ -1638,6 +1760,8 @@ class ChatController extends Notifier<ChatViewState> {
     ];
   }
 
+  static bool _isProgressNotice(ChatNotice n) => n.code == 'retrying' || n.code == kWaitingForForegroundNotice;
+
   void _dismissNotice(String code) {
     if (!state.notices.any((n) => n.code == code)) return;
     _commit(state.copyWith(notices: state.notices.where((n) => n.code != code).toList()));
@@ -1670,6 +1794,7 @@ class ChatController extends Notifier<ChatViewState> {
     try {
       await body();
     } on Object catch (e, st) {
+      _recordError(e);
       if (_disposed) return;
       debugPrint('chat[$sessionId]: $e\n$st');
       _showError(
@@ -1683,6 +1808,7 @@ class ChatController extends Notifier<ChatViewState> {
     _disposed = true;
     _approvals.denyAll();
     _runner?.cancel('chat closed');
+    _endBackground(RunOutcome.cancelled);
     unawaited(_runSub?.cancel());
     unawaited(_registrySub?.cancel());
     unawaited(_prefsSub?.cancel());

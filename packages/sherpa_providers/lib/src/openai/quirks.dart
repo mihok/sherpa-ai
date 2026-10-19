@@ -2,6 +2,7 @@ import 'package:meta/meta.dart';
 
 import '../common/openai_messages.dart';
 import '../config.dart';
+import 'known_models.dart';
 
 /// How much of `tool_choice` a server honours.
 enum ToolChoiceSupport {
@@ -72,6 +73,30 @@ enum EffortStyle {
   deepSeekThinking,
 }
 
+/// Whether a server takes PDFs as file content parts (Chat Completions
+/// `{type: file, file: {filename, file_data}}`, Responses `input_file`).
+enum PdfInputSupport {
+  /// Never: the PDF is left out with a notice instead of earning a 400.
+  /// llama.cpp's server rejects any part other than text, image_url,
+  /// input_audio and video ("unsupported content[].type",
+  /// tools/server/server-common.cpp:1199 at the pinned commit; its Responses
+  /// shim says "'input_file' is not supported by llamacpp"). Ollama, vLLM,
+  /// LM Studio, DeepSeek and the HF router document no file part, and an
+  /// unknown server gets the conservative choice.
+  none,
+
+  /// OpenAI: "models with vision capabilities, such as gpt-4o and later"
+  /// (developers.openai.com/api/docs/guides/pdf-files), per
+  /// [openAiModelTakesPdf].
+  openAiModels,
+
+  /// Every model: OpenRouter "works on any model" (native file input, else
+  /// its file-parser plugin, which may bill OCR for scans). The capability
+  /// still comes from the model list (`input_modalities` has `file`), so the
+  /// app only offers PDFs to models that read them natively.
+  all,
+}
+
 /// Per-server differences behind the OpenAI Chat Completions wire format,
 /// captured from R10 §2 and §4. Anything marked UNVERIFIED in the digest
 /// gets the conservative choice here.
@@ -93,6 +118,7 @@ final class ServerQuirks {
     this.topKField,
     this.minPField,
     this.repeatPenaltyField,
+    this.pdfInput = PdfInputSupport.none,
   });
 
   final ServerProfile profile;
@@ -136,6 +162,30 @@ final class ServerQuirks {
   final String? minPField;
   final String? repeatPenaltyField;
 
+  /// Which models may receive PDF file parts.
+  final PdfInputSupport pdfInput;
+
+  /// Why [modelId] on this server cannot be sent a PDF, or null when it can.
+  String? pdfRefusal(String modelId) => switch (pdfInput) {
+        PdfInputSupport.none => '${_serverName(profile)} does not accept PDF file parts',
+        PdfInputSupport.openAiModels => openAiModelTakesPdf(modelId)
+            ? null
+            : '$modelId does not read PDFs (OpenAI reads them on vision models, gpt-4o and later)',
+        PdfInputSupport.all => null,
+      };
+
+  static String _serverName(ServerProfile p) => switch (p) {
+        ServerProfile.openAi => 'OpenAI',
+        ServerProfile.llamaCpp => 'A llama.cpp server',
+        ServerProfile.ollama => 'Ollama',
+        ServerProfile.lmStudio => 'LM Studio',
+        ServerProfile.vllm => 'vLLM',
+        ServerProfile.openRouter => 'OpenRouter',
+        ServerProfile.deepSeek => 'DeepSeek',
+        ServerProfile.huggingFaceRouter => 'The Hugging Face router',
+        ServerProfile.generic || ServerProfile.auto => 'This server',
+      };
+
   /// The quirks for [profile]. [ServerProfile.auto] (not yet detected)
   /// gets the generic set.
   static ServerQuirks of(ServerProfile profile) => _table[profile] ?? _table[ServerProfile.generic]!;
@@ -150,6 +200,7 @@ final class ServerQuirks {
       contextDiscovery: ContextDiscovery.staticTable,
       effort: EffortStyle.reasoningEffort,
       promptCacheKey: true,
+      pdfInput: PdfInputSupport.openAiModels,
     ),
     ServerProfile.llamaCpp: ServerQuirks(
       profile: ServerProfile.llamaCpp,
@@ -211,6 +262,7 @@ final class ServerQuirks {
       topKField: 'top_k',
       minPField: 'min_p',
       repeatPenaltyField: 'repetition_penalty',
+      pdfInput: PdfInputSupport.all,
     ),
     // DeepSeek: only the reasoning replay rule is verified; tool_choice,
     // max-tokens field and usage options follow the OpenAI shape it

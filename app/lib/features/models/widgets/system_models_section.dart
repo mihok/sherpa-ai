@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../../design/widgets/privacy_badge.dart';
 import '../../../design/widgets/section_header.dart';
 import '../../../services/inference/on_device_ids.dart';
@@ -31,21 +32,23 @@ class SystemModelsSection extends ConsumerWidget {
     if (ids.isEmpty) return const SizedBox.shrink();
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SectionHeader('System models'),
-        Padding(
-          padding: EdgeInsets.fromLTRB(t.space.lg, 0, t.space.lg, t.space.sm),
-          child: Text(
-            "Built into this phone's operating system: nothing to download from Hugging Face, and like every "
-            'model on this phone, nothing you type leaves the device. They are small, so they suit short '
-            'questions and quick edits more than long tasks.',
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+    return HeadingGroup(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SectionHeader('System models'),
+          Padding(
+            padding: EdgeInsets.fromLTRB(t.space.lg, 0, t.space.lg, t.space.sm),
+            child: Text(
+              "Built into this phone's operating system: nothing to download from Hugging Face, and like every "
+              'model on this phone, nothing you type leaves the device. They are small, so they suit short '
+              'questions and quick edits more than long tasks.',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
           ),
-        ),
-        for (final id in ids) SystemModelCard(key: ValueKey('system-model-$id'), providerId: id),
-      ],
+          for (final id in ids) SystemModelCard(key: ValueKey('system-model-$id'), providerId: id),
+        ],
+      ),
     );
   }
 }
@@ -116,7 +119,7 @@ class SystemModelCard extends ConsumerWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(color: scheme.surfaceContainerLow, borderRadius: BorderRadius.circular(t.radius.lg)),
         child: Padding(
-          padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.md, t.space.md),
+          padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, t.space.md, t.space.md, t.space.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -146,13 +149,21 @@ class SystemModelCard extends ConsumerWidget {
               ],
               if (download.running) ...[
                 SizedBox(height: t.space.sm),
-                LinearProgressIndicator(value: download.fraction, semanticsLabel: 'Downloading Gemini Nano'),
-                SizedBox(height: t.space.xxs),
-                Text(
-                  download.totalBytes != null && download.downloadedBytes != null
-                      ? '${formatBytesOf(download.downloadedBytes!, download.totalBytes!)} · keep Sherpa open or come back later'
-                      : 'Starting the download…',
-                  style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                LiveAnnouncement(
+                  message: 'Gemini Nano: downloading, ${progressMilestone(download.fraction)}%',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      LinearProgressIndicator(value: download.fraction, semanticsLabel: 'Downloading Gemini Nano'),
+                      SizedBox(height: t.space.xxs),
+                      Text(
+                        download.totalBytes != null && download.downloadedBytes != null
+                            ? '${formatBytesOf(download.downloadedBytes!, download.totalBytes!)} · keep Sherpa open or come back later'
+                            : 'Starting the download…',
+                        style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
                 ),
               ],
               if (download.error != null && !download.running) ...[

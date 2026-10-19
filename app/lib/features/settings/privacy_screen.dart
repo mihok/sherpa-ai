@@ -7,6 +7,7 @@ import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../design/widgets/section_header.dart';
 import '../../routing/routes.dart';
@@ -45,7 +46,7 @@ class PrivacyScreen extends ConsumerWidget {
         const SectionHeader('Where your data goes'),
         _LocationGroup(
           title: 'On this phone',
-          empty: 'No models on this phone yet. Download one in On-device models, or run a server on this phone.',
+          empty: 'No models on this phone yet. Download one in Models & downloads, or run a server on this phone.',
           configs: byLocation[ExecutionLocation.onDevice]!,
           leading: [if (onDevice.isNotEmpty) _OnDeviceModelsTile(models: onDevice)],
         ),
@@ -199,33 +200,35 @@ class _LocationGroup extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.lg, t.space.xs),
-          child: Semantics(headingLevel: 3, child: Text(title, style: theme.textTheme.titleSmall)),
-        ),
-        ...leading,
-        if (configs.isEmpty && leading.isEmpty)
+    return HeadingGroup(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           Padding(
-            padding: EdgeInsets.symmetric(horizontal: t.space.lg, vertical: t.space.xs),
-            child: Text(empty, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.lg, t.space.xs),
+            child: Heading(level: 3, child: Text(title, style: theme.textTheme.titleSmall)),
           ),
-        for (final c in configs)
-          ListTile(
-            title: Text(c.displayName),
-            subtitle: Padding(
-              padding: EdgeInsets.only(top: t.space.xs),
-              child: Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: PrivacyBadge(location: locationOf(c), host: privacyHostLabel(c)),
-              ),
+          ...leading,
+          if (configs.isEmpty && leading.isEmpty)
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: t.space.lg, vertical: t.space.xs),
+              child: Text(empty, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.go(Routes.provider(c.id)),
-          ),
-      ],
+          for (final c in configs)
+            ListTile(
+              title: Text(c.displayName),
+              subtitle: Padding(
+                padding: EdgeInsets.only(top: t.space.xs),
+                child: Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: PrivacyBadge(location: locationOf(c), host: privacyHostLabel(c)),
+                ),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.go(Routes.provider(c.id)),
+            ),
+        ],
+      ),
     );
   }
 }

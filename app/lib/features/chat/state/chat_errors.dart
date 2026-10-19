@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../../services/inference/on_device_ids.dart'
+    show appleFmProviderId, geminiNanoProviderId, isForegroundOnlyProvider, isOnDeviceProviderId, isSystemModelProvider;
 import '../../../state/services.dart' show localProviderId;
 import 'model_selection.dart';
 
@@ -93,10 +95,18 @@ ChatError chatErrorFrom(
   String? detail,
   ModelSelection? model,
 }) {
-  // The built-in provider is called "On this device" in pickers, which
-  // can't start a sentence ("On this device rejected the request").
-  final local = (model?.providerId ?? (error is ProviderException ? error.providerId : null)) == localProviderId;
-  final provider = local ? 'The on-device model' : (model?.providerName ?? 'The provider');
+  // The on-device providers are called "On this device (MLX)" and the like
+  // in pickers, which can't start a sentence ("On this device rejected the
+  // request"); the system models keep their names.
+  final providerId = model?.providerId ?? (error is ProviderException ? error.providerId : null);
+  final local = providerId != null && isOnDeviceProviderId(providerId);
+  final provider = !local
+      ? (model?.providerName ?? 'The provider')
+      : switch (providerId) {
+          appleFmProviderId => 'Apple Intelligence',
+          geminiNanoProviderId => 'Gemini Nano',
+          _ => 'The on-device model',
+        };
   final host = local ? 'the on-device engine' : (model?.host ?? model?.providerName ?? 'the server');
   final modelName = model?.modelName ?? 'this model';
 
@@ -107,16 +117,7 @@ ChatError chatErrorFrom(
       if (error.statusCode != null) 'HTTP ${error.statusCode}',
       error.message,
     ].join(' · ');
-    if (local && error.kind == ProviderErrorKind.unsupported) {
-      return ChatError(
-        kind: ChatErrorKind.localEngine,
-        title: 'On-device models are unavailable: ${_localReason(error.message)}',
-        message: 'Check the models on this phone in the model library, or switch to another model.',
-        actions: const [ChatErrorAction.openModels, ChatErrorAction.changeModel],
-        detail: tech,
-        providerId: localProviderId,
-      );
-    }
+    if (local && error.kind == ProviderErrorKind.unsupported) return _onDeviceUnsupported(error, providerId, tech);
     switch (error.kind) {
       case ProviderErrorKind.auth:
         return ChatError(
@@ -300,6 +301,62 @@ ChatError _overflow(String modelName, String detail) => ChatError(
       actions: const [ChatErrorAction.newChat, ChatErrorAction.changeModel],
       detail: detail,
     );
+
+/// An on-device provider can't serve the request: llama.cpp's engine is
+/// missing, a model doesn't run on this device, the system model is off,
+/// or Gemini Nano refused because Sherpa wasn't on screen. Their messages
+/// are written for people ("Gemini Nano only runs while Sherpa is on
+/// screen: …"), so the card shows them: the first clause as the title,
+/// the rest as the message.
+ChatError _onDeviceUnsupported(ProviderException error, String providerId, String tech) {
+  final message = error.message.trim();
+  // llama.cpp's engine: "On-device inference is unavailable: <reason>".
+  if (providerId == localProviderId && message.toLowerCase().contains('unavailable')) {
+    return ChatError(
+      kind: ChatErrorKind.localEngine,
+      title: 'On-device models are unavailable: ${_localReason(message)}',
+      message: 'Check the models on this phone in the model library, or switch to another model.',
+      actions: const [ChatErrorAction.openModels, ChatErrorAction.changeModel],
+      detail: tech,
+      providerId: providerId,
+    );
+  }
+  final (head, rest) = _splitSentence(message);
+  final foreground = isForegroundOnlyProvider(providerId);
+  return ChatError(
+    kind: ChatErrorKind.localEngine,
+    title: head.isEmpty ? "This on-device model can't run here" : head,
+    message: rest.isNotEmpty
+        ? rest
+        : foreground
+            ? 'Try again while Sherpa is on screen, or switch to another model.'
+            : 'Check the models on this phone in the model library, or switch to another model.',
+    actions: foreground
+        // Works again once Sherpa is on screen.
+        ? const [ChatErrorAction.retry, ChatErrorAction.changeModel]
+        : isSystemModelProvider(providerId)
+            ? const [ChatErrorAction.changeModel, ChatErrorAction.openModels]
+            : const [ChatErrorAction.openModels, ChatErrorAction.changeModel],
+    detail: tech,
+    providerId: providerId,
+  );
+}
+
+/// `Head: rest. More.` → (`Head`, `Rest. More.`); `One sentence. Two.` →
+/// (`One sentence`, `Two.`); a single sentence → (it, '').
+(String, String) _splitSentence(String message) {
+  final colon = message.indexOf(': ');
+  final stop = message.indexOf('. ');
+  final cut = colon > 0 && (stop < 0 || colon < stop) ? colon : stop;
+  if (cut <= 0) return (_trimStop(message), '');
+  final rest = message.substring(cut + 2).trim();
+  return (_trimStop(message.substring(0, cut)), rest.isEmpty ? '' : '${rest[0].toUpperCase()}${rest.substring(1)}');
+}
+
+String _trimStop(String s) {
+  final t = s.trim();
+  return t.endsWith('.') ? t.substring(0, t.length - 1) : t;
+}
 
 /// `On-device inference is unavailable: the engine did not start` → `the
 /// engine did not start` (the engine's own sentence, without its prefix).

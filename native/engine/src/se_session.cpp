@@ -604,25 +604,63 @@ SE_API se_status se_session_memory(se_session * s, se_memory_estimate * out) {
   });
 }
 
+namespace se {
+namespace {
+
+// Hands a parsed request to the session's worker.
+se_status start_job(SessionImpl & S, ChatRequest && req, uint32_t * generation_id_out) {
+  uint32_t id = 0;
+  {
+    std::lock_guard<std::mutex> lk(S.mu);
+    if (S.busy.load()) se::fail(SE_ERR_BUSY, "a generation is already running on this session");
+    S.busy.store(true);
+    S.cancel.store(false);
+    S.job     = std::move(req);
+    id        = S.next_gen_id++;
+    S.job_id  = id;
+    S.has_job = true;
+  }
+  S.cv.notify_all();
+  if (generation_id_out) *generation_id_out = id;
+  return SE_OK;
+}
+
+}  // namespace
+}  // namespace se
+
 SE_API se_status se_generate_start(se_session * s, const char * request_json, uint32_t * generation_id_out) {
   return se::guard(__func__, [&]() -> se_status {
     if (!s) se::fail(SE_ERR_INVALID_ARG, "session is NULL");
     auto & S = *s->impl;
-    se::ChatRequest req = se::parse_chat_request(*S.model, request_json);
-    uint32_t id = 0;
-    {
-      std::lock_guard<std::mutex> lk(S.mu);
-      if (S.busy.load()) se::fail(SE_ERR_BUSY, "a generation is already running on this session");
-      S.busy.store(true);
-      S.cancel.store(false);
-      S.job     = std::move(req);
-      id        = S.next_gen_id++;
-      S.job_id  = id;
-      S.has_job = true;
+    return se::start_job(S, se::parse_chat_request(*S.model, request_json), generation_id_out);
+  });
+}
+
+SE_API se_status se_generate_start_ex(se_session * s, const se_generate_params * p, uint32_t * generation_id_out) {
+  return se::guard(__func__, [&]() -> se_status {
+    if (!s || !p) se::fail(SE_ERR_INVALID_ARG, "session/params is NULL");
+    const se_generate_params gp = se::read_params(p, se_generate_params_init);
+    if (gp.n_media < 0) se::fail(SE_ERR_INVALID_ARG, "n_media must be >= 0");
+    if (gp.n_media > 0 && gp.media == nullptr) se::fail(SE_ERR_INVALID_ARG, "media is NULL");
+    std::vector<se::MediaRef> refs;
+    if (gp.n_media > 0) {
+      // Elements are media[0].struct_size apart; fields a newer caller appended are skipped.
+      const uint32_t stride = gp.media[0].struct_size;
+      constexpr uint32_t k_min = offsetof(se_media, size) + sizeof(uint64_t);
+      if (stride < k_min || stride > (1u << 16)) {
+        se::fail(SE_ERR_ABI, "se_media.struct_size " + std::to_string(stride) + " is invalid (expected " +
+                                 std::to_string(sizeof(se_media)) + ")");
+      }
+      const auto * base = reinterpret_cast<const uint8_t *>(gp.media);
+      for (int32_t i = 0; i < gp.n_media; ++i) {
+        se_media m{};
+        std::memcpy(&m, base + (size_t) i * stride, std::min<size_t>(stride, sizeof m));
+        if (m.size > 0 && m.data == nullptr) se::fail(SE_ERR_INVALID_ARG, "media " + std::to_string(i) + " has no data");
+        refs.push_back({m.data, (size_t) m.size, m.type});
+      }
     }
-    S.cv.notify_all();
-    if (generation_id_out) *generation_id_out = id;
-    return SE_OK;
+    auto & S = *s->impl;
+    return se::start_job(S, se::parse_chat_request(*S.model, gp.request_json, &refs), generation_id_out);
   });
 }
 

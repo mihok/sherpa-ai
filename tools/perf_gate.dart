@@ -8,16 +8,20 @@
 ///
 ///     {"scenario": "markdown_stream", "device_class": "linux-ci", "min_samples": 5,
 ///      "metrics": {"p90_us_per_token": {"baseline": 41.2, "max_regression_pct": 150, "abs_max": 400},
-///                  "tokens_per_s": {"baseline": 61000, "better": "higher", "max_regression_pct": 60, "abs_min": 5000}}}
+///                  "tokens_per_s": {"baseline": 61000, "better": "higher", "max_regression_pct": 60, "abs_min": 5000},
+///                  "missed_frame_build_budget_count": {"baseline": 0, "max_regression_pct": 50, "min_abs_tolerance": 3}}}
 ///
 /// and the matching result `<results>/<scenario>.json` written by
 /// `dart run sherpa_evals:bench`, which holds `samples` and, per metric,
 /// `median` and `runs` (the gate uses the median of the runs).
 ///
 /// * A lower-is-better metric (the default) fails when its median exceeds
-///   `min(abs_max, baseline × (1 + max_regression_pct/100))`; a
-///   higher-is-better one (`"better": "higher"`) fails when it drops below
-///   `max(abs_min, baseline × (1 − max_regression_pct/100))`. A missing
+///   `min(abs_max, baseline + max(baseline × max_regression_pct/100, min_abs_tolerance))`;
+///   a higher-is-better one (`"better": "higher"`) fails when it drops below
+///   `max(abs_min, baseline − max(baseline × max_regression_pct/100, min_abs_tolerance))`.
+///   `min_abs_tolerance` is an absolute floor on the allowed change, in the
+///   metric's unit: without it a relative bound is zero for a zero baseline,
+///   so "0 missed frames" would become a zero-tolerance gate. A missing
 ///   bound is ignored.
 /// * A run with fewer than `min_samples` samples is INVALID (fails), and so
 ///   is a frame-timing run whose `frame_count` is below `min_frames`.
@@ -93,14 +97,18 @@ double? resultValue(Object? metric) {
 double? limitFor(Map<String, Object?> spec) {
   final base = _num(spec['baseline'])!;
   final pct = _num(spec['max_regression_pct']);
+  final floor = _num(spec['min_abs_tolerance']);
   final higher = spec['better'] == 'higher';
+  // The allowed change: the relative margin, but never less than the floor.
+  final relTol = pct == null ? null : (base * pct / 100).abs();
+  final tol = relTol == null ? floor : (floor == null || relTol > floor ? relTol : floor);
   if (higher) {
-    final rel = pct == null ? null : base * (1 - pct / 100);
+    final rel = tol == null ? null : base - tol;
     final abs = _num(spec['abs_min']);
     if (rel == null) return abs;
     return abs == null ? rel : (rel > abs ? rel : abs);
   }
-  final rel = pct == null ? null : base * (1 + pct / 100);
+  final rel = tol == null ? null : base + tol;
   final abs = _num(spec['abs_max']);
   if (rel == null) return abs;
   return abs == null ? rel : (rel < abs ? rel : abs);
@@ -214,15 +222,23 @@ Map<String, Object?> _rebaselined(Map<String, Object?>? old, Map<String, Object?
             final prev = (oldMetrics[e.key] as Map?)?.cast<String, Object?>();
             final value = resultValue(e.value)!;
             final higher = ((e.value as Map?)?['better'] ?? prev?['better']) == 'higher';
+            // The floor is kept from the old baseline, else taken from the
+            // result's suggestion (timeline_to_result.dart sets one for counts).
+            final floor = prev?['min_abs_tolerance'] ?? (e.value as Map?)?['min_abs_tolerance'];
+            // A ×10 cap of a zero baseline would be a zero-tolerance gate again.
+            final Object? cap;
+            if (higher) {
+              cap = prev?['abs_min'] ?? round(value / 10);
+            } else {
+              cap = prev?['abs_max'] ?? (value == 0 ? null : round(value * 10));
+            }
             return {
               'baseline': round(value),
               if (higher) 'better': 'higher',
               if ((e.value as Map?)?['unit'] case final String u when u.isNotEmpty) 'unit': u,
               'max_regression_pct': prev?['max_regression_pct'] ?? (higher ? 60 : 150),
-              if (higher)
-                'abs_min': prev?['abs_min'] ?? round(value / 10)
-              else
-                'abs_max': prev?['abs_max'] ?? round(value * 10),
+              'min_abs_tolerance': ?floor,
+              if (higher) 'abs_min': cap else 'abs_max': ?cap,
             };
           }(),
     },

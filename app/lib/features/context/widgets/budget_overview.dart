@@ -200,6 +200,7 @@ class LevelBar extends StatelessWidget {
             ],
             tick: scheme.onSurfaceVariant,
             radius: t.space.xs,
+            textDirection: Directionality.of(context),
           ),
         ),
       ),
@@ -215,6 +216,7 @@ class _LevelPainter extends CustomPainter {
     required this.zones,
     required this.tick,
     required this.radius,
+    required this.textDirection,
   });
 
   final double ratio;
@@ -224,8 +226,17 @@ class _LevelPainter extends CustomPainter {
   final Color tick;
   final double radius;
 
+  /// The bar fills from the reading start: right to left in RTL.
+  final TextDirection textDirection;
+
   @override
   void paint(Canvas canvas, Size size) {
+    if (textDirection == TextDirection.rtl) {
+      canvas
+        ..save()
+        ..translate(size.width, 0)
+        ..scale(-1, 1);
+    }
     final w = size.width;
     final barTop = size.height * 0.25;
     final barH = size.height * 0.5;
@@ -248,11 +259,16 @@ class _LevelPainter extends CustomPainter {
     for (final s in stops.sublist(1, 4)) {
       canvas.drawLine(Offset(s * w, 0), Offset(s * w, size.height), p);
     }
+    if (textDirection == TextDirection.rtl) canvas.restore();
   }
 
   @override
   bool shouldRepaint(_LevelPainter old) =>
-      old.ratio != ratio || old.thresholds != thresholds || old.fill != fill || old.tick != tick;
+      old.ratio != ratio ||
+      old.thresholds != thresholds ||
+      old.fill != fill ||
+      old.tick != tick ||
+      old.textDirection != textDirection;
 }
 
 class _Legend extends StatelessWidget {
@@ -325,7 +341,7 @@ class _CompositionBar extends StatelessWidget {
               if (w <= 0) break;
               children.add(Container(
                 width: w,
-                margin: EdgeInsets.only(right: t.space.xxs),
+                margin: EdgeInsetsDirectional.only(end: t.space.xxs),
                 decoration: BoxDecoration(
                   color: segmentColor(context, i),
                   borderRadius: BorderRadius.circular(t.space.xxs),

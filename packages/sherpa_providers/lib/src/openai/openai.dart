@@ -8,7 +8,7 @@ export 'chat_stream.dart' show ChatStreamParser;
 export 'detect.dart' show classifyProbes, detectServerProfile, profileForKnownHost;
 export 'discovery.dart' show ModelDiscovery, chatToolsUnavailable;
 export 'endpoint.dart' show rejectsParameter;
-export 'known_models.dart' show KnownModel, lookupKnownModel, openAiKnownModels;
+export 'known_models.dart' show KnownModel, lookupKnownModel, openAiKnownModels, openAiModelTakesPdf;
 export 'quirks.dart';
 export 'responses_provider.dart' show OpenAiResponsesProvider;
 export 'responses_request.dart'

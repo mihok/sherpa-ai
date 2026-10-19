@@ -24,6 +24,7 @@
 
 #if SE_HAVE_MTMD
 #include "mtmd.h"
+#include "mtmd-helper.h"
 #endif
 
 namespace se {
@@ -147,8 +148,12 @@ struct ModelImpl {
   std::string               info_json;           // computed once at load
 #if SE_HAVE_MTMD
   mtmd_context *            mtmd = nullptr;
-  mutable std::mutex        mtmd_mu;             // mtmd_helper_eval_chunks is not thread-safe
+  mutable std::mutex        mtmd_mu;             // mtmd_encode_chunk / its output buffer are not thread-safe
 #endif
+  // Marker the chat template renders for each image (random per load, so user text cannot fake one).
+  std::string               media_marker;
+  bool                      image_input = false; // a vision projector is loaded
+  std::string               mmproj_fingerprint;  // quick fingerprint of the projector GGUF (state identity)
   ~ModelImpl();
 };
 
@@ -169,6 +174,7 @@ common_chat_params apply_template(const ModelImpl & m, const common_chat_templat
 // ---------------------------------------------------------------------------------------------------------
 struct ChatRequest {
   common_chat_templates_inputs inputs;
+  std::vector<std::string>     media;          // encoded images, in the order of their markers in the prompt
   common_params_sampling       sampling;
   common_grammar_type          grammar_type = COMMON_GRAMMAR_TYPE_NONE;
   bool                         tools_active = false;
@@ -179,7 +185,40 @@ struct ChatRequest {
   int32_t                      reasoning_budget = -1;
   bool                         has_seed = false;
 };
-ChatRequest parse_chat_request(const ModelImpl & m, const char * json);
+// External media of se_generate_start_ex ({type:"media",index:N} content parts).
+struct MediaRef {
+  const uint8_t * data = nullptr;
+  size_t          size = 0;
+  int32_t         type = 0;
+};
+ChatRequest parse_chat_request(const ModelImpl & m, const char * json, const std::vector<MediaRef> * ext = nullptr);
+// Replaces image content parts of `messages` with media-marker parts; appends their bytes to `out`.
+void extract_media(const ModelImpl & m, common_json & messages, const std::vector<MediaRef> * ext,
+                   std::vector<std::string> & out);
+
+// A tokenized prompt: one entry per position. Text positions hold token ids; the positions of an image chunk
+// hold its pseudo token (< 0, from the image's SHA-256), so prefix matching treats equal images as equal.
+struct PromptPlan {
+  struct Span {
+    size_t  begin = 0, end = 0;  // positions [begin, end)
+    size_t  n_tokens = 0;        // KV cells (differs from end - begin for M-RoPE models)
+    size_t  chunk = 0;           // index into chunks
+  };
+  std::vector<llama_token> tokens;
+  std::vector<Span>        spans;  // image chunks, ascending
+  size_t                   n_cells = 0;
+#if SE_HAVE_MTMD
+  mtmd::input_chunks_ptr   chunks;
+  const mtmd_input_chunk * chunk(size_t i) const { return mtmd_input_chunks_get(chunks.get(), i); }
+#endif
+  bool has_media() const { return !spans.empty(); }
+  // KV cells taken by positions [0, pos) (pos at a span boundary).
+  size_t cells_before(size_t pos) const;
+};
+constexpr llama_token k_media_token_max = -2;  // pseudo tokens are <= this
+inline bool is_media_token(llama_token t) { return t <= k_media_token_max; }
+// The prompt for a rendered template: plain tokenization, or mtmd chunks when the request has media.
+PromptPlan build_prompt(const ModelImpl & m, const std::string & prompt, const std::vector<std::string> & media);
 
 // ---------------------------------------------------------------------------------------------------------
 // Event ring: bounded single-producer / single-consumer queue. The worker (producer) blocks when it is

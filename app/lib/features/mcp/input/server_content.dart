@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../widgets/mcp_widgets.dart';
 
 /// [s] made safe to show as server text: control and bidi-override
@@ -18,7 +19,14 @@ String safeServerText(String s, {int max = 2000, bool keepNewlines = true}) {
 /// name as the USER configured it (never its self-description), and a
 /// warning when the user has not marked it trusted.
 class InputRequesterHeader extends StatelessWidget {
-  const InputRequesterHeader({super.key, required this.serverName, required this.trusted, required this.title, this.toolName});
+  const InputRequesterHeader({
+    super.key,
+    required this.serverName,
+    required this.trusted,
+    required this.title,
+    this.toolName,
+    this.announceTitle = false,
+  });
 
   final String serverName;
   final bool trusted;
@@ -29,41 +37,49 @@ class InputRequesterHeader extends StatelessWidget {
   /// The tool whose call asked, when known.
   final String? toolName;
 
+  /// The title is a live region: sheets whose title follows their stage
+  /// (sampling: "Writing an answer…" → "Send this answer?") say so.
+  final bool announceTitle;
+
   @override
   Widget build(BuildContext context) {
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Semantics(headingLevel: 2, child: Text(title, style: theme.textTheme.titleLarge)),
-        SizedBox(height: t.space.sm),
-        Row(
-          children: [
-            Icon(Icons.dns_outlined, size: 20, color: theme.colorScheme.primary),
-            SizedBox(width: t.space.sm),
-            Expanded(
-              child: Text.rich(
-                TextSpan(children: [
-                  const TextSpan(text: 'Asked by '),
-                  TextSpan(text: serverName, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  if (toolName != null) TextSpan(text: ' · while running $toolName'),
-                ]),
-                style: theme.textTheme.bodyLarge,
+    return HeadingGroup(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Heading(
+            child: Semantics(liveRegion: announceTitle, child: Text(title, style: theme.textTheme.titleLarge)),
+          ),
+          SizedBox(height: t.space.sm),
+          Row(
+            children: [
+              Icon(Icons.dns_outlined, size: 20, color: theme.colorScheme.primary),
+              SizedBox(width: t.space.sm),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(children: [
+                    const TextSpan(text: 'Asked by '),
+                    TextSpan(text: serverName, style: const TextStyle(fontWeight: FontWeight.w700)),
+                    if (toolName != null) TextSpan(text: ' · while running $toolName'),
+                  ]),
+                  style: theme.textTheme.bodyLarge,
+                ),
               ),
+            ],
+          ),
+          if (!trusted) ...[
+            SizedBox(height: t.space.sm),
+            const NoteBox(
+              tone: NoteTone.warning,
+              icon: Icons.gpp_maybe_outlined,
+              text: "You haven't marked this server as trusted. What it writes below may be wrong or "
+                  'misleading; only continue if you expected this request.',
             ),
           ],
-        ),
-        if (!trusted) ...[
-          SizedBox(height: t.space.sm),
-          const NoteBox(
-            tone: NoteTone.warning,
-            icon: Icons.gpp_maybe_outlined,
-            text: "You haven't marked this server as trusted. What it writes below may be wrong or "
-                'misleading; only continue if you expected this request.',
-          ),
         ],
-      ],
+      ),
     );
   }
 }

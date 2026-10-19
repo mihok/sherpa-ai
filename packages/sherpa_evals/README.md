@@ -189,8 +189,11 @@ Baselines live in `bench/baselines/<device-class>/<scenario>.json`:
 * Each result metric is the **median of N runs** (`bench` writes every run;
   the gate recomputes the median).
 * Lower-is-better (default) fails when the median exceeds
-  `min(abs_max, baseline × (1 + max_regression_pct / 100))`;
-  higher-is-better fails below `max(abs_min, baseline × (1 − pct / 100))`.
+  `min(abs_max, baseline + max(baseline × max_regression_pct / 100, min_abs_tolerance))`;
+  higher-is-better fails below `max(abs_min, baseline − max(baseline × pct / 100, min_abs_tolerance))`.
+  `min_abs_tolerance` (optional) is an absolute floor on the allowed change,
+  for counts whose baseline can be 0 (missed frames, GCs): without it a 0
+  baseline would tolerate nothing.
 * A run with fewer than `min_samples` samples is **invalid** (fails); so is
   a frame-timing run with `frame_count < min_frames`.
 * A missing or skipped result fails unless the baseline is `optional`
@@ -219,16 +222,17 @@ them, copy them to `bench/baselines/linux-ci/` and commit. Locally:
 | `handoff` | `HandoffBuilder.build` (200 messages, one summary, extractive) and strict `HandoffBundle.parse` | 16 ms build, 0.33 ms parse, 8.3 KiB |
 | `engine_qwen3_0_6b` | `LlamaCppProvider` on the host engine, fresh ~300-token prompt, 64 tokens (optional; needs `SHERPA_ENGINE_LIB` and the GGUF, `SHERPA_BENCH_MODEL` to override) | TTFT 1.86 s, prefill 141 t/s, decode 17 t/s (2 threads) |
 
-Frame timing needs a device: `bench/app/run_frame_bench.sh -d <device> -c
-<device-class> [-n runs]` copies `bench/app/integration_test/stream_perf_test.dart`
-and `bench/app/test_driver/perf_driver.dart` into `app/` under `_bench_*`
-names (removed on exit; no tracked app file changes), runs `flutter drive
---profile` N times, converts the timeline summaries with
-`bench/app/timeline_to_result.dart`, and gates against
-`bench/baselines/<device-class>/` (writing initial baselines on the first
-run). Not run on hardware yet; `app/pubspec.yaml` should list
-`flutter_driver` as a dev dependency (it resolves through
-`integration_test` today).
+Frame timing needs a device or an emulator; see
+[`bench/app/README.md`](../../bench/app/README.md). The scenarios live in the
+app itself, in
+[`app/integration_test/frame_bench_test.dart`](../../app/integration_test/frame_bench_test.dart)
+(driver `app/test_driver/perf_driver.dart`); `bench/app/run_frame_bench.sh -d
+<device> -c <device-class> [-n runs] [-r repeats]` runs them with `flutter
+drive --profile`, converts the timeline summaries with
+`bench/app/timeline_to_result.dart` and gates the frame times and the
+missed-frame and GC counts against `bench/baselines/<device-class>/`
+(measured baselines replace the placeholders on the first run). Not run on
+hardware yet.
 
 ## Results (2026-10-19)
 
@@ -366,5 +370,7 @@ Findings 1–4 are fixed; each fix is gated by the suite that found it.
   compactions: one summary costs about 8K tokens of prefill (minutes on a
   phone-class CPU), so real runs skip 2 and 4 compactions (`--only` picks
   other sessions, which need a larger window).
-* Frame-timing benchmarks are scaffolding only (no device here), and there
-  are no device-class baselines yet.
+* Frame-timing benchmarks have not run on a device here: the
+  `android-mid-adreno650-gles` and `android-emulator-api36-swiftshader`
+  baselines are placeholders until the first measured run
+  (`bench/app/README.md`).

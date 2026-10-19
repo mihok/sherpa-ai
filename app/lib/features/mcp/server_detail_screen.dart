@@ -5,7 +5,10 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_mcp/sherpa_mcp.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/typography.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
@@ -29,8 +32,9 @@ class ServerDetailScreen extends ConsumerWidget {
   Future<void> _remove(BuildContext context, WidgetRef ref, McpServerView v) async {
     final ok = await showDialog<bool>(
       context: context,
+      animationStyle: motionStyleOf(context),
       builder: (context) => AlertDialog(
-        title: Text('Remove ${v.name}?'),
+        title: Heading(child: Text('Remove ${v.name}?')),
         content: const Text('Its tools disappear from your chats, its sign-in is deleted from this phone, and the '
             'approvals you gave its tools are forgotten.'),
         actions: [
@@ -48,8 +52,9 @@ class ServerDetailScreen extends ConsumerWidget {
   Future<void> _signOut(BuildContext context, WidgetRef ref, McpServerView v) async {
     final ok = await showDialog<bool>(
       context: context,
+      animationStyle: motionStyleOf(context),
       builder: (context) => AlertDialog(
-        title: Text('Sign out of ${v.name}?'),
+        title: Heading(child: Text('Sign out of ${v.name}?')),
         content: const Text('The sign-in token is revoked and deleted from this phone. You can sign in again later.'),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
@@ -95,10 +100,16 @@ class ServerDetailScreen extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Wrap(
-                  spacing: t.space.xs,
-                  runSpacing: t.space.xs,
-                  children: [McpStatusPill(status: v.status), if (v.builtIn) const BuiltInPill()],
+                // Announced when the connection state changes (connecting,
+                // connected, sign-in needed, offline).
+                Semantics(
+                  container: true,
+                  liveRegion: true,
+                  child: Wrap(
+                    spacing: t.space.xs,
+                    runSpacing: t.space.xs,
+                    children: [McpStatusPill(status: v.status), if (v.builtIn) const BuiltInPill()],
+                  ),
                 ),
                 SizedBox(height: t.space.sm),
                 Text(v.builtIn ? 'Runs inside Sherpa on this phone.' : v.config.url.toString(), style: muted),
@@ -172,6 +183,7 @@ class ServerDetailScreen extends ConsumerWidget {
           ),
         SectionHeader(
           'Tools',
+          count: tools.isEmpty ? null : (tools.length == 1 ? '1 tool' : '${tools.length} tools'),
           trailing: v.pendingReviews > 1
               ? TextButton(
                   onPressed: () async {
@@ -215,8 +227,8 @@ class ServerDetailScreen extends ConsumerWidget {
             load: () => rt.resourcesOf(v.id),
             itemBuilder: (r) => ListTile(
               dense: true,
-              title: Text(r.title ?? (r.name.isEmpty ? r.uri : r.name), maxLines: 1, overflow: TextOverflow.ellipsis),
-              subtitle: Text(r.uri, maxLines: 1, overflow: TextOverflow.ellipsis),
+              title: Text(r.title ?? (r.name.isEmpty ? r.uri : r.name), maxLines: scaledMaxLines(context), overflow: TextOverflow.ellipsis),
+              subtitle: Text(r.uri, maxLines: scaledMaxLines(context), overflow: TextOverflow.ellipsis),
             ),
           ),
           _LazyList(
@@ -311,6 +323,16 @@ class _LazyList<T> extends StatefulWidget {
 class _LazyListState<T> extends State<_LazyList<T>> {
   Future<List<T>>? _items;
 
+  /// How many there are, once loaded: shown (and spoken) on the row.
+  String? _count;
+
+  /// "None", "1 prompt", "3 prompts".
+  String _describe(int n) {
+    final plural = widget.title.toLowerCase();
+    final one = plural.endsWith('s') ? plural.substring(0, plural.length - 1) : plural;
+    return n == 0 ? 'None' : (n == 1 ? '1 $one' : '$n $plural');
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = SherpaTokens.of(context);
@@ -318,16 +340,25 @@ class _LazyListState<T> extends State<_LazyList<T>> {
     final open = _items != null;
     return Column(
       children: [
-        ListTile(
-          leading: Icon(widget.icon),
-          title: Text(widget.title),
-          trailing: Icon(open ? Icons.expand_less_rounded : Icons.expand_more_rounded),
-          onTap: () {
-            final next = open ? null : widget.load();
-            setState(() {
-              _items = next;
-            });
-          },
+        Semantics(
+          container: true,
+          expanded: open,
+          child: ListTile(
+            leading: Icon(widget.icon),
+            title: Text(widget.title),
+            subtitle: _count == null ? null : Text(_count!),
+            trailing: Icon(open ? Icons.expand_less_rounded : Icons.expand_more_rounded),
+            onTap: () {
+              final next = open ? null : widget.load();
+              setState(() {
+                _items = next;
+                _count = null;
+              });
+              next?.then((list) {
+                if (mounted && identical(_items, next)) setState(() => _count = _describe(list.length));
+              }).ignore();
+            },
+          ),
         ),
         if (open)
           FutureBuilder<List<T>>(
@@ -335,7 +366,12 @@ class _LazyListState<T> extends State<_LazyList<T>> {
             builder: (context, snap) {
               if (snap.hasError) return SettingsPadding(child: Text(describeConnectError(snap.error!), style: muted));
               final list = snap.data;
-              if (list == null) return Padding(padding: EdgeInsets.all(t.space.md), child: const LinearProgressIndicator());
+              if (list == null) {
+                return Padding(
+                  padding: EdgeInsets.all(t.space.md),
+                  child: LinearProgressIndicator(semanticsLabel: 'Loading ${widget.title.toLowerCase()}'),
+                );
+              }
               if (list.isEmpty) return SettingsPadding(child: Text('None.', style: muted));
               return Column(children: [for (final i in list) widget.itemBuilder(i)]);
             },

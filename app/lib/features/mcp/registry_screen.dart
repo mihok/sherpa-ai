@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
 import '../../services/mcp/registry_client.dart';
@@ -101,7 +102,7 @@ class _RegistrySearchScreenState extends ConsumerState<RegistrySearchScreen> {
         primaryAction: FilledButton(onPressed: () => unawaited(_search(_searched)), child: const Text('Try again')),
       );
     } else if (_entries.isEmpty && _loading) {
-      body = const Center(child: CircularProgressIndicator());
+      body = const LoadingState(label: 'Searching the registry…');
     } else if (_entries.isEmpty) {
       body = StateView(
         icon: Icons.search_off_rounded,
@@ -109,15 +110,30 @@ class _RegistrySearchScreenState extends ConsumerState<RegistrySearchScreen> {
         message: _searched.isEmpty ? 'The registry returned nothing.' : 'Nothing matches "$_searched". Try another name.',
       );
     } else {
+      final n = _entries.length;
       body = ListView(
         padding: EdgeInsets.only(bottom: t.space.xxxl),
         children: [
+          // How many came back, said once per search (not per keystroke:
+          // searches are debounced).
+          Padding(
+            padding: EdgeInsets.fromLTRB(t.space.lg, t.space.xs, t.space.lg, t.space.xs),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                '${n == 1 ? '1 server' : '$n servers'}${_searched.isEmpty ? '' : ' for "$_searched"'}'
+                '${_cursor == null ? '' : ', more available'}',
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+          ),
           for (final e in usable) _EntryTile(entry: e, onTap: () => _pick(e)),
           if (other.isNotEmpty) ...[
             Padding(
               padding: EdgeInsets.fromLTRB(t.space.lg, t.space.xl, t.space.lg, t.space.sm),
-              child: Semantics(
-                headingLevel: 2,
+              child: Heading(
+                level: 2,
+                value: other.length == 1 ? '1 server' : '${other.length} servers',
                 child: Text('Not usable from a phone yet', style: theme.textTheme.titleSmall),
               ),
             ),
@@ -142,7 +158,7 @@ class _RegistrySearchScreenState extends ConsumerState<RegistrySearchScreen> {
       );
     }
     return Scaffold(
-      appBar: AppBar(title: Semantics(headingLevel: 1, child: const Text('MCP Registry'))),
+      appBar: AppBar(title: Heading(level: 1, child: const Text('MCP Registry'))),
       body: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -168,7 +184,7 @@ class _RegistrySearchScreenState extends ConsumerState<RegistrySearchScreen> {
                   padding: EdgeInsets.symmetric(horizontal: t.space.lg),
                   child: const NoteBox(text: 'You are offline. Results may not load.', icon: Icons.cloud_off_outlined),
                 ),
-              if (_loading && _entries.isNotEmpty) const LinearProgressIndicator(),
+              if (_loading && _entries.isNotEmpty) const LinearProgressIndicator(semanticsLabel: 'Searching the registry'),
               Expanded(child: body),
               SafeArea(
                 top: false,

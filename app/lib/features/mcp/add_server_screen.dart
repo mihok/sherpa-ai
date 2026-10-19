@@ -7,7 +7,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:sherpa_mcp/sherpa_mcp.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/section_header.dart';
 import '../../routing/routes.dart';
 import '../../services/mcp/deep_link.dart';
@@ -313,7 +315,9 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> {
         ),
         if (check is _Checked) ...[
           const SectionHeader('What Sherpa found'),
-          SettingsPadding(child: _ReportCard(report: check.report)),
+          SettingsPadding(
+            child: Semantics(container: true, liveRegion: true, child: _ReportCard(report: check.report)),
+          ),
         ],
         SizedBox(height: t.space.lg),
         SettingsPadding(
@@ -402,7 +406,7 @@ class McpScanPage extends StatefulWidget {
   const McpScanPage({super.key});
 
   static Future<String?> open(BuildContext context) =>
-      Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => const McpScanPage()));
+      Navigator.of(context).push<String>(MotionPageRoute(builder: (_) => const McpScanPage()));
 
   @override
   State<McpScanPage> createState() => _McpScanPageState();
@@ -437,7 +441,7 @@ class _McpScanPageState extends State<McpScanPage> {
     final t = SherpaTokens.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Semantics(headingLevel: 1, child: const Text('Scan a server code')),
+        title: Heading(level: 1, child: const Text('Scan a server code')),
         actions: [
           IconButton(tooltip: 'Flashlight', icon: const Icon(Icons.flashlight_on_outlined), onPressed: _controller.toggleTorch),
         ],
@@ -446,17 +450,20 @@ class _McpScanPageState extends State<McpScanPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: MobileScanner(
-              controller: _controller,
-              onDetect: _onDetect,
-              errorBuilder: (context, error) => Center(
-                child: Padding(
-                  padding: EdgeInsets.all(t.space.xl),
-                  child: Text(
-                    error.errorCode == MobileScannerErrorCode.permissionDenied
-                        ? 'Sherpa is not allowed to use the camera. Allow it in your system settings, or type the address instead.'
-                        : "The camera couldn't start. Go back and type the address instead.",
-                    textAlign: TextAlign.center,
+            child: Semantics(
+              label: 'Camera view',
+              child: MobileScanner(
+                controller: _controller,
+                onDetect: _onDetect,
+                errorBuilder: (context, error) => Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(t.space.xl),
+                    child: Text(
+                      error.errorCode == MobileScannerErrorCode.permissionDenied
+                          ? 'Sherpa is not allowed to use the camera. Allow it in your system settings, or type the address instead.'
+                          : "The camera couldn't start. Go back and type the address instead.",
+                      textAlign: TextAlign.center,
+                    ),
                   ),
                 ),
               ),
@@ -464,11 +471,14 @@ class _McpScanPageState extends State<McpScanPage> {
           ),
           Padding(
             padding: EdgeInsets.all(t.space.lg),
-            child: Text(
-              _sawOther
-                  ? "That code doesn't contain a server address."
-                  : 'Point the camera at a code with a tool server address. You confirm before anything is added.',
-              textAlign: TextAlign.center,
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                _sawOther
+                    ? "That code doesn't contain a server address."
+                    : 'Point the camera at a code with a tool server address. You confirm before anything is added.',
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
         ],

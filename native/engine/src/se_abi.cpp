@@ -80,10 +80,14 @@ SE_API uint32_t se_abi_version(void) {
   return SE_ABI_VERSION;
 }
 
+SE_API uint32_t se_abi_minor(void) {
+  return SE_ABI_MINOR;
+}
+
 SE_API const char * se_version_string(void) {
   // Built once; a function-local static is initialised thread-safely and never mutated afterwards.
   static const std::string s = std::string("sherpa_engine ") + SE_ENGINE_VERSION + " (abi " +
-                               std::to_string(SE_ABI_VERSION) + ", llama.cpp " +
+                               std::to_string(SE_ABI_VERSION) + "." + std::to_string(SE_ABI_MINOR) + ", llama.cpp " +
                                std::string(SE_LLAMA_COMMIT).substr(0, 7) + " " + SE_LLAMA_VERSION +
                                ", ggml " + ggml_version() + ")";
   return s.c_str();
@@ -118,6 +122,12 @@ SE_API void se_session_params_init(se_session_params * p) {
   p->seed            = SE_SEED_RANDOM;
   p->spec_type       = SE_SPEC_NONE;
   p->spec_min_accept = 0.0f;  // 0 = engine default (0.30)
+}
+
+SE_API void se_generate_params_init(se_generate_params * p) {
+  if (!p) return;
+  std::memset(p, 0, sizeof(*p));
+  p->struct_size = sizeof(*p);
 }
 
 SE_API void se_bench_params_init(se_bench_params * p) {

@@ -214,6 +214,7 @@ final class AnthropicProvider implements ModelProvider {
           parallelToolCalls: c.parallelToolCalls,
           vision: c.vision,
           audioInput: c.audioInput,
+          pdfInput: c.pdfInput,
           reasoning: c.reasoning,
           quantization: c.quantization,
           parameterCount: c.parameterCount,

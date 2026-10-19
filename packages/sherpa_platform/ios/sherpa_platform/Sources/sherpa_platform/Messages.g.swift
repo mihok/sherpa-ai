@@ -807,6 +807,63 @@ struct LeaseResult: Hashable, CustomStringConvertible {
   }
 }
 
+/// A one-off "your reply is ready" notification (Android). Never carries
+/// message content: the app passes a chat's title at most.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct FinishedNotice: Hashable, CustomStringConvertible {
+  /// Replaces an earlier notice with the same tag (one per chat).
+  var tag: String
+  var title: String
+  var text: String
+  /// User-visible name of the channel finished-run notices use (localized
+  /// by the app); separate from the ongoing-run channel so people can mute
+  /// one without the other.
+  var androidChannelName: String? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> FinishedNotice? {
+    let tag = pigeonVar_list[0] as! String
+    let title = pigeonVar_list[1] as! String
+    let text = pigeonVar_list[2] as! String
+    let androidChannelName: String? = nilOrValue(pigeonVar_list[3])
+
+    return FinishedNotice(
+      tag: tag,
+      title: title,
+      text: text,
+      androidChannelName: androidChannelName
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      tag,
+      title,
+      text,
+      androidChannelName,
+    ]
+  }
+  static func == (lhs: FinishedNotice, rhs: FinishedNotice) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.tag, rhs.tag) && MessagesPigeonInternal.deepEquals(lhs.title, rhs.title) && MessagesPigeonInternal.deepEquals(lhs.text, rhs.text) && MessagesPigeonInternal.deepEquals(lhs.androidChannelName, rhs.androidChannelName)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("FinishedNotice")
+    MessagesPigeonInternal.deepHash(value: tag, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: title, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: text, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: androidChannelName, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "FinishedNotice(tag: \(String(describing: tag)), title: \(String(describing: title)), text: \(String(describing: text)), androidChannelName: \(String(describing: androidChannelName)))"
+  }
+}
+
 private class MessagesPigeonCodecReader: FlutterStandardReader {
   override func readValue(ofType type: UInt8) -> Any? {
     switch type {
@@ -834,6 +891,8 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
       return LeaseRequest.fromList(self.readValue() as! [Any?])
     case 136:
       return LeaseResult.fromList(self.readValue() as! [Any?])
+    case 137:
+      return FinishedNotice.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -865,6 +924,9 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
       super.writeValue(value.toList())
     } else if let value = value as? LeaseResult {
       super.writeByte(136)
+      super.writeValue(value.toList())
+    } else if let value = value as? FinishedNotice {
+      super.writeByte(137)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -901,6 +963,19 @@ protocol SherpaPlatformHostApi {
   /// returns an empty list (the app's backup rules XML excludes them).
   func excludeFromBackup(path: String, includeSqliteSidecars: Bool) throws -> [String]
   func notificationsPermitted() throws -> Bool
+  /// Android 13+ (API 33): asks for POST_NOTIFICATIONS with the system
+  /// dialog, through the current activity; completes with
+  /// [notificationsPermitted] once the user answers. Below 33, when already
+  /// granted, or without an activity, completes at once without a dialog.
+  /// iOS: true (no notification is involved).
+  func requestNotificationsPermission(completion: @escaping (Result<Bool, Error>) -> Void)
+  /// Android: posts [notice] (dismissed on tap, opens the app) when
+  /// notifications are permitted; returns whether it was posted. iOS: false
+  /// (not supported; the Live Activity shows the end of a continued task).
+  func notifyRunFinished(notice: FinishedNotice) throws -> Bool
+  /// Removes every [notifyRunFinished] notice still showing (the app is on
+  /// screen again). iOS: no-op.
+  func clearFinishedNotices() throws
   func beginLease(request: LeaseRequest, completion: @escaping (Result<LeaseResult, Error>) -> Void)
   func updateLease(id: String, progress: Double?, text: String?) throws
   func endLease(id: String) throws
@@ -999,6 +1074,59 @@ class SherpaPlatformHostApiSetup {
       }
     } else {
       notificationsPermittedChannel.setMessageHandler(nil)
+    }
+    /// Android 13+ (API 33): asks for POST_NOTIFICATIONS with the system
+    /// dialog, through the current activity; completes with
+    /// [notificationsPermitted] once the user answers. Below 33, when already
+    /// granted, or without an activity, completes at once without a dialog.
+    /// iOS: true (no notification is involved).
+    let requestNotificationsPermissionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.requestNotificationsPermission\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      requestNotificationsPermissionChannel.setMessageHandler { _, reply in
+        api.requestNotificationsPermission { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      requestNotificationsPermissionChannel.setMessageHandler(nil)
+    }
+    /// Android: posts [notice] (dismissed on tap, opens the app) when
+    /// notifications are permitted; returns whether it was posted. iOS: false
+    /// (not supported; the Live Activity shows the end of a continued task).
+    let notifyRunFinishedChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.notifyRunFinished\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      notifyRunFinishedChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let noticeArg = args[0] as! FinishedNotice
+        do {
+          let result = try api.notifyRunFinished(notice: noticeArg)
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      notifyRunFinishedChannel.setMessageHandler(nil)
+    }
+    /// Removes every [notifyRunFinished] notice still showing (the app is on
+    /// screen again). iOS: no-op.
+    let clearFinishedNoticesChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.clearFinishedNotices\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      clearFinishedNoticesChannel.setMessageHandler { _, reply in
+        do {
+          try api.clearFinishedNotices()
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      clearFinishedNoticesChannel.setMessageHandler(nil)
     }
     let beginLeaseChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.beginLease\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {

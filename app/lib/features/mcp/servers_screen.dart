@@ -70,9 +70,9 @@ class ToolServersScreen extends ConsumerWidget {
             ),
           ),
         ],
-        const SectionHeader('Built in'),
+        SectionHeader('Built in', count: _servers(builtIn.length)),
         for (final s in builtIn) _ServerTile(view: s),
-        const SectionHeader('Your servers'),
+        SectionHeader('Your servers', count: added.isEmpty ? 'none yet' : _servers(added.length)),
         if (added.isEmpty)
           SettingsPadding(
             child: Padding(
@@ -100,6 +100,8 @@ class ToolServersScreen extends ConsumerWidget {
     );
   }
 }
+
+String _servers(int n) => n == 1 ? '1 server' : '$n servers';
 
 class _ServerTile extends ConsumerWidget {
   const _ServerTile({required this.view});

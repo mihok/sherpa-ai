@@ -123,6 +123,57 @@ void main() {
     await lc.dispose();
   });
 
+  test('the prefix-cache key ignores the draft model: a prefix saved while drafting restores without it', () async {
+    // State files hold the target context's KV only (se_state_save), and the
+    // engine's identity header has no draft field; see PrefixCacheKey.
+    final lc = make()
+      ..register(const LocalModelSpec(
+        id: 'drafting',
+        path: '/models/a.gguf',
+        draftModelPath: '/models/a-draft.gguf',
+        sessionDefaults: SessionConfig(speculative: SpeculativeMode.draft),
+      ))
+      ..register(const LocalModelSpec(id: 'plain', path: '/models/a.gguf'));
+    await generate(lc, 'drafting', 'chat1');
+    expect(host.loads.last.draftModelPath, '/models/a-draft.gguf');
+    final drafted = lc.loaded!.keyFor('chat1');
+    final lease = await lc.acquire('plain'); // the switch persists chat1
+    try {
+      expect(host.loads.last.draftModelPath, isNull);
+      expect(lc.loaded!.keyFor('chat1'), drafted);
+      expect(drafted.toJson().keys, isNot(contains('draft')));
+      final r = await lease.beginGeneration(conversation: 'chat1', fingerprint: ['tools', 'm1', 'm2']);
+      expect(r!.outcome, PrefixRestoreOutcome.restored);
+    } finally {
+      lease.release();
+    }
+    await lc.dispose();
+  });
+
+  test('a vision projector is loaded only by an engine that takes images', () async {
+    const vlm = LocalModelSpec(id: 'vlm', path: '/models/vlm.gguf', mmprojPath: '/models/mmproj.gguf');
+    // An engine without mtmd would refuse the projector (and so the model).
+    var lc = make()..register(vlm);
+    final plan = await lc.plan('vlm');
+    expect(plan.notes, contains('vision is off: this engine build cannot take images'));
+    (await lc.acquire('vlm')).release();
+    expect(host.loads.last.mmprojPath, isNull);
+    await lc.dispose();
+
+    host = FakeEngineHost()
+      ..startSystemInfoJson = '{"mtmd": true, "image_input": true}'
+      ..modelInfoJson = fakeModelInfoJson(vision: true);
+    lc = make()..register(vlm);
+    final lease = await lc.acquire('vlm');
+    try {
+      expect(host.loads.last.mmprojPath, '/models/mmproj.gguf');
+      expect(lease.capabilities.vision, isTrue);
+    } finally {
+      lease.release();
+    }
+    await lc.dispose();
+  });
+
   test('a changed transcript invalidates the saved prefix', () async {
     final lc = make();
     await generate(lc, 'a', 'chat1');

@@ -28,6 +28,7 @@ String fakeModelInfoJson({
   bool thinking = true,
   int nCtxTrain = 40960,
   Map<String, String> recommendedSampling = const {},
+  bool vision = false,
 }) =>
     jsonEncode({
       'model_id': modelId,
@@ -50,7 +51,7 @@ String fakeModelInfoJson({
       'tool_calls': {'support': toolSupport, 'parallel': templateParallel, 'grammar_lazy': true},
       'thinking': {'supported': thinking},
       'recommended_sampling': recommendedSampling,
-      'mmproj': {'loaded': false},
+      'mmproj': {'loaded': vision, 'vision': vision, 'audio': false, 'image_input': vision},
     });
 
 /// A scripted generation for [FakeEngineHost.generate].
@@ -116,6 +117,10 @@ final class FakeEngineHost implements EngineHost {
 
   final Duration eventDelay;
   String? modelInfoJson;
+
+  /// What [start] reports as `se_system_info_json` (e.g.
+  /// `{"image_input": true}` for an engine that takes images).
+  String startSystemInfoJson = '{}';
   final int modelBytes;
   final int mappedBytes;
   final int computeBytes;
@@ -201,7 +206,7 @@ final class FakeEngineHost implements EngineHost {
     final err = startError;
     if (err != null) throw err;
     _started = true;
-    return const EngineInfo(abiVersion: 1, version: 'fake 1.0', systemInfoJson: '{}', hostKind: EngineHostKind.fake);
+    return EngineInfo(abiVersion: 1, version: 'fake 1.0', systemInfoJson: startSystemInfoJson, hostKind: EngineHostKind.fake);
   }
 
   @override

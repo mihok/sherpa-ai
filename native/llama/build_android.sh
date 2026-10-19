@@ -25,7 +25,8 @@
 #
 # Environment: ANDROID_NDK_HOME / ANDROID_NDK / ANDROID_HOME / ANDROID_SDK_ROOT, LLAMA_CPP_SRC, KLEIDIAI_SRC,
 # SHERPA_NATIVE_CACHE, SHERPA_BUILD_DIR, SHERPA_OUT_DIR, JOBS (default 3), SHERPA_STRICT=1 (toolchain
-# version mismatches are errors), SHERPA_MTMD=1 (also build multimodal support), SHERPA_CLEAN=1.
+# version mismatches are errors), SHERPA_MTMD=0 (leave out multimodal/vision support, which is built by
+# default: libmtmd.so, ~1.8 MB stripped), SHERPA_CLEAN=1.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,7 +82,7 @@ B="${SHERPA_BUILD_DIR:-$CACHE_DIR/build/android-$ABI}"
 OUT="${SHERPA_OUT_DIR:-$HERE/out/android}"
 [ "${SHERPA_CLEAN:-0}" = "1" ] && rm -rf "$B"
 mkdir -p "$B"
-MTMD=OFF; [ "${SHERPA_MTMD:-0}" = "1" ] && MTMD=ON
+MTMD=ON; [ "${SHERPA_MTMD:-1}" = "0" ] && MTMD=OFF
 
 # ---- configure + build ------------------------------------------------------------------------------------
 T_CFG=$(date +%s)

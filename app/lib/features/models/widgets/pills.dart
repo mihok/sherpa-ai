@@ -248,7 +248,8 @@ class Metric extends StatelessWidget {
           children: [
             Icon(icon, size: 14, color: color),
             SizedBox(width: t.space.xxs + 1),
-            Text(value, style: theme.textTheme.metricSmall.copyWith(color: color)),
+            // Wraps instead of overflowing when a narrow row squeezes it.
+            Flexible(child: Text(value, style: theme.textTheme.metricSmall.copyWith(color: color))),
           ],
         ),
       ),

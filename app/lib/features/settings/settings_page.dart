@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 
 /// Scaffold for settings pages: app bar with a real heading, and a body
 /// capped to a readable width on tablets.
@@ -26,7 +27,7 @@ class SettingsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = SherpaTokens.of(context);
     return Scaffold(
-      appBar: AppBar(title: Semantics(headingLevel: 1, child: Text(title)), actions: actions),
+      appBar: AppBar(title: Heading(level: 1, child: Text(title)), actions: actions),
       floatingActionButton: floatingActionButton,
       body: Column(
         children: [

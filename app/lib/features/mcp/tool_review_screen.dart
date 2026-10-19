@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_mcp/sherpa_mcp.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
@@ -77,42 +78,44 @@ class ToolReviewScreen extends ConsumerWidget {
         SettingsPadding(
           child: Padding(
             padding: EdgeInsets.only(top: t.space.md),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Semantics(
-                  headingLevel: 2,
-                  child: Text(entry?.tool.displayName ?? toolName, style: theme.textTheme.titleLarge),
-                ),
-                Text('${entry?.modelName ?? toolName} · ${server.name}', style: muted),
-                SizedBox(height: t.space.md),
-                if (changed)
-                  const NoteBox(
-                    title: 'This tool changed since you approved it',
-                    icon: Icons.difference_outlined,
-                    tone: NoteTone.danger,
-                    text: 'A server can change what a tool says or does after you approved it (a "rug pull"). '
-                        'It is blocked until you check the change. Earlier "always allow" answers do not cover the new version.',
-                  )
-                else if (review.quarantined)
-                  NoteBox(
-                    title: 'New tool',
-                    icon: Icons.rate_review_outlined,
-                    tone: NoteTone.warning,
-                    text: server.config.trusted
-                        ? 'Sherpa found a problem in its description, so it waits for you even though you trust the server.'
-                        : "You haven't marked ${server.name} as trusted, so each new tool waits for you. Read what it says "
-                            'it does before allowing it.',
+            child: HeadingGroup(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Heading(
+                    level: 2,
+                    child: Text(entry?.tool.displayName ?? toolName, style: theme.textTheme.titleLarge),
                   ),
-                if (diff != null && diff.descriptionChanged) ...[
-                  SizedBox(height: t.space.sm),
-                  const NoteBox(
-                    icon: Icons.find_in_page_outlined,
-                    text: 'Its description changed. Instructions hidden in a description are a common way to '
-                        'trick an assistant, so read the added text closely.',
-                  ),
+                  Text('${entry?.modelName ?? toolName} · ${server.name}', style: muted),
+                  SizedBox(height: t.space.md),
+                  if (changed)
+                    const NoteBox(
+                      title: 'This tool changed since you approved it',
+                      icon: Icons.difference_outlined,
+                      tone: NoteTone.danger,
+                      text: 'A server can change what a tool says or does after you approved it (a "rug pull"). '
+                          'It is blocked until you check the change. Earlier "always allow" answers do not cover the new version.',
+                    )
+                  else if (review.quarantined)
+                    NoteBox(
+                      title: 'New tool',
+                      icon: Icons.rate_review_outlined,
+                      tone: NoteTone.warning,
+                      text: server.config.trusted
+                          ? 'Sherpa found a problem in its description, so it waits for you even though you trust the server.'
+                          : "You haven't marked ${server.name} as trusted, so each new tool waits for you. Read what it says "
+                              'it does before allowing it.',
+                    ),
+                  if (diff != null && diff.descriptionChanged) ...[
+                    SizedBox(height: t.space.sm),
+                    const NoteBox(
+                      icon: Icons.find_in_page_outlined,
+                      text: 'Its description changed. Instructions hidden in a description are a common way to '
+                          'trick an assistant, so read the added text closely.',
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),

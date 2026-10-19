@@ -4,13 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/typography.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
 import '../../services/downloads/downloads.dart';
 import '../../state/ui_preferences.dart';
 import 'state/models_providers.dart';
+import 'widgets/download_announcement.dart';
 import 'widgets/format.dart';
 import 'widgets/pills.dart';
 
@@ -33,7 +37,7 @@ class DownloadsScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Semantics(headingLevel: 1, child: const Text('Downloads')),
+        title: Heading(level: 1, child: const Text('Downloads')),
         actions: [
           if (done.isNotEmpty)
             TextButton(onPressed: () => unawaited(manager.clearFinished()), child: const Text('Clear finished')),
@@ -72,10 +76,22 @@ class DownloadsScreen extends ConsumerWidget {
                   ),
                 )
               else ...[
-                if (active.isNotEmpty) ...[const SectionHeader('In progress'), for (final j in active) DownloadTile(view: j)],
-                if (paused.isNotEmpty) ...[const SectionHeader('Paused'), for (final j in paused) DownloadTile(view: j)],
-                if (failed.isNotEmpty) ...[const SectionHeader('Needs attention'), for (final j in failed) DownloadTile(view: j)],
-                if (done.isNotEmpty) ...[const SectionHeader('Verified'), for (final j in done) DownloadTile(view: j)],
+                if (active.isNotEmpty) ...[
+                  SectionHeader('In progress', count: _downloads(active.length)),
+                  for (final j in active) DownloadTile(view: j),
+                ],
+                if (paused.isNotEmpty) ...[
+                  SectionHeader('Paused', count: _downloads(paused.length)),
+                  for (final j in paused) DownloadTile(view: j),
+                ],
+                if (failed.isNotEmpty) ...[
+                  SectionHeader('Needs attention', count: _downloads(failed.length)),
+                  for (final j in failed) DownloadTile(view: j),
+                ],
+                if (done.isNotEmpty) ...[
+                  SectionHeader('Verified', count: _downloads(done.length)),
+                  for (final j in done) DownloadTile(view: j),
+                ],
               ],
             ],
           ),
@@ -84,6 +100,8 @@ class DownloadsScreen extends ConsumerWidget {
     );
   }
 }
+
+String _downloads(int n) => n == 1 ? '1 download' : '$n downloads';
 
 /// One job: name, status in words, progress, numbers with their meaning,
 /// and the one or two actions that make sense right now.
@@ -159,7 +177,7 @@ class DownloadTile extends ConsumerWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(color: scheme.surfaceContainerLow, borderRadius: BorderRadius.circular(t.radius.lg)),
         child: Padding(
-          padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.xs, t.space.md),
+          padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, t.space.md, t.space.xs, t.space.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -172,14 +190,18 @@ class DownloadTile extends ConsumerWidget {
                         Row(children: [
                           Flexible(
                             child: Text(job.meta.displayName,
-                                style: theme.textTheme.titleSmall, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                style: theme.textTheme.titleSmall,
+                                maxLines: scaledMaxLines(context),
+                                overflow: TextOverflow.ellipsis),
                           ),
                           SizedBox(width: t.space.sm),
                           InfoPill(label: job.label, dense: true, semanticPrefix: 'Variant', explanation: 'The quantization being downloaded'),
                         ]),
                         SizedBox(height: t.space.xxs),
                         Text(job.repo,
-                            style: theme.textTheme.bodySmall?.copyWith(color: muted), maxLines: 1, overflow: TextOverflow.ellipsis),
+                            style: theme.textTheme.bodySmall?.copyWith(color: muted),
+                            maxLines: scaledMaxLines(context),
+                            overflow: TextOverflow.ellipsis),
                       ],
                     ),
                   ),
@@ -189,13 +211,14 @@ class DownloadTile extends ConsumerWidget {
               ),
               SizedBox(height: t.space.sm),
               Padding(
-                padding: EdgeInsets.only(right: t.space.md),
+                padding: EdgeInsetsDirectional.only(end: t.space.md),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Semantics(
-                      liveRegion: false,
-                      label: status.$1,
+                    // Announced at phase changes and 25 % steps only; the
+                    // byte counts below are read on focus.
+                    LiveAnnouncement(
+                      message: downloadAnnouncement(job.meta.displayName, v.phase, progress: v.progress),
                       child: Row(children: [
                         Icon(status.$2, size: 16, color: v.phase == JobPhase.failed ? t.semantic.danger : muted),
                         SizedBox(width: t.space.xs),
@@ -260,7 +283,7 @@ class DownloadTile extends ConsumerWidget {
       JobPhase.resolving => ('Connecting to Hugging Face…', Icons.sync_rounded),
       JobPhase.downloading => ('Downloading$file', Icons.downloading_rounded),
       JobPhase.verifying => (
-          'Verifying SHA-256$file${v.verifyProgress == null ? '' : ' (${(v.verifyProgress! * 100).round()}%)'}',
+          'Checking the file is intact (SHA-256)$file${v.verifyProgress == null ? '' : ' (${(v.verifyProgress! * 100).round()}%)'}',
           Icons.verified_outlined,
         ),
       JobPhase.installing => ('Adding to your library…', Icons.inventory_2_outlined),
@@ -274,8 +297,9 @@ class DownloadTile extends ConsumerWidget {
     final have = view.bytesDone;
     final ok = await showDialog<bool>(
       context: context,
+      animationStyle: motionStyleOf(context),
       builder: (context) => AlertDialog(
-        title: const Text('Cancel this download?'),
+        title: const Heading(child: Text('Cancel this download?')),
         content: Text(have > 0
             ? 'The ${formatBytes(have)} downloaded so far will be deleted.'
             : 'It will be removed from the queue.'),

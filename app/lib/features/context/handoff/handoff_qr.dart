@@ -2,7 +2,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../state/format.dart';
 import 'handoff_codec.dart';
 
@@ -12,6 +14,7 @@ import 'handoff_codec.dart';
 /// expect that contrast, and an inverted code fails on many of them.
 Future<void> showHandoffQr(BuildContext context, String payload) => showModalBottomSheet<void>(
       context: context,
+      sheetAnimationStyle: motionStyleOf(context),
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
@@ -23,7 +26,7 @@ Future<void> showHandoffQr(BuildContext context, String payload) => showModalBot
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Semantics(headingLevel: 2, child: Text('Scan to continue', style: theme.textTheme.titleLarge)),
+              Heading(level: 2, child: Text('Scan to continue', style: theme.textTheme.titleLarge)),
               SizedBox(height: t.space.xs),
               Text(
                 'On the other phone, open Sherpa, then Import handoff › Scan a QR code. '
@@ -79,7 +82,7 @@ class HandoffScanPage extends StatefulWidget {
   const HandoffScanPage({super.key});
 
   static Future<String?> open(BuildContext context) =>
-      Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => const HandoffScanPage()));
+      Navigator.of(context).push<String>(MotionPageRoute(builder: (_) => const HandoffScanPage()));
 
   @override
   State<HandoffScanPage> createState() => _HandoffScanPageState();
@@ -116,7 +119,7 @@ class _HandoffScanPageState extends State<HandoffScanPage> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Semantics(headingLevel: 1, child: const Text('Scan a handoff code')),
+        title: Heading(level: 1, child: const Text('Scan a handoff code')),
         actions: [
           IconButton(
             tooltip: 'Flashlight',
@@ -129,20 +132,26 @@ class _HandoffScanPageState extends State<HandoffScanPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: MobileScanner(
-              controller: _controller,
-              onDetect: _onDetect,
-              errorBuilder: (context, error) => _ScanError(error: error),
+            child: Semantics(
+              label: 'Camera view',
+              child: MobileScanner(
+                controller: _controller,
+                onDetect: _onDetect,
+                errorBuilder: (context, error) => _ScanError(error: error),
+              ),
             ),
           ),
           Padding(
             padding: EdgeInsets.all(t.space.lg),
-            child: Text(
-              _sawOther
-                  ? 'That code is not a Sherpa handoff. Point the camera at the code shown by "Show QR code".'
-                  : 'Point the camera at the code on the other phone. Nothing is imported until you review it.',
-              style: theme.textTheme.bodyMedium,
-              textAlign: TextAlign.center,
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                _sawOther
+                    ? 'That code is not a Sherpa handoff. Point the camera at the code shown by "Show QR code".'
+                    : 'Point the camera at the code on the other phone. Nothing is imported until you review it.',
+                style: theme.textTheme.bodyMedium,
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
         ],
@@ -169,7 +178,7 @@ class _ScanError extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(denied ? Icons.no_photography_outlined : Icons.error_outline_rounded, size: 40),
+              ExcludeSemantics(child: Icon(denied ? Icons.no_photography_outlined : Icons.error_outline_rounded, size: 40)),
               SizedBox(height: t.space.md),
               Text(
                 denied

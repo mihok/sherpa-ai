@@ -16,7 +16,17 @@ static int failures = 0;
 
 int main(void) {
   CHECK(se_abi_version() == SE_ABI_VERSION);
+  CHECK(se_abi_minor() == SE_ABI_MINOR && SE_ABI_MINOR >= 1);
   CHECK(strstr(se_version_string(), "sherpa_engine") != NULL);
+
+  /* Media input (1.1): the params helper and the NULL paths. */
+  se_generate_params gp;
+  se_generate_params_init(&gp);
+  CHECK(gp.struct_size == sizeof(se_generate_params));
+  CHECK(gp.request_json == NULL && gp.media == NULL && gp.n_media == 0);
+  CHECK(se_generate_start_ex(NULL, &gp, NULL) == SE_ERR_INVALID_ARG);
+  se_media media = {sizeof(se_media), SE_MEDIA_IMAGE, NULL, 0};
+  CHECK(media.struct_size == sizeof(se_media) && media.type == SE_MEDIA_IMAGE);
 
   se_model_params mp;
   se_model_params_init(&mp);

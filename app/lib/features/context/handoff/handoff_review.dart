@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../state/format.dart';
 import '../widgets/context_style.dart';
 import '../widgets/untrusted.dart';
@@ -39,36 +40,38 @@ class HandoffFactsCard extends StatelessWidget {
       margin: EdgeInsets.zero,
       child: Padding(
         padding: EdgeInsets.all(t.space.lg),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Semantics(headingLevel: 2, child: Text(title, style: theme.textTheme.titleMedium)),
-            SizedBox(height: t.space.xs),
-            Text(b.task.trim(), maxLines: 3, overflow: TextOverflow.ellipsis, style: theme.textTheme.bodyLarge),
-            SizedBox(height: t.space.md),
-            for (final (k, v) in rows)
-              Semantics(
-                container: true,
-                label: '$k: $v',
-                excludeSemantics: true,
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: t.space.xxs),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: Text(
-                          k,
-                          style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        child: HeadingGroup(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Heading(level: 2, child: Text(title, style: theme.textTheme.titleMedium)),
+              SizedBox(height: t.space.xs),
+              Text(b.task.trim(), maxLines: 3, overflow: TextOverflow.ellipsis, style: theme.textTheme.bodyLarge),
+              SizedBox(height: t.space.md),
+              for (final (k, v) in rows)
+                Semantics(
+                  container: true,
+                  label: '$k: $v',
+                  excludeSemantics: true,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: t.space.xxs),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            k,
+                            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                          ),
                         ),
-                      ),
-                      Expanded(flex: 3, child: Text(v, style: theme.textTheme.bodyMedium)),
-                    ],
+                        Expanded(flex: 3, child: Text(v, style: theme.textTheme.bodyMedium)),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -114,9 +117,11 @@ class HandoffMarkdownView extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.all(t.space.lg),
         child: SelectionArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [for (final b in _blocks(bundle.toMarkdown())) _block(context, b)],
+          child: HeadingGroup(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [for (final b in _blocks(bundle.toMarkdown())) _block(context, b)],
+            ),
           ),
         ),
       ),
@@ -150,20 +155,23 @@ class HandoffMarkdownView extends StatelessWidget {
         };
         return Padding(
           padding: EdgeInsets.only(top: kind == 'h1' ? 0 : t.space.md, bottom: t.space.xs),
-          child: Semantics(
-            headingLevel: kind == 'h1' ? 3 : (kind == 'h2' ? 4 : 5),
+          child: Heading(
+            level: kind == 'h1' ? 3 : (kind == 'h2' ? 4 : 5),
             child: Text.rich(_inline(context, text, style)),
           ),
         );
       case 'li':
+        // One node per item: the bullet is read with its text.
         return Padding(
           padding: EdgeInsets.only(bottom: t.space.xs),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('•  ', style: body),
-              Expanded(child: Text.rich(_inline(context, text, body))),
-            ],
+          child: MergeSemantics(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('•  ', style: body),
+                Expanded(child: Text.rich(_inline(context, text, body))),
+              ],
+            ),
           ),
         );
       case 'quote':
@@ -171,10 +179,10 @@ class HandoffMarkdownView extends StatelessWidget {
           padding: EdgeInsets.only(bottom: t.space.xs),
           child: DecoratedBox(
             decoration: BoxDecoration(
-              border: Border(left: BorderSide(color: theme.colorScheme.outlineVariant, width: t.space.xs - 1)),
+              border: BorderDirectional(start: BorderSide(color: theme.colorScheme.outlineVariant, width: t.space.xs - 1)),
             ),
             child: Padding(
-              padding: EdgeInsets.only(left: t.space.md),
+              padding: EdgeInsetsDirectional.only(start: t.space.md),
               child: Text.rich(_inline(context, text, body)),
             ),
           ),
@@ -258,34 +266,36 @@ class ConnectionsManifest extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Semantics(headingLevel: 2, child: Text('Servers it used', style: theme.textTheme.titleMedium)),
-        SizedBox(height: t.space.xs),
-        Text(
-          'No passwords, keys or tokens are included. You will be asked to connect and sign in to each one '
-          'yourself; nothing connects automatically.',
-          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-        ),
-        for (final c in connections)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.dns_outlined),
-            title: Text(c.name),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(c.url, style: contextMonoStyle(context, color: theme.colorScheme.onSurfaceVariant)),
-                Text(switch (c.authKind) {
-                  HandoffAuthKind.none => 'No sign-in',
-                  HandoffAuthKind.oauth => 'Sign-in needed',
-                  HandoffAuthKind.header => 'Needs its own key',
-                }),
-              ],
-            ),
+    return HeadingGroup(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Heading(level: 2, child: Text('Servers it used', style: theme.textTheme.titleMedium)),
+          SizedBox(height: t.space.xs),
+          Text(
+            'No passwords, keys or tokens are included. You will be asked to connect and sign in to each one '
+            'yourself; nothing connects automatically.',
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
-      ],
+          for (final c in connections)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.dns_outlined),
+              title: Text(c.name),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(c.url, style: contextMonoStyle(context, color: theme.colorScheme.onSurfaceVariant)),
+                  Text(switch (c.authKind) {
+                    HandoffAuthKind.none => 'No sign-in',
+                    HandoffAuthKind.oauth => 'Sign-in needed',
+                    HandoffAuthKind.header => 'Needs its own key',
+                  }),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

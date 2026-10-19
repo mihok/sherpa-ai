@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../../routing/routes.dart';
 import '../../../state/app_providers.dart';
 import '../../../state/providers.dart';
@@ -117,7 +118,7 @@ class _HandoffImportScreenState extends ConsumerState<HandoffImportScreen> {
     final bundle = _bundle;
     return Scaffold(
       appBar: AppBar(
-        title: Semantics(headingLevel: 1, child: Text(bundle == null ? 'Import handoff' : 'Review handoff')),
+        title: Heading(level: 1, child: Text(bundle == null ? 'Import handoff' : 'Review handoff')),
         leading: bundle == null
             ? null
             : BackButton(onPressed: () => setState(() => _bundle = null)),
@@ -197,7 +198,7 @@ class _HandoffImportScreenState extends ConsumerState<HandoffImportScreen> {
             child: FilledButton.tonal(onPressed: _checkPaste, child: const Text('Check')),
           ),
         ],
-        if (_busy) ...[SizedBox(height: t.space.lg), const LinearProgressIndicator()],
+        if (_busy) ...[SizedBox(height: t.space.lg), const LinearProgressIndicator(semanticsLabel: 'Reading the handoff')],
       ],
     );
   }
@@ -239,7 +240,7 @@ class _HandoffImportScreenState extends ConsumerState<HandoffImportScreen> {
           ConnectionsManifest(connections: bundle.connections),
         ],
         SizedBox(height: t.space.lg),
-        Semantics(headingLevel: 2, child: Text('What it contains', style: theme.textTheme.titleMedium)),
+        Heading(level: 2, child: Text('What it contains', style: theme.textTheme.titleMedium)),
         SizedBox(height: t.space.sm),
         HandoffMarkdownView(bundle: bundle),
       ],
@@ -266,7 +267,7 @@ class _ImportError extends StatelessWidget {
           borderRadius: BorderRadius.circular(t.radius.md),
         ),
         child: Padding(
-          padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.xs, t.space.md),
+          padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, t.space.md, t.space.xs, t.space.md),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

@@ -32,3 +32,18 @@ String? engineSkipReason() {
 /// Threads for engine tests: the host is shared, ggml's spinning barriers
 /// degrade badly when another process takes a core (native/llama/README).
 int get testThreads => int.tryParse(Platform.environment['SHERPA_TEST_THREADS'] ?? '') ?? 2;
+
+/// A small vision model and its projector for the image-input tests:
+/// `$SHERPA_TEST_VLM` / `$SHERPA_TEST_MMPROJ`, else SmolVLM-256M in
+/// /opt/models/smolvlm-256m (ggml-org/SmolVLM-256M-Instruct-GGUF, Q8_0).
+/// Null when either file is missing.
+(String model, String mmproj)? visionModelPaths() {
+  String pick(String env, String fallback) {
+    final v = Platform.environment[env];
+    return v == null || v.isEmpty ? fallback : v;
+  }
+
+  final model = pick('SHERPA_TEST_VLM', '/opt/models/smolvlm-256m/SmolVLM-256M-Instruct-Q8_0.gguf');
+  final mmproj = pick('SHERPA_TEST_MMPROJ', '/opt/models/smolvlm-256m/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf');
+  return File(model).existsSync() && File(mmproj).existsSync() ? (model, mmproj) : null;
+}

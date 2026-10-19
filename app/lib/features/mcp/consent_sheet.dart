@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_auth/sherpa_auth.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../services/mcp/auth/mcp_oauth.dart';
 import '../../state/ui_preferences.dart';
 import 'state/mcp_providers.dart';
@@ -105,6 +107,7 @@ String describeScope(String scope) => switch (scope) {
 Future<bool> showOAuthConsentSheet(BuildContext context, OAuthConsentDetails details) async {
   final ok = await showModalBottomSheet<bool>(
     context: context,
+    sheetAnimationStyle: motionStyleOf(context),
     isScrollControlled: true,
     useSafeArea: true,
     builder: (context) => OAuthConsentSheet(details: details),
@@ -132,14 +135,14 @@ class OAuthConsentSheet extends StatelessWidget {
         controller: scroll,
         padding: EdgeInsets.fromLTRB(t.space.xl, t.space.sm, t.space.xl, t.space.xl),
         children: [
-          Semantics(headingLevel: 2, child: Text(d.title, style: theme.textTheme.titleLarge)),
+          Heading(level: 2, child: Text(d.title, style: theme.textTheme.titleLarge)),
           if (d.intro != null) ...[SizedBox(height: t.space.sm), Text(d.intro!, style: muted)],
           SizedBox(height: t.space.lg),
           _Fact(label: 'Server', value: d.serverHost == null ? d.serverLabel : '${d.serverLabel} · ${d.serverHost}'),
           _Fact(label: 'You sign in at', value: d.authorizationOrigin, emphasize: true),
           if (d.selfDescribedName != null) _Fact(label: 'The server calls itself', value: '"${d.selfDescribedName}" (not verified)'),
           SizedBox(height: t.space.md),
-          Semantics(headingLevel: 3, child: Text('Permissions requested', style: theme.textTheme.titleSmall)),
+          Heading(level: 3, child: Text('Permissions requested', style: theme.textTheme.titleSmall)),
           SizedBox(height: t.space.xs),
           if (d.scopes.isEmpty)
             Text("None named: the sign-in server decides what to grant. You'll see it there.", style: muted)
@@ -163,7 +166,7 @@ class OAuthConsentSheet extends StatelessWidget {
             NoteBox(text: w, icon: Icons.warning_amber_rounded, tone: NoteTone.warning),
           ],
           SizedBox(height: t.space.md),
-          Semantics(headingLevel: 3, child: Text('What happens', style: theme.textTheme.titleSmall)),
+          Heading(level: 3, child: Text('What happens', style: theme.textTheme.titleSmall)),
           SizedBox(height: t.space.xs),
           for (final (i, s) in d.steps.indexed)
             Padding(

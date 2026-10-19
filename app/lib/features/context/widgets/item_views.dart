@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../state/format.dart';
 import '../state/item_labels.dart';
 import 'context_style.dart';
@@ -176,6 +178,7 @@ Future<void> showContextSheet(
 }) =>
     showModalBottomSheet<void>(
       context: context,
+      sheetAnimationStyle: motionStyleOf(context),
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
@@ -190,7 +193,7 @@ Future<void> showContextSheet(
             controller: scroll,
             padding: EdgeInsets.fromLTRB(t.space.xl, 0, t.space.xl, t.space.xl + MediaQuery.paddingOf(context).bottom),
             children: [
-              Semantics(headingLevel: 2, child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
+              Heading(level: 2, child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
               if (header != null) ...[SizedBox(height: t.space.sm), header],
               if (actions.isNotEmpty) ...[
                 SizedBox(height: t.space.sm),
@@ -245,6 +248,7 @@ class ExactText extends StatelessWidget {
   Widget build(BuildContext context) => Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
+          expansionAnimationStyle: motionStyleOf(context),
           tilePadding: EdgeInsets.zero,
           title: const Text('Exact text sent to the model'),
           childrenPadding: EdgeInsets.only(bottom: SherpaTokens.of(context).space.md),

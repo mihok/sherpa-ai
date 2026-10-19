@@ -7,7 +7,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 import 'package:sherpa_providers/sherpa_providers.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
@@ -47,7 +49,7 @@ class _ProvidersScreenState extends ConsumerState<ProvidersScreen> {
     );
     if (configs.hasValue && list.isEmpty) {
       return Scaffold(
-        appBar: AppBar(title: Semantics(headingLevel: 1, child: const Text('Model providers'))),
+        appBar: AppBar(title: Heading(level: 1, child: const Text('Model providers'))),
         body: EmptyState(
           icon: Icons.dns_outlined,
           title: 'No providers yet',
@@ -63,12 +65,12 @@ class _ProvidersScreenState extends ConsumerState<ProvidersScreen> {
           ),
           secondaryAction: onDevice.isEmpty
               ? null
-              : TextButton(onPressed: () => context.go(Routes.models), child: const Text('On-device models')),
+              : TextButton(onPressed: () => context.go(Routes.models), child: const Text('Models & downloads')),
         ),
       );
     }
     return Scaffold(
-      appBar: AppBar(title: Semantics(headingLevel: 1, child: const Text('Model providers'))),
+      appBar: AppBar(title: Heading(level: 1, child: const Text('Model providers'))),
       floatingActionButton: addButton,
       body: RefreshIndicator(
         onRefresh: () async {
@@ -138,8 +140,9 @@ class _ProviderRow extends ConsumerWidget {
   Future<bool> _confirmRemove(BuildContext context) async =>
       await showDialog<bool>(
         context: context,
+        animationStyle: motionStyleOf(context),
         builder: (dialog) => AlertDialog(
-          title: Text('Remove ${config.displayName}?'),
+          title: Heading(child: Text('Remove ${config.displayName}?')),
           content: const Text(
             'Its key is deleted from this phone. Chats that used it stay, '
             "but can't continue until you pick another model.",
@@ -191,7 +194,7 @@ class _ProviderRow extends ConsumerWidget {
       },
       background: Container(
         color: scheme.errorContainer,
-        alignment: Alignment.centerRight,
+        alignment: AlignmentDirectional.centerEnd,
         padding: EdgeInsets.symmetric(horizontal: t.space.xl),
         child: Icon(Icons.delete_outline, color: scheme.onErrorContainer),
       ),

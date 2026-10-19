@@ -9,7 +9,7 @@
 #   Android    : NDK toolchain, -DBUILD_SHARED_LIBS=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON ...
 #   iOS        : -DBUILD_SHARED_LIBS=OFF -DSHERPA_ENGINE_LIBRARY_TYPE=STATIC (merged into a framework)
 cmake_minimum_required(VERSION 3.22)
-project(sherpa_engine VERSION 1.0.0 LANGUAGES C CXX)
+project(sherpa_engine VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,10 @@ set_property(CACHE SHERPA_ENGINE_LIBRARY_TYPE PROPERTY STRINGS SHARED STATIC)
 set(LLAMA_CPP_SRC "$ENV{LLAMA_CPP_SRC}" CACHE PATH "Pinned llama.cpp source tree (native/llama/fetch.sh)")
 set(SHERPA_TEST_MODEL "/opt/models/Qwen3-0.6B-Q4_K_M.gguf" CACHE FILEPATH "GGUF used by the host tests")
 set(SHERPA_TEST_THREADS "4" CACHE STRING "Threads used by the host tests (lower it on shared CI runners)")
+# Optional vision model + projector for the image-input test (needs SHERPA_ENGINE_MTMD), e.g. SmolVLM-256M:
+# ggml-org/SmolVLM-256M-Instruct-GGUF SmolVLM-256M-Instruct-Q8_0.gguf + mmproj-SmolVLM-256M-Instruct-Q8_0.gguf.
+set(SHERPA_TEST_VLM "" CACHE FILEPATH "Vision GGUF for the image-input test (empty: skipped)")
+set(SHERPA_TEST_MMPROJ "" CACHE FILEPATH "Projector GGUF matching SHERPA_TEST_VLM")
 
 # ---- pins ---------------------------------------------------------------------------------------------------
 set(_sherpa_lock "${CMAKE_CURRENT_LIST_DIR}/../llama/llama.lock")
@@ -143,6 +147,7 @@ set(SE_SOURCES
   src/se_model.cpp
   src/se_session.cpp
   src/se_generate.cpp
+  src/se_media.cpp
   src/se_state.cpp
   src/se_bench.cpp
 )
@@ -219,6 +224,10 @@ if(SHERPA_ENGINE_TESTS)
 
   # A small random LoRA adapter for the LoRA test, generated with llama.cpp's gguf-py (needs numpy).
   set(_lora "${CMAKE_BINARY_DIR}/testdata/test-lora.gguf")
+  set(_vision_args "")
+  if(SHERPA_TEST_VLM AND SHERPA_TEST_MMPROJ)
+    set(_vision_args --vlm "${SHERPA_TEST_VLM}" --mmproj "${SHERPA_TEST_MMPROJ}")
+  endif()
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_FOUND)
     add_test(NAME make_test_lora
@@ -227,11 +236,12 @@ if(SHERPA_ENGINE_TESTS)
     set_tests_properties(make_test_lora PROPERTIES FIXTURES_SETUP lora)
     add_test(NAME engine COMMAND sherpa_engine_tests --model "${SHERPA_TEST_MODEL}" --lora "${_lora}"
                                                      --threads ${SHERPA_TEST_THREADS} --tmp "${CMAKE_BINARY_DIR}"
-                                                     --bench-json "${CMAKE_BINARY_DIR}/bench.json")
+                                                     --bench-json "${CMAKE_BINARY_DIR}/bench.json" ${_vision_args})
     set_tests_properties(engine PROPERTIES FIXTURES_REQUIRED lora)
   else()
     add_test(NAME engine COMMAND sherpa_engine_tests --model "${SHERPA_TEST_MODEL}" --threads ${SHERPA_TEST_THREADS}
-                                                     --tmp "${CMAKE_BINARY_DIR}" --bench-json "${CMAKE_BINARY_DIR}/bench.json")
+                                                     --tmp "${CMAKE_BINARY_DIR}" --bench-json "${CMAKE_BINARY_DIR}/bench.json"
+                                                     ${_vision_args})
   endif()
   set_tests_properties(engine PROPERTIES TIMEOUT 3600)
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/testdata")

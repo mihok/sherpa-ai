@@ -83,8 +83,11 @@ final class EngineModelInfo {
       templateUsable: template['usable'] == true,
       supportsSystemRole: caps['supports_system_role'] != false,
       thinkingSupported: obj('thinking')['supported'] == true,
-      vision: mm['vision'] == true,
-      audio: mm['audio'] == true,
+      // Images are sent only to an engine that takes them (ABI 1.1 reports
+      // `image_input`; an older engine with a projector loaded would drop them).
+      vision: mm['vision'] == true && mm['image_input'] == true,
+      // No audio input path in the engine yet, whatever the projector holds.
+      audio: false,
       recommendedSampling: {
         for (final e in obj('recommended_sampling').entries)
           if (e.value != null) e.key: '${e.value}',
@@ -114,7 +117,12 @@ final class EngineModelInfo {
   final bool templateUsable;
   final bool supportsSystemRole;
   final bool thinkingSupported;
+
+  /// A vision projector (mmproj) is loaded and the engine accepts image
+  /// content parts (`mmproj.vision` and `mmproj.image_input`).
   final bool vision;
+
+  /// Audio input. Always false: the engine has no audio input path yet.
   final bool audio;
 
   /// `general.sampling.*` from the GGUF (author-recommended sampling).

@@ -776,6 +776,72 @@ class LeaseResult {
   }
 }
 
+/// A one-off "your reply is ready" notification (Android). Never carries
+/// message content: the app passes a chat's title at most.
+class FinishedNotice {
+  FinishedNotice({
+    required this.tag,
+    required this.title,
+    required this.text,
+    this.androidChannelName,
+  });
+
+  /// Replaces an earlier notice with the same tag (one per chat).
+  String tag;
+
+  String title;
+
+  String text;
+
+  /// User-visible name of the channel finished-run notices use (localized
+  /// by the app); separate from the ongoing-run channel so people can mute
+  /// one without the other.
+  String? androidChannelName;
+
+  List<Object?> _toList() {
+    return <Object?>[
+      tag,
+      title,
+      text,
+      androidChannelName,
+    ];
+  }
+
+  Object encode() {
+    return _toList();  }
+
+  static FinishedNotice decode(Object result) {
+    result as List<Object?>;
+    return FinishedNotice(
+      tag: result[0]! as String,
+      title: result[1]! as String,
+      text: result[2]! as String,
+      androidChannelName: result[3] as String?,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! FinishedNotice || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(tag, other.tag) && _deepEquals(title, other.title) && _deepEquals(text, other.text) && _deepEquals(androidChannelName, other.androidChannelName);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'FinishedNotice(tag: $tag, title: $title, text: $text, androidChannelName: $androidChannelName)';
+  }
+}
+
 
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
@@ -808,6 +874,9 @@ class _PigeonCodec extends StandardMessageCodec {
     }    else if (value is LeaseResult) {
       buffer.putUint8(136);
       writeValue(buffer, value.encode());
+    }    else if (value is FinishedNotice) {
+      buffer.putUint8(137);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -834,6 +903,8 @@ class _PigeonCodec extends StandardMessageCodec {
         return LeaseRequest.decode(readValue(buffer)!);
       case 136:
         return LeaseResult.decode(readValue(buffer)!);
+      case 137:
+        return FinishedNotice.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -957,6 +1028,72 @@ class SherpaPlatformHostApi {
     )
     ;
     return pigeonVar_replyValue! as bool;
+  }
+
+  /// Android 13+ (API 33): asks for POST_NOTIFICATIONS with the system
+  /// dialog, through the current activity; completes with
+  /// [notificationsPermitted] once the user answers. Below 33, when already
+  /// granted, or without an activity, completes at once without a dialog.
+  /// iOS: true (no notification is involved).
+  Future<bool> requestNotificationsPermission() async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.requestNotificationsPermission$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
+    return pigeonVar_replyValue! as bool;
+  }
+
+  /// Android: posts [notice] (dismissed on tap, opens the app) when
+  /// notifications are permitted; returns whether it was posted. iOS: false
+  /// (not supported; the Live Activity shows the end of a continued task).
+  Future<bool> notifyRunFinished(FinishedNotice notice) async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.notifyRunFinished$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[notice]);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
+    return pigeonVar_replyValue! as bool;
+  }
+
+  /// Removes every [notifyRunFinished] notice still showing (the app is on
+  /// screen again). iOS: no-op.
+  Future<void> clearFinishedNotices() async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.clearFinishedNotices$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
   }
 
   Future<LeaseResult> beginLease(LeaseRequest request) async {

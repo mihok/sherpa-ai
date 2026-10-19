@@ -2,7 +2,8 @@
  * sherpa_jni.c - JNI shim between the :inference service (Kotlin) and the sherpa_engine C ABI.
  *
  * The engine is NOT linked: NativeEngine.open() dlopens libsherpa_engine.so (bare name inside the APK, or an
- * absolute path on a host JVM) and dlsyms all 39 se_* entry points, then checks se_abi_version(). So the
+ * absolute path on a host JVM) and dlsyms the 39 ABI-1.0 se_* entry points, then checks se_abi_version() (the
+ * major version; the 1.1 additions are not needed here: images travel as data URLs in the request JSON). So the
  * shim, and therefore `flutter build apk`, builds without the engine binaries; at runtime a missing or
  * incompatible engine is reported as "engine unavailable" instead of an UnsatisfiedLinkError.
  *

@@ -53,6 +53,26 @@ const Map<String, KnownModel> openAiKnownModels = {
   'o4-mini': KnownModel(contextLength: 200000, maxOutputTokens: 100000, reasoning: ReasoningSupport.always),
 };
 
+/// Whether OpenAI accepts PDF input for [modelId]: "models with vision
+/// capabilities, such as gpt-4o and later models"
+/// (developers.openai.com/api/docs/guides/pdf-files, 2026-10-19). By family,
+/// so new snapshots and sizes are covered: gpt-4o, gpt-4.1, gpt-4.5,
+/// gpt-5 and later, and the o-series reasoning models with vision (o1, o3,
+/// o4-mini, but not o1-mini / o3-mini). Audio, realtime, speech, search,
+/// embedding, image-generation and moderation models take no files.
+bool openAiModelTakesPdf(String modelId) {
+  final id = modelId.toLowerCase();
+  const noFiles = ['audio', 'realtime', 'transcribe', 'tts', 'search', 'embedding', 'moderation', 'image', 'dall-e'];
+  if (noFiles.any(id.contains)) return false;
+  if (id.startsWith('gpt-4o') || id.startsWith('chatgpt-4o')) return true;
+  if (id.startsWith('gpt-4.1') || id.startsWith('gpt-4.5')) return true;
+  final major = RegExp(r'^gpt-(\d+)').firstMatch(id);
+  if (major != null) return int.parse(major[1]!) >= 5;
+  final o = RegExp(r'^o(\d+)(-mini)?(?![a-z0-9])').firstMatch(id);
+  if (o != null) return o[2] == null || int.parse(o[1]!) >= 4;
+  return false;
+}
+
 /// The entry for [modelId]: an exact match, else the longest key that is a
 /// dash-separated prefix (dated snapshots such as `gpt-4o-2024-08-06`).
 /// Other variants (`gpt-5.4`, `gpt-6-luna`) are not guessed at.

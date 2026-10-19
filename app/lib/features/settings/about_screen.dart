@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../app_info.dart';
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
 import '../../design/widgets/section_header.dart';
@@ -44,7 +45,7 @@ class AboutScreen extends StatelessWidget {
           subtitle: const Text('A redacted report for bug reports: versions, device and settings, never your chats'),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => Navigator.of(context).push<void>(
-            MaterialPageRoute(builder: (_) => const DiagnosticsScreen(), settings: const RouteSettings(name: 'diagnostics')),
+            MotionPageRoute(builder: (_) => const DiagnosticsScreen(), settings: const RouteSettings(name: 'diagnostics')),
           ),
         ),
         const SectionHeader('Legal'),

@@ -177,6 +177,7 @@ class HistoryChart extends StatelessWidget {
                         muted: scheme.primary.withValues(alpha: 0.45),
                         grid: scheme.outlineVariant,
                         labels: [for (var i = 0; i < runs.length; i++) barLabel(i)],
+                        textDirection: Directionality.of(context),
                       ),
                     ),
                   ),
@@ -222,6 +223,7 @@ final class _BarsPainter extends CustomPainter {
     required this.muted,
     required this.grid,
     required this.labels,
+    required this.textDirection,
   });
 
   final List<double?> values;
@@ -231,6 +233,10 @@ final class _BarsPainter extends CustomPainter {
   final Color muted;
   final Color grid;
   final List<String> labels;
+
+  /// For the bars' spoken labels (the chart itself reads oldest first,
+  /// left to right, like the table).
+  final TextDirection textDirection;
 
   Rect _slot(Size size, int i) {
     final w = size.width / values.length;
@@ -272,7 +278,7 @@ final class _BarsPainter extends CustomPainter {
             properties: SemanticsProperties(
               label: labels[i],
               selected: i == selected,
-              textDirection: TextDirection.ltr,
+              textDirection: textDirection,
             ),
           ),
       ];

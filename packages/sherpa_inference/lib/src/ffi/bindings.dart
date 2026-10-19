@@ -1,5 +1,6 @@
 // Hand-written dart:ffi bindings for native/engine/include/sherpa_engine.h
-// (C ABI version 1, 39 se_* functions).
+// (C ABI version 1.1: the 39 se_* functions of 1.0, required, plus the 3
+// that 1.1 added, bound only when the library has them).
 //
 // Why hand-written instead of ffigen: the header is small and stable, the
 // struct layouts are part of the ABI contract (struct_size versioning, see
@@ -30,8 +31,14 @@ import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
 
-/// `SE_ABI_VERSION` these bindings were written against.
+/// `SE_ABI_VERSION` (the major version) these bindings were written against.
+/// The loader refuses any other major version.
 const int kSeAbiVersion = 1;
+
+/// `SE_ABI_MINOR` these bindings know. Additions are backward compatible: a
+/// 1.0 engine (no `se_abi_minor` symbol) still loads, without the 1.1 entry
+/// points ([SherpaEngineBindings.se_generate_start_ex] is null then).
+const int kSeAbiMinor = 1;
 
 /// Status codes (`se_status`, header "Status codes").
 abstract final class SeStatus {
@@ -234,6 +241,32 @@ final class SeEvent extends Struct {
   external double decode_ms;
 }
 
+/// `se_media_type`.
+abstract final class SeMediaType {
+  static const image = 1;
+}
+
+/// `se_media` (ABI 1.1). Arrays are `media[0].struct_size` apart.
+final class SeMedia extends Struct {
+  @Uint32()
+  external int struct_size;
+  @Int32()
+  external int type;
+  external Pointer<Uint8> data;
+  @Uint64()
+  external int size;
+}
+
+/// `se_generate_params` (ABI 1.1).
+final class SeGenerateParams extends Struct {
+  @Uint32()
+  external int struct_size;
+  external Pointer<Utf8> request_json;
+  external Pointer<SeMedia> media;
+  @Int32()
+  external int n_media;
+}
+
 final class SeMemoryEstimate extends Struct {
   @Uint32()
   external int struct_size;
@@ -390,7 +423,18 @@ final class SherpaEngineBindings {
             int Function(Pointer<Void>, Pointer<SeMemoryEstimate>)>('se_session_memory'),
         se_bench_params_init = lib.lookupFunction<_PtrVoidN, _PtrVoidD>('se_bench_params_init'),
         se_bench = lib.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Void>, Pointer<SeBenchResult>),
-            int Function(Pointer<Void>, Pointer<Void>, Pointer<SeBenchResult>)>('se_bench');
+            int Function(Pointer<Void>, Pointer<Void>, Pointer<SeBenchResult>)>('se_bench'),
+        // ABI 1.1 (optional: a 1.0 engine lacks them).
+        se_abi_minor = lib.providesSymbol('se_abi_minor')
+            ? lib.lookupFunction<Uint32 Function(), int Function()>('se_abi_minor')
+            : null,
+        se_generate_params_init = lib.providesSymbol('se_generate_params_init')
+            ? lib.lookupFunction<_PtrVoidN, _PtrVoidD>('se_generate_params_init')
+            : null,
+        se_generate_start_ex = lib.providesSymbol('se_generate_start_ex')
+            ? lib.lookupFunction<Int32 Function(Pointer<Void>, Pointer<SeGenerateParams>, Pointer<Uint32>),
+                int Function(Pointer<Void>, Pointer<SeGenerateParams>, Pointer<Uint32>)>('se_generate_start_ex')
+            : null;
 
   final Pointer<Utf8> Function() se_last_error;
   final int Function() se_last_error_code;
@@ -437,8 +481,22 @@ final class SherpaEngineBindings {
   final void Function(Pointer<Void>) se_bench_params_init;
   final int Function(Pointer<Void>, Pointer<Void>, Pointer<SeBenchResult>) se_bench;
 
-  /// Number of `se_*` functions bound above (header: 39).
-  static const int functionCount = 39;
+  /// ABI 1.1 entry points; null on a 1.0 engine. Images normally travel as
+  /// data URLs inside the request JSON (the same path the Android process
+  /// host uses); [se_generate_start_ex] takes raw buffers instead.
+  final int Function()? se_abi_minor;
+  final void Function(Pointer<Void>)? se_generate_params_init;
+  final int Function(Pointer<Void>, Pointer<SeGenerateParams>, Pointer<Uint32>)? se_generate_start_ex;
+
+  /// Number of `se_*` functions the header declares: [requiredFunctionCount]
+  /// from ABI 1.0 plus the optional 1.1 additions.
+  static const int functionCount = 42;
+
+  /// Functions every supported engine (ABI 1.0 and later) exports.
+  static const int requiredFunctionCount = 39;
+
+  /// The engine's `SE_ABI_MINOR` (0 for a 1.0 engine).
+  int get abiMinor => se_abi_minor?.call() ?? 0;
 
   /// Thread-local message of the last failed call on this thread. Call it
   /// right after the failing call, on the same isolate (same thread).

@@ -15,6 +15,30 @@ bool platformPrefersReducedMotion(BuildContext context) {
   return disable || reduce;
 }
 
+/// [MotionTokens.style] of the ambient theme: pass it to every sheet,
+/// dialog and expansion tile (`sheetAnimationStyle:`, `animationStyle:`,
+/// `expansionAnimationStyle:`), which ignore reduced motion otherwise.
+AnimationStyle? motionStyleOf(BuildContext context) => SherpaTokens.maybeOf(context)?.motion.style;
+
+/// A [MaterialPageRoute] for the few pages pushed imperatively (camera
+/// scanners, the diagnostics preview). Like `SherpaPage`, it keeps the
+/// platform transition but takes zero time under reduced motion; the back
+/// gesture still tracks the finger, because the user drives that motion.
+class MotionPageRoute<T> extends MaterialPageRoute<T> {
+  MotionPageRoute({required super.builder, super.settings});
+
+  bool get _reduced {
+    final ctx = navigator?.context;
+    return ctx != null && (SherpaTokens.maybeOf(ctx)?.motion.reduced ?? false);
+  }
+
+  @override
+  Duration get transitionDuration => _reduced ? Duration.zero : super.transitionDuration;
+
+  @override
+  Duration get reverseTransitionDuration => _reduced ? Duration.zero : super.reverseTransitionDuration;
+}
+
 /// Re-publishes the theme with [MotionTokens.reduced] resolved from the
 /// platform, so every `SherpaTokens.of(context).motion` read below it is
 /// already correct and feature code never checks accessibility flags itself.

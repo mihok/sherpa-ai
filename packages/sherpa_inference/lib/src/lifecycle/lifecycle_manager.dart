@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:meta/meta.dart';
@@ -80,13 +81,14 @@ final class LocalModelSpec {
   ModelLoadOptions get loadOptions =>
       loadOptionsWith(draftModelPath: sessionDefaults.speculative == SpeculativeMode.draft ? draftModelPath : null);
 
-  /// The load options with [draftModelPath] as the draft model (null: none).
-  ModelLoadOptions loadOptionsWith({String? draftModelPath}) => ModelLoadOptions(
+  /// The load options with [draftModelPath] as the draft model (null: none),
+  /// and the vision projector unless [projector] is false.
+  ModelLoadOptions loadOptionsWith({String? draftModelPath, bool projector = true}) => ModelLoadOptions(
         path: path,
         modelId: identity,
         nGpuLayers: nGpuLayers,
         chatTemplateOverride: chatTemplateOverride,
-        mmprojPath: mmprojPath,
+        mmprojPath: projector ? mmprojPath : null,
         draftModelPath: draftModelPath,
       );
 
@@ -550,7 +552,15 @@ final class ModelLifecycleManager {
         draftNote = 'speculative decoding is off: its draft model is not available';
       }
     }
-    final load = spec.loadOptionsWith(draftModelPath: draft);
+    var load = spec.loadOptionsWith(draftModelPath: draft);
+    // A projector the engine cannot use is left out: a build without mtmd
+    // refuses to load it (the model would not load at all), and an ABI 1.0
+    // engine would only spend memory on it.
+    String? visionNote;
+    if (load.mmprojPath != null && !await _engineTakesImages()) {
+      load = spec.loadOptionsWith(draftModelPath: draft, projector: false);
+      visionNote = 'vision is off: this engine build cannot take images';
+    }
     final cap = await downgradeFor(spec.id);
     final preferred = cap == null ? spec.preferredContext : math.min(cap, spec.preferredContext);
     final preferredKv = tuned?.candidate.typeK;
@@ -573,6 +583,7 @@ final class ModelLifecycleManager {
     final notes = [
       if (cap != null && plan.admitted) 'context capped at $cap tokens after an earlier engine crash',
       ?draftNote,
+      ?visionNote,
     ];
     if (notes.isNotEmpty && plan.admitted) {
       return (
@@ -586,6 +597,22 @@ final class ModelLifecycleManager {
       );
     }
     return (plan: plan, load: load);
+  }
+
+  bool? _imageInput;
+
+  /// The engine takes image content parts: an mtmd build of ABI 1.1 or
+  /// later (`se_system_info_json` `image_input`).
+  Future<bool> _engineTakesImages() async {
+    final known = _imageInput;
+    if (known != null) return known;
+    try {
+      final info = await host.start();
+      final j = jsonDecode(info.systemInfoJson);
+      return _imageInput = j is Map && j['image_input'] == true;
+    } on Object {
+      return false;
+    }
   }
 
   Future<LoadedModel> _loadLocked(LocalModelSpec spec, {CancellationToken? cancel}) async {

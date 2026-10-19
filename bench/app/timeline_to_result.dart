@@ -4,12 +4,14 @@
 ///     dart bench/app/timeline_to_result.dart --scenario chat_stream_long_reply \
 ///         --device-class android-mid-adreno650-gles [--device "Pixel 6a"] --out build/bench-device run1.json run2.json …
 ///
-/// Gated `metrics` are the frame build and raster times (R12 §3.7), plus
-/// `frame_count` for the baseline's `min_frames` validity check. The
-/// counts (missed frame budgets, GCs) and the worst frame go to `info`:
-/// reported with every result, not gated, because perf_gate's relative
-/// bound is zero for a zero baseline, so a scenario that once measured
-/// "0 missed frames" would fail on the first one after a rebaseline.
+/// Gated `metrics` are the frame build and raster times (R12 §3.7), the
+/// missed-frame-budget and GC counts, plus `frame_count` for the baseline's
+/// `min_frames` validity check. Counts carry a `min_abs_tolerance`
+/// suggestion ([countTolerance]): perf_gate's relative bound alone is zero
+/// for a zero baseline, so a scenario that once measured "0 missed frames"
+/// would fail on the first one; the floor lets a few through, and
+/// `--rebaseline` copies it into new baselines. The worst frames and the
+/// missed vsyncs stay in `info` (single outliers; reported, not gated).
 library;
 
 import 'dart:convert';
@@ -23,16 +25,27 @@ const List<String> gatedKeys = [
   '99th_percentile_frame_build_time_millis',
   '90th_percentile_frame_rasterizer_time_millis',
   '99th_percentile_frame_rasterizer_time_millis',
+  'missed_frame_build_budget_count',
+  'missed_frame_rasterizer_budget_count',
+  'new_gen_gc_count',
+  'old_gen_gc_count',
 ];
+
+/// Gated counts and the absolute change each may make before it fails,
+/// whatever its baseline (perf_gate `min_abs_tolerance`): a few missed
+/// 16.7 ms budgets per scenario run are noise on a phone (a GC pause, the
+/// first frame of a route), and new-generation GCs scale with allocation.
+const Map<String, num> countTolerance = {
+  'missed_frame_build_budget_count': 3,
+  'missed_frame_rasterizer_budget_count': 3,
+  'new_gen_gc_count': 5,
+  'old_gen_gc_count': 2,
+};
 
 /// Reported only (medians of the runs).
 const List<String> infoKeys = [
   'worst_frame_build_time_millis',
   'worst_frame_rasterizer_time_millis',
-  'missed_frame_build_budget_count',
-  'missed_frame_rasterizer_budget_count',
-  'new_gen_gc_count',
-  'old_gen_gc_count',
   '90th_percentile_vsync_transitions_missed',
   '99th_percentile_vsync_transitions_missed',
 ];
@@ -74,6 +87,7 @@ void main(List<String> args) {
         'median': median(v),
         'unit': k.endsWith('_millis') ? 'ms' : 'count',
         'better': k == 'frame_count' ? 'higher' : 'lower',
+        'min_abs_tolerance': ?countTolerance[k],
         'runs': v,
       };
 

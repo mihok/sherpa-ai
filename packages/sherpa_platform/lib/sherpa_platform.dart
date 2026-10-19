@@ -26,6 +26,7 @@ export 'src/messages.pigeon.dart'
     show
         DeviceInfo,
         ExitRecord,
+        FinishedNotice,
         LeaseMode,
         LeaseRequest,
         LeaseResult,

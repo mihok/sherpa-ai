@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/state_views.dart';
 import '../../services/inference/local_inference.dart';
 import '../../services/inference/local_model_specs.dart' show isRunnableLocally;
@@ -59,9 +61,20 @@ class PerfLabScreen extends ConsumerWidget {
     final scaleUp = MediaQuery.textScalerOf(context).scale(1) > 1.3;
     return DefaultTabController(
       length: 3,
+      animationDuration: SherpaTokens.of(context).motion.tabs,
       child: Scaffold(
         appBar: AppBar(
-          title: Semantics(headingLevel: 1, child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis)),
+          // At large text sizes the app bar keeps the part that matters,
+          // the model's name; the heading still says the whole title.
+          title: Heading(
+            level: 1,
+            child: Text(
+              scaleUp && model != null ? model.displayName : title,
+              semanticsLabel: title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
           bottom: blocked != null
               ? null
               : TabBar(

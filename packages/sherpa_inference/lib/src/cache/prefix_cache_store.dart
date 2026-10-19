@@ -20,6 +20,22 @@ const int _mib = 1024 * 1024;
 /// SE_ERR_STATE_MISMATCH); llama.cpp itself validates only layer count,
 /// cell count, K/V types and V layout (R04 §13), so the key is strict on
 /// purpose and the engine's header check is the second line of defence.
+///
+/// **The draft model is deliberately not part of the key.** A state file
+/// holds the target context's KV (sequence 0) and token history only
+/// (`se_state_save`, native/engine/src/se_state.cpp); the draft context's KV
+/// is never written, and the identity header the engine checks on load
+/// (`state_identity`: model id and fingerprint, shape, KV types, flash
+/// attention, SWA, LoRA set, and the projector when one is loaded) has no
+/// draft field. The target's KV for a token prefix does not depend on the
+/// draft either: drafted tokens are verified by the target, and the history
+/// holds only accepted ones. So a prefix saved while drafting restores into
+/// a session without a draft model and back (tested against the real engine),
+/// and keying on the draft would only turn a toggle of speculative decoding
+/// into a cache miss. One cost remains: after a restore the draft context
+/// starts empty, and the engine keeps target and draft in lockstep, so a
+/// *speculative* reply re-prefills the prompt (the restored KV is reused only
+/// by a request with `speculative: false`).
 @immutable
 final class PrefixCacheKey {
   const PrefixCacheKey({

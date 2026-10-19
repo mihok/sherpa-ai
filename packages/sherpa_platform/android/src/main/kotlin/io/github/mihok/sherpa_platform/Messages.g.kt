@@ -810,6 +810,66 @@ data class LeaseResult (
     return "LeaseResult(id=$id, mode=$mode, granted=$granted, error=$error, notificationsVisible=$notificationsVisible)"
   }
 }
+
+/**
+ * A one-off "your reply is ready" notification (Android). Never carries
+ * message content: the app passes a chat's title at most.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class FinishedNotice (
+  /** Replaces an earlier notice with the same tag (one per chat). */
+  val tag: String,
+  val title: String,
+  val text: String,
+  /**
+   * User-visible name of the channel finished-run notices use (localized
+   * by the app); separate from the ongoing-run channel so people can mute
+   * one without the other.
+   */
+  val androidChannelName: String? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): FinishedNotice {
+      val tag = pigeonVar_list[0] as String
+      val title = pigeonVar_list[1] as String
+      val text = pigeonVar_list[2] as String
+      val androidChannelName = pigeonVar_list[3] as String?
+      return FinishedNotice(tag, title, text, androidChannelName)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      tag,
+      title,
+      text,
+      androidChannelName,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as FinishedNotice
+    return MessagesPigeonUtils.deepEquals(this.tag, other.tag) && MessagesPigeonUtils.deepEquals(this.title, other.title) && MessagesPigeonUtils.deepEquals(this.text, other.text) && MessagesPigeonUtils.deepEquals(this.androidChannelName, other.androidChannelName)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.tag)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.title)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.text)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.androidChannelName)
+    return result
+  }
+  override fun toString(): String {
+    return "FinishedNotice(tag=$tag, title=$title, text=$text, androidChannelName=$androidChannelName)"
+  }
+}
 private open class MessagesPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
@@ -853,6 +913,11 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
           LeaseResult.fromList(it)
         }
       }
+      137.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          FinishedNotice.fromList(it)
+        }
+      }
       else -> super.readValueOfType(type, buffer)
     }
   }
@@ -890,6 +955,10 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(136)
         writeValue(stream, value.toList())
       }
+      is FinishedNotice -> {
+        stream.write(137)
+        writeValue(stream, value.toList())
+      }
       else -> super.writeValue(stream, value)
     }
   }
@@ -914,6 +983,25 @@ interface SherpaPlatformHostApi {
    */
   fun excludeFromBackup(path: String, includeSqliteSidecars: Boolean): List<String>
   fun notificationsPermitted(): Boolean
+  /**
+   * Android 13+ (API 33): asks for POST_NOTIFICATIONS with the system
+   * dialog, through the current activity; completes with
+   * [notificationsPermitted] once the user answers. Below 33, when already
+   * granted, or without an activity, completes at once without a dialog.
+   * iOS: true (no notification is involved).
+   */
+  fun requestNotificationsPermission(callback: (Result<Boolean>) -> Unit)
+  /**
+   * Android: posts [notice] (dismissed on tap, opens the app) when
+   * notifications are permitted; returns whether it was posted. iOS: false
+   * (not supported; the Live Activity shows the end of a continued task).
+   */
+  fun notifyRunFinished(notice: FinishedNotice): Boolean
+  /**
+   * Removes every [notifyRunFinished] notice still showing (the app is on
+   * screen again). iOS: no-op.
+   */
+  fun clearFinishedNotices()
   fun beginLease(request: LeaseRequest, callback: (Result<LeaseResult>) -> Unit)
   fun updateLease(id: String, progress: Double?, text: String?)
   fun endLease(id: String)
@@ -999,6 +1087,57 @@ interface SherpaPlatformHostApi {
           channel.setMessageHandler { _, reply ->
             val wrapped: List<Any?> = try {
               listOf(api.notificationsPermitted())
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.requestNotificationsPermission$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.requestNotificationsPermission{ result: Result<Boolean> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(MessagesPigeonUtils.wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.notifyRunFinished$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val noticeArg = args[0] as FinishedNotice
+            val wrapped: List<Any?> = try {
+              listOf(api.notifyRunFinished(noticeArg))
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.sherpa_platform.SherpaPlatformHostApi.clearFinishedNotices$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            val wrapped: List<Any?> = try {
+              api.clearFinishedNotices()
+              listOf(null)
             } catch (exception: Throwable) {
               MessagesPigeonUtils.wrapError(exception)
             }

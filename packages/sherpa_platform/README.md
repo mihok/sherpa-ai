@@ -90,8 +90,20 @@ Merged from the plugin manifest (names checked against the API 37
   declaration and a video, R07 §4.1).
 
 The app must request `POST_NOTIFICATIONS` at runtime on API 33+
-(`BackgroundRunGuard.notificationsPermitted()` reports it). Without it the
-service still runs; the notification only appears in the FGS task manager.
+(`BackgroundRunGuard.notificationsPermitted()` reports it;
+`requestNotificationsPermission()` shows the system dialog through the
+current activity, so call it from a user action after saying why). Without
+it the service still runs; the notification only appears in the FGS task
+manager. The app may override the subtype text (the Sherpa app does, with
+`tools:replace`, to cover remote models and tools too).
+
+`notifyFinished(tag:, title:, text:)` posts a one-off notice on a second
+channel (`sherpa_finished_runs`, default importance, name from
+`androidFinishedChannelName`): auto-cancelled, opens the app, one per tag;
+`clearFinishedNotices()` removes them. Both notifications carry a public
+version (the app's name only) for lock screens that hide sensitive content.
+On iOS `notifyFinished` returns false: `lease.end(text: ...)` sends a last
+subtitle to the Live Activity instead.
 Notifications use `ProgressStyle` on API 36+ and are not promoted to Live
 Updates (that needs `POST_PROMOTED_NOTIFICATIONS`, API 36.1, and a product
 decision on which runs qualify, R07 §8.1).

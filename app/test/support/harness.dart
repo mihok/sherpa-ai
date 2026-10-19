@@ -13,6 +13,7 @@ import 'package:sherpa/design/haptics.dart';
 import 'package:sherpa/design/widgets/privacy_badge.dart';
 import 'package:sherpa/routing/chat_route.dart';
 import 'package:sherpa/routing/router.dart';
+import 'package:sherpa/services/inference/on_device_ids.dart' show isOnDeviceProviderId;
 import 'package:sherpa/state/connectivity.dart';
 import 'package:sherpa/state/in_memory/in_memory_preferences_store.dart';
 import 'package:sherpa/state/in_memory/in_memory_provider_registry.dart';
@@ -264,10 +265,11 @@ final class WithLocalModels implements ProviderRegistry {
   final ProviderRegistry inner;
   List<ModelDescriptor> installed;
 
-  /// Library model descriptors as the local provider lists them.
-  static ModelDescriptor model(String id, String name) => ModelDescriptor(
+  /// Library model descriptors as an on-device provider lists them
+  /// (llama.cpp unless [providerId] says MLX, LiteRT-LM, …).
+  static ModelDescriptor model(String id, String name, {String providerId = localProviderId}) => ModelDescriptor(
         id: id,
-        providerId: localProviderId,
+        providerId: providerId,
         displayName: name,
         capabilities: const ModelCapabilities(contextLength: 8192),
       );
@@ -296,7 +298,9 @@ final class WithLocalModels implements ProviderRegistry {
 
   @override
   Future<List<ModelDescriptor>> models(String providerId, {bool refresh = false}) async =>
-      providerId == localProviderId ? installed : inner.models(providerId, refresh: refresh);
+      isOnDeviceProviderId(providerId)
+          ? installed.where((m) => m.providerId == providerId).toList()
+          : inner.models(providerId, refresh: refresh);
 
   @override
   Future<EndpointStatus> probe(String providerId) => inner.probe(providerId);

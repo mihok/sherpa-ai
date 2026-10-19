@@ -8,6 +8,9 @@ import '../../../design/tokens.dart';
 import '../../mcp/widgets/mcp_widgets.dart' show NoteBox, NoteTone;
 import '../state/chat_dependencies.dart';
 import '../widgets/chat_style.dart';
+import 'link_warnings.dart';
+
+export 'link_warnings.dart' show displayHost;
 
 /// Schemes rendered as tappable links in replies. Everything else (
 /// `javascript:`, `file:`, `intent:`, app schemes…) is plain text, and
@@ -44,25 +47,8 @@ String replyLinkRefusal(Uri uri) {
   return '$what Only web links (http, https) and email links (mailto) in replies can be opened.';
 }
 
-/// The host as people read it: international names decoded (Dart keeps
-/// them percent-encoded), lower case.
-String displayHost(Uri uri) {
-  try {
-    return Uri.decodeComponent(uri.host).toLowerCase();
-  } on FormatException {
-    return uri.host.toLowerCase();
-  }
-}
-
 List<String> _recipients(Uri uri) =>
     uri.path.split(',').map((s) => Uri.decodeComponent(s).trim()).where((s) => s.contains('@')).toList();
-
-bool _looksIdn(String host) =>
-    host.split('.').any((l) => l.startsWith('xn--')) || host.contains('%') || host.runes.any((r) => r > 0x7f);
-
-bool _looksIp(String host) =>
-    host.contains(':') || // IPv6
-    RegExp(r'^((0x[0-9a-f]*|\d+)\.?){1,4}$').hasMatch(host); // dotted, decimal, hex or octal IPv4
 
 /// Things to check before opening [uri], in plain words (empty when
 /// nothing stands out). Model-written links are untrusted: the text of a
@@ -70,22 +56,12 @@ bool _looksIp(String host) =>
 List<String> replyLinkWarnings(Uri uri) {
   switch (replyLinkKind(uri)) {
     case ReplyLinkKind.web:
-      final host = uri.host.toLowerCase();
-      return [
-        if (uri.scheme.toLowerCase() != 'https')
-          'This page is not encrypted (http). Anyone on the network could see or change it.',
-        if (_looksIdn(host))
-          'The address uses international characters (${displayHost(uri)}). Look closely: it may imitate a site you know.',
-        if (uri.userInfo.isNotEmpty)
-          'The address has a user name before the site (“${uri.userInfo.split(':').first}@”). '
-              'That is a common trick to make a link look like another site.',
-        if (_looksIp(host)) 'The address is a bare IP address, not a site name.',
-      ];
+      return webAddressWarnings(uri);
     case ReplyLinkKind.email:
       final q = uri.queryParameters.map((k, v) => MapEntry(k.toLowerCase(), v));
       final to = _recipients(uri);
       return [
-        if (to.any((a) => _looksIdn(a.split('@').last)))
+        if (to.any((a) => looksInternationalHost(a.split('@').last)))
           'The email address uses international characters. Look closely: it may imitate an address you know.',
         if (to.length > 1 || q.containsKey('cc') || q.containsKey('bcc')) 'The email goes to more than one address.',
         if (q.containsKey('body') || q.containsKey('subject'))

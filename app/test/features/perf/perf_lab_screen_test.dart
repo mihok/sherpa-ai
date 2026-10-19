@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:sherpa/design/contrast.dart';
 import 'package:sherpa/design/theme.dart';
 import 'package:sherpa/design/tokens.dart';
 import 'package:sherpa/features/models/model_library_screen.dart';
@@ -14,15 +13,14 @@ import 'package:sherpa/features/models/state/models_providers.dart';
 import 'package:sherpa/features/perf/perf_lab_screen.dart';
 import 'package:sherpa/features/perf/state/perf_models.dart';
 import 'package:sherpa/features/perf/state/perf_providers.dart';
-import 'package:sherpa/features/perf/widgets/bench_tab.dart';
 import 'package:sherpa/features/perf/widgets/compare_tab.dart';
-import 'package:sherpa/features/perf/widgets/overview_tab.dart';
 import 'package:sherpa/routing/routes.dart';
 import 'package:sherpa/state/providers.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_inference/sherpa_inference.dart';
 import 'package:sherpa_inference/testing.dart';
 
+import '../../support/a11y_audit.dart';
 import 'support/perf_rig.dart';
 
 Map<int, ({double pp, double tg})> get _byThreads => {
@@ -33,6 +31,11 @@ Map<int, ({double pp, double tg})> get _byThreads => {
     };
 
 const _fourThreads = SessionConfig(nThreads: 4, nThreadsBatch: 4);
+
+// Where the audit skips textContrastGuideline (see auditScreen); the exact
+// check and the token test below still run there.
+const _labNote = '12 px lab notes and chart captions at 1×: anti-aliasing or the card surface wins the sample';
+const _labPixelSkips = {AuditView.phone1x, AuditView.tablet1x, AuditView.phoneDark};
 
 void main() {
   Future<PerfRig> rigFor(
@@ -102,13 +105,18 @@ void main() {
   }
 
   Future<ProviderContainer> pumpLab(WidgetTester tester, PerfRig rig,
-      {Size size = const Size(420, 1400), double scale = 1, Widget home = const PerfLabScreen(modelId: 'm1')}) async {
+      {Size size = const Size(420, 1400),
+      double scale = 1,
+      bool dark = false,
+      Widget home = const PerfLabScreen(modelId: 'm1')}) async {
     tester.view.physicalSize = size * tester.view.devicePixelRatio;
     addTearDown(tester.view.resetPhysicalSize);
     await tester.pumpWidget(ProviderScope(
       overrides: overrides(rig),
       child: MaterialApp(
         theme: SherpaTheme.light(),
+        darkTheme: SherpaTheme.dark(),
+        themeMode: dark ? ThemeMode.dark : ThemeMode.light,
         home: withScale(scale, home),
       ),
     ));
@@ -392,14 +400,17 @@ void main() {
 
   group('accessibility', () {
     Future<(PerfRig, ProviderContainer)> populated(WidgetTester tester,
-        {double scale = 1, Size size = const Size(360, 740), Widget home = const PerfLabScreen(modelId: 'm1')}) async {
+        {double scale = 1,
+        Size size = const Size(360, 740),
+        bool dark = false,
+        Widget home = const PerfLabScreen(modelId: 'm1')}) async {
       final rig = await rigFor(tester, host: FakeEngineHost(bench: scriptedBench(_byThreads, noise: [0, 0.02, -0.02, 0.01])));
       await tester.runAsync(() async {
         await replyText(rig.local.provider, 'm1', 'hello');
         await rig.lab.bench('m1', const BenchSpec(reps: 1));
         await rig.lab.bench('m1', const BenchSpec(reps: 1));
       });
-      final c = await pumpLab(tester, rig, size: size, scale: scale, home: home);
+      final c = await pumpLab(tester, rig, size: size, scale: scale, dark: dark, home: home);
       controller(c)
         ..setA(const LabConfig(nThreads: 2))
         ..setB(const LabConfig(nThreads: 4, kv: KvType.q8_0, speculative: SpeculativeChoice.ngram))
@@ -415,27 +426,13 @@ void main() {
       return (rig, c);
     }
 
+    // Every tab through the shared M6 audit: phone and tablet, 1× and 2×
+    // text, light and dark, scrolled top to bottom (see auditScreen).
     for (final tab in ['Overview', 'Benchmark', 'Compare']) {
-      testWidgets('text scale 2.0 on a small phone without overflow: $tab', (tester) async {
-        await populated(tester, scale: 2);
+      auditScreen('performance lab: $tab', (tester, view) async {
+        await populated(tester, scale: view.textScale, size: view.size, dark: view.dark);
         if (tab != 'Overview') await openTab(tester, tab);
-        final list = find.byType(ListView).hitTestable().first;
-        for (var i = 0; i < 12; i++) {
-          await tester.drag(list, const Offset(0, -500), warnIfMissed: false);
-          await tester.pump(const Duration(milliseconds: 50));
-        }
-        expect(tester.takeException(), isNull);
-      });
-
-      testWidgets('tap targets and labels: $tab', (tester) async {
-        final handle = tester.ensureSemantics();
-        // Each tab's content on its own, everything on screen at once.
-        await populated(tester, size: const Size(800, 2400), home: _TabOnly(tab));
-        await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
-        await expectLater(tester, meetsGuideline(iOSTapTargetGuideline));
-        await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
-        handle.dispose();
-      });
+      }, pixelContrastSkip: _labPixelSkips, contrastNote: _labNote);
     }
 
     // textContrastGuideline samples pixels and takes the most frequent
@@ -456,11 +453,10 @@ void main() {
           'danger': t.semantic.danger,
           'primary': s.primary,
         };
-        for (final bg in {'surface': s.surface, 'surfaceContainerLow': s.surfaceContainerLow}.entries) {
-          for (final fg in fgs.entries) {
-            expect(contrastRatio(fg.value, bg.value), greaterThanOrEqualTo(4.5), reason: '${fg.key} on ${bg.key}');
-          }
-        }
+        expectRoleContrast(
+          foregrounds: fgs,
+          backgrounds: {'surface': s.surface, 'surfaceContainerLow': s.surfaceContainerLow},
+        );
       });
     }
 
@@ -483,27 +479,4 @@ void main() {
       handle.dispose();
     });
   });
-}
-
-/// One tab of the lab without the TabBarView around it.
-class _TabOnly extends ConsumerWidget {
-  const _TabOnly(this.tab);
-
-  final String tab;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final o = ref.watch(perfOverviewProvider('m1')).value;
-    ref.watch(perfLabControllerProvider('m1'));
-    return Scaffold(
-      appBar: AppBar(title: const Text('Performance')),
-      body: o == null
-          ? const SizedBox.shrink()
-          : switch (tab) {
-              'Benchmark' => BenchTab(overview: o),
-              'Compare' => CompareTab(overview: o),
-              _ => OverviewTab(overview: o),
-            },
-    );
-  }
 }

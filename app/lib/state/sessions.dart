@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
+import '../services/inference/on_device_ids.dart' show isOnDeviceProviderId, onDeviceProviderName;
 import 'app_providers.dart';
 import 'observable_session_store.dart';
 import 'providers.dart';
@@ -83,15 +84,24 @@ final visibleSessionsProvider = Provider<AsyncValue<List<SessionRecord>>>((ref) 
       ? const <ProviderConfig>[]
       : (ref.watch(providerConfigsProvider).value ?? ref.read(providerRegistryProvider).configs);
   final names = {for (final c in configs) c.id: c.displayName.toLowerCase()};
-  // On-device models are known by their display names, not library ids.
+  // On-device models (llama.cpp, MLX, LiteRT-LM, Apple Intelligence, Gemini
+  // Nano) are known by their display names, not library ids; their
+  // providers have no config, so they match by the name lists show.
   final local = query.isEmpty ? const <ModelDescriptor>[] : (ref.watch(localModelsProvider).value ?? const []);
-  final localNames = {for (final m in local) m.id: m.displayName.toLowerCase()};
+  final localNames = {for (final m in local) (m.providerId, m.id): m.displayName.toLowerCase()};
+  bool onDeviceMatch(SessionRecord s) {
+    final providerId = s.providerId;
+    if (providerId == null || !isOnDeviceProviderId(providerId)) return false;
+    return (localNames[(providerId, s.modelId)]?.contains(query) ?? false) ||
+        (onDeviceProviderName(providerId)?.toLowerCase().contains(query) ?? false);
+  }
+
   bool matches(SessionRecord s) =>
       query.isEmpty ||
       s.title.toLowerCase().contains(query) ||
       (s.modelId?.toLowerCase().contains(query) ?? false) ||
       (names[s.providerId]?.contains(query) ?? false) ||
-      (s.providerId == localProviderId && (localNames[s.modelId]?.contains(query) ?? false));
+      onDeviceMatch(s);
   return sessions.whenData((list) => [
         for (final s in list)
           if (!hidden.contains(s.id) && matches(s)) s,

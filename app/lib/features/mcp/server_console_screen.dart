@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_mcp/sherpa_mcp.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/state_views.dart';
 import '../../services/mcp/input/input_history.dart';
 import 'state/mcp_providers.dart';
@@ -44,10 +45,10 @@ class ServerConsoleScreen extends ConsumerWidget {
     final text = logs.map(format).join('\n');
     return Scaffold(
       appBar: AppBar(
-        title: Semantics(headingLevel: 1, child: Text(config == null ? 'Debug console' : '${config.name} console')),
+        title: Heading(level: 1, child: Text(config == null ? 'Debug console' : '${config.name} console')),
         actions: [
           IconButton(
-            tooltip: 'Copy all',
+            tooltip: 'Copy log',
             icon: const Icon(Icons.copy_all_rounded),
             onPressed: logs.isEmpty
                 ? null
@@ -57,7 +58,7 @@ class ServerConsoleScreen extends ConsumerWidget {
                   },
           ),
           IconButton(
-            tooltip: 'Clear',
+            tooltip: 'Clear log',
             icon: const Icon(Icons.delete_sweep_outlined),
             onPressed: logs.isEmpty
                 ? null
@@ -70,16 +71,20 @@ class ServerConsoleScreen extends ConsumerWidget {
       ),
       body: config == null
           ? const StateView(icon: Icons.extension_off_outlined, title: 'Server not found')
-          : ListView(
-              padding: EdgeInsets.all(t.space.lg),
-              children: [
+          : Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: t.layout.maxContentWidth),
+                child: ListView(
+                  padding: EdgeInsets.all(t.space.lg),
+                  children: [
                 const NoteBox(
                   text: 'Tokens, keys and passwords are removed from these lines. Lines marked "server" come from '
                       'the server itself and may be wrong or misleading.',
                 ),
                 if (inputs.isNotEmpty) ...[
                   SizedBox(height: t.space.md),
-                  Semantics(headingLevel: 2, child: Text('Requests for your input', style: Theme.of(context).textTheme.titleSmall)),
+                  Heading(level: 2, child: Text('Requests for your input', style: Theme.of(context).textTheme.titleSmall)),
                   SizedBox(height: t.space.xs),
                   Text(
                     'Forms, web pages and model use this server asked for, newest first. Your answers are never '
@@ -91,7 +96,9 @@ class ServerConsoleScreen extends ConsumerWidget {
                 ],
                 SizedBox(height: t.space.md),
                 if (logs.isEmpty) const Text('Nothing logged yet.') else MonoBlock(text, semanticsLabel: 'Log lines'),
-              ],
+                  ],
+                ),
+              ),
             ),
     );
   }

@@ -59,7 +59,9 @@ final class WarmingContextManager implements ContextManager {
 ///   (Qwen3 shows `<think>` only for the current tool loop and groups
 ///   consecutive tool results) make the per-message sum slightly larger
 ///   than the full render, never smaller: an assistant reply's own
-///   reasoning is always added.
+///   reasoning is always added. Images are rendered without their pixels
+///   (they would have to be decoded for every count), so when [vision]
+///   says the model sees them each one adds [imageTokenEstimate].
 /// * [countText]: raw text tokens (no special tokens).
 /// * [countTools]: the tool block PLUS the prompt's fixed scaffolding (BOS,
 ///   system wrapper, generation prompt incl. an empty think block). The
@@ -78,7 +80,9 @@ final class EngineTokenCounter implements TokenCounter {
     bool useSyncTokenizer = false,
     String? tokenizerFamily,
     int maxEntries = 8192,
+    bool Function()? vision,
   })  : _host = host,
+        _vision = vision,
         _resolve = resolveModel,
         _mapper = EngineMessageMapper(providerId),
         _useSync = useSyncTokenizer,
@@ -91,6 +95,7 @@ final class EngineTokenCounter implements TokenCounter {
   final bool _useSync;
   final HeuristicTokenCounter _estimator;
   final int _maxEntries;
+  final bool Function()? _vision;
   ModelRef? _model;
   SyncTokenizer? _syncTokenizer;
 
@@ -126,6 +131,12 @@ final class EngineTokenCounter implements TokenCounter {
   bool get isExact => _warmed || _sync != null;
 
   static const double _pessimism = 1.15;
+
+  /// KV cells assumed per image for a vision model: the core estimator's
+  /// flat image cost. Real counts depend on the projector and the image
+  /// (SmolVLM: 64 per 512 px tile plus a global view; Qwen2.5-VL: one per
+  /// 28 × 28 px patch, ~1,300 for a 1024 px photo).
+  static const int imageTokenEstimate = 1100;
 
   /// Probe base used when a template refuses a lone message (templates that
   /// insist on user/assistant alternation).
@@ -301,7 +312,8 @@ final class EngineTokenCounter implements TokenCounter {
     final key = 'm:${_hash(jsonEncode(messages))}';
     // Templates may hide reasoning when the message is rendered alone; add
     // it (plus the think tags) so the count never undercounts.
-    final surcharge = reasoning.isEmpty ? 0 : (_lookup('t:${_hash(reasoning)}') ?? _estimate(_estimator.countText(reasoning))) + 4;
+    var surcharge = reasoning.isEmpty ? 0 : (_lookup('t:${_hash(reasoning)}') ?? _estimate(_estimator.countText(reasoning))) + 4;
+    if (_vision?.call() ?? false) surcharge += _images(m.content) * imageTokenEstimate;
     return _MessageProbe(key, messages, reasoning, surcharge);
   }
 
@@ -323,6 +335,18 @@ final class EngineTokenCounter implements TokenCounter {
   }
 
   static String _hash(String s) => sha256.convert(utf8.encode(s)).toString();
+
+  static int _images(List<ContentPart> parts) => parts.fold(
+        0,
+        (n, p) =>
+            n +
+            switch (p) {
+              ImagePart() => 1,
+              EmbeddedResourcePart(:final mimeType?, blob: _?) when mimeType.startsWith('image/') => 1,
+              ToolResultPart(:final content) => _images(content),
+              _ => 0,
+            },
+      );
 }
 
 final class _MessageProbe {

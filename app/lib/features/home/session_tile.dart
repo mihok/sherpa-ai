@@ -6,8 +6,10 @@ import 'package:sherpa_core/sherpa_core.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
 import '../../design/widgets/privacy_badge.dart';
+import '../../services/background/background_providers.dart';
 import '../../state/app_providers.dart';
 import '../../state/services.dart' show ModelChoice;
+import '../chat/background/background_widgets.dart' show ChatActivityChip;
 import 'relative_time.dart';
 
 /// One chat in the sessions list: title, model, time, where it runs.
@@ -51,6 +53,8 @@ class SessionTile extends ConsumerWidget {
     final subtitle = [modelLabel, ?providerName].join(' · ');
     final time = formatRelativeShort(session.updatedAt, now);
     final archiveLabel = session.archived ? 'Unarchive' : 'Archive';
+    // A run in flight (or paused by the background) in this chat.
+    final activity = ref.watch(chatActivityProvider(session.id));
 
     final badge = privacy == null
         ? _MissingModelChip(label: providerId == null ? 'Pick a model' : 'Provider removed')
@@ -60,6 +64,7 @@ class SessionTile extends ConsumerWidget {
       session.title,
       subtitle,
       formatRelativeSpoken(session.updatedAt, now),
+      if (activity != null) ChatActivityChip.labelOf(activity),
       if (session.archived) 'Archived',
       if (privacy != null)
         PrivacyBadge(location: privacy.location, host: privacy.host).semanticLabel
@@ -105,6 +110,7 @@ class SessionTile extends ConsumerWidget {
                 runSpacing: t.space.xs,
                 children: [
                   badge,
+                  if (activity != null) ChatActivityChip(state: activity),
                   if (session.archived) const _ArchivedChip(),
                 ],
               ),

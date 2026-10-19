@@ -155,12 +155,18 @@ final class ResourceLinkPart extends ContentPart {
 }
 
 /// Resource contents embedded inline (MCP `resource`): either text or blob.
+///
+/// A binary attachment stored as a file has neither: [uri] points at it
+/// (the app inlines the bytes just before each request), and [size] and
+/// [pages] (PDFs) let the token estimator price it without the bytes.
 final class EmbeddedResourcePart extends ContentPart {
   const EmbeddedResourcePart({
     required this.uri,
     this.mimeType,
     this.text,
     this.blob,
+    this.size,
+    this.pages,
   });
 
   factory EmbeddedResourcePart.fromJson(JsonMap j) {
@@ -170,6 +176,8 @@ final class EmbeddedResourcePart extends ContentPart {
       mimeType: j.opt<String>('mimeType'),
       text: j.opt<String>('text'),
       blob: b == null ? null : base64Decode(b),
+      size: j.optInt('size'),
+      pages: j.optInt('pages'),
     );
   }
 
@@ -177,6 +185,12 @@ final class EmbeddedResourcePart extends ContentPart {
   final String? mimeType;
   final String? text;
   final Uint8List? blob;
+
+  /// Bytes of the resource ([blob] or the referenced file), when known.
+  final int? size;
+
+  /// Page count of a document (PDF), when known ([pdfPageCount]).
+  final int? pages;
 
   @override
   String get type => 'resource';
@@ -188,8 +202,41 @@ final class EmbeddedResourcePart extends ContentPart {
         'mimeType': mimeType,
         'text': text,
         'blob': blob == null ? null : base64Encode(blob!),
+        'size': size,
+        'pages': pages,
       });
 }
+
+/// The page count a PDF declares, or null when it cannot be read without
+/// decompressing it.
+///
+/// A plain byte scan (no parser): the largest `/Count` of a `/Type /Pages`
+/// node (the page tree root), else the number of `/Type /Page` objects, else
+/// the `/N` of a linearization dictionary. PDFs whose page tree sits in
+/// compressed object streams (common for PDF 1.5+ writers) yield null;
+/// callers then estimate from the size.
+int? pdfPageCount(List<int> bytes) {
+  // latin1 keeps one char per byte, so binary streams cannot break decoding.
+  final text = latin1.decode(bytes, allowInvalid: true);
+  var count = 0;
+  for (final m in _pagesNode.allMatches(text)) {
+    final c = _countKey.firstMatch(m[0]!);
+    final n = c == null ? null : int.tryParse(c[1]!);
+    if (n != null && n > count) count = n;
+  }
+  if (count > 0) return count;
+  final leaves = _pageLeaf.allMatches(text).length;
+  if (leaves > 0) return leaves;
+  final lin = _linearized.firstMatch(text);
+  final n = lin == null ? null : int.tryParse(lin[1]!);
+  return n != null && n > 0 ? n : null;
+}
+
+/// A dictionary (no nested `<<`) that is a `/Type /Pages` node.
+final RegExp _pagesNode = RegExp(r'<<(?:(?!<<|>>)[\s\S])*?/Type\s*/Pages\b(?:(?!<<)[\s\S])*?>>');
+final RegExp _countKey = RegExp(r'/Count\s+(\d+)');
+final RegExp _pageLeaf = RegExp(r'/Type\s*/Page(?![A-Za-z])');
+final RegExp _linearized = RegExp(r'/Linearized\s[^>]*?/N\s+(\d+)');
 
 /// Model reasoning ("thinking"). [signature] and [redactedData] are opaque
 /// provider tokens that must be echoed back verbatim on the next request

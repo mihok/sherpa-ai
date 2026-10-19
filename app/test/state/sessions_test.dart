@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sherpa/features/mcp/mcp_bootstrap.dart';
+import 'package:sherpa/services/inference/on_device_ids.dart';
 import 'package:sherpa/state/app_providers.dart';
 import 'package:sherpa/state/services.dart';
 import 'package:sherpa/state/sessions.dart';
@@ -141,6 +142,33 @@ void main() {
     await c.read(sessionListProvider.notifier).refresh();
     c.read(sessionQueryProvider.notifier).set('qwen3 4b');
     expect(c.read(visibleSessionsProvider).value!.map((s) => s.title), ['Offline notes']);
+    sub.close();
+  });
+
+  test('search finds chats on every on-device provider by model and engine name', () async {
+    final h = Harness(
+      wrapRegistry: (inner) => WithLocalModels(inner, [
+        WithLocalModels.model('lib-qwen3', 'Qwen3 4B'),
+        WithLocalModels.model('lib-gemma-mlx', 'Gemma 3 MLX', providerId: mlxProviderId),
+        WithLocalModels.model('gemini-nano', 'Gemini Nano v3', providerId: geminiNanoProviderId),
+      ]),
+    );
+    final c = containerFor(h);
+    final sub = c.listen(visibleSessionsProvider, (_, _) {});
+    await c.read(localModelsProvider.future);
+    await h.addSession('Phone notes', providerId: mlxProviderId, modelId: 'lib-gemma-mlx');
+    await h.addSession('Quick answers', providerId: geminiNanoProviderId, modelId: 'gemini-nano');
+    await h.addSession('Offline notes', providerId: localProviderId, modelId: 'lib-qwen3');
+    await c.read(sessionListProvider.notifier).refresh();
+    List<String> search(String q) {
+      c.read(sessionQueryProvider.notifier).set(q);
+      return c.read(visibleSessionsProvider).value!.map((s) => s.title).toList();
+    }
+
+    expect(search('gemma 3'), ['Phone notes'], reason: 'an MLX model by its display name');
+    expect(search('nano v3'), ['Quick answers']);
+    expect(search('(mlx)'), ['Phone notes'], reason: 'by the engine name the list shows');
+    expect(search('qwen3 4b'), ['Offline notes']);
     sub.close();
   });
 }

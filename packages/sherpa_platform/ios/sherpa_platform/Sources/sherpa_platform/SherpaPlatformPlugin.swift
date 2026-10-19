@@ -70,6 +70,20 @@ public final class SherpaPlatformPlugin: NSObject, FlutterPlugin, SherpaPlatform
     return true
   }
 
+  /// Nothing to ask for: background tasks and the continued-processing
+  /// Live Activity need no permission.
+  func requestNotificationsPermission(completion: @escaping (Result<Bool, Error>) -> Void) {
+    completion(.success(true))
+  }
+
+  /// Not supported on iOS (no UserNotifications authorization is asked
+  /// for); the Dart side updates the Live Activity's text instead.
+  func notifyRunFinished(notice: FinishedNotice) throws -> Bool {
+    return false
+  }
+
+  func clearFinishedNotices() throws {}
+
   // Lease calls have no TaskQueue, so Flutter delivers them on the main
   // thread; assumeIsolated states that (and traps if it ever changes).
   func beginLease(request: LeaseRequest, completion: @escaping (Result<LeaseResult, Error>) -> Void) {

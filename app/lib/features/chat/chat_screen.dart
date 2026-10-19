@@ -8,6 +8,7 @@ import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 
 import '../../design/tokens.dart';
 import '../../design/widgets/privacy_badge.dart';
+import '../../services/background/background_providers.dart';
 import '../../services/mcp/composer_sources.dart';
 import '../mcp/input/input_host.dart' show McpPendingInputsInline;
 import '../mcp/session_tools_sheet.dart';
@@ -15,6 +16,7 @@ import '../mcp/state/input_providers.dart' show mcpPendingInputsForSessionProvid
 import '../mcp/state/mcp_providers.dart';
 import 'attachments/attachment_policy.dart';
 import 'attachments/composer_attachments.dart';
+import 'background/background_widgets.dart';
 import 'dictation/dictation.dart';
 import 'links/reply_links.dart';
 import 'model_picker_sheet.dart';
@@ -386,6 +388,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final onDeviceModels = ref.watch(provider.select((s) => s.onDeviceModels));
     final attachmentPolicy = ref.watch(provider.select((s) => s.attachmentPolicy));
     final hasInputs = ref.watch(mcpPendingInputsForSessionProvider(widget.sessionId)).isNotEmpty;
+    final askNotifications = ref.watch(runActivitySnapshotProvider.select((s) => s.askForNotifications));
     ref.listen(provider.select((s) => s.pendingApproval), (prev, next) {
       if (next != null && next.call.id != prev?.call.id) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -428,6 +431,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           onResume: () => unawaited(_controller.resumeIfInterrupted()),
           onDiscard: () => unawaited(_controller.discardInterrupted()),
         ),
+      // Android 13+: why Sherpa would like to post notifications, before
+      // the system asks (once, the first time a reply could go on in the
+      // background).
+      if (askNotifications) const BackgroundNotificationsPrompt(),
       // Questions and forms from tool servers for this chat (elicitation,
       // URL consent, sampling); each opens its sheet on Review.
       if (hasInputs) McpPendingInputsInline(sessionId: widget.sessionId),

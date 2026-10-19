@@ -11,6 +11,7 @@ import '../../design/widgets/section_header.dart';
 import '../../routing/routes.dart';
 import '../../state/app_providers.dart';
 import '../../state/ui_preferences.dart';
+import '../chat/background/background_widgets.dart' show BackgroundRunsTile;
 import 'default_model_sheet.dart';
 import 'settings_page.dart';
 
@@ -79,6 +80,7 @@ class SettingsScreen extends ConsumerWidget {
           trailing: const Icon(Icons.chevron_right),
           onTap: () => context.go(Routes.huggingFace),
         ),
+        const BackgroundRunsTile(),
         const SectionHeader('Tools'),
         ListTile(
           leading: const Icon(Icons.extension_outlined),

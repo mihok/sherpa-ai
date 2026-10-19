@@ -5,7 +5,9 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/skeleton.dart';
 import '../../design/widgets/state_views.dart';
@@ -41,7 +43,7 @@ class ContextInspectorScreen extends ConsumerWidget {
     final snapshot = ref.watch(contextInspectorProvider(sessionId));
     return Scaffold(
       appBar: AppBar(
-        title: Semantics(headingLevel: 1, child: const Text('What the model sees')),
+        title: Heading(level: 1, child: const Text('What the model sees')),
         actions: [
           IconButton(
             tooltip: 'How context works',
@@ -238,6 +240,7 @@ class _Loaded extends ConsumerWidget {
                     child: Theme(
                       data: theme.copyWith(dividerColor: Colors.transparent),
                       child: ExpansionTile(
+                        expansionAnimationStyle: motionStyleOf(context),
                         tilePadding: EdgeInsets.symmetric(horizontal: t.space.lg),
                         leading: const Icon(Icons.layers_outlined),
                         title: Text('${plural(hidden.length, 'older change')} inside a summary'),
@@ -336,8 +339,9 @@ final class _InspectorActions {
         : 'The original goes back into what the model sees';
     final confirmed = await showDialog<bool>(
       context: context,
+      animationStyle: motionStyleOf(context),
       builder: (dialog) => AlertDialog(
-        title: Text(d.kind == ContextDiffKind.compaction ? 'Undo this summary?' : 'Undo this change?'),
+        title: Heading(child: Text(d.kind == ContextDiffKind.compaction ? 'Undo this summary?' : 'Undo this change?')),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,

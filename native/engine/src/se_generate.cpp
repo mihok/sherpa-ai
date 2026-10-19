@@ -46,12 +46,13 @@ bool boolean(const common_json & j, const char * key, bool def) {
 
 }  // namespace
 
-ChatRequest parse_chat_request(const ModelImpl & m, const char * json) {
+ChatRequest parse_chat_request(const ModelImpl & m, const char * json, const std::vector<MediaRef> * ext) {
   if (!m.tmpls) fail(SE_ERR_TEMPLATE, "model has no usable chat template: " + m.tmpl_error);
-  const common_json body = parse_json_object(json, "request");
+  common_json body = parse_json_object(json, "request");
   ChatRequest r;
   common_chat_templates_inputs & in = r.inputs;
 
+  if (body.contains("messages")) extract_media(m, body["messages"], ext, r.media);
   const common_json * msgs = opt(body, "messages");
   if (!msgs || !msgs->is_array() || msgs->empty()) fail(SE_ERR_INVALID_ARG, "'messages' must be a non-empty array");
   try {
@@ -341,6 +342,39 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
       n_dft_synced = std::min(n_dft_synced, history.size());
     }
   };
+  // Encodes one image chunk with the vision projector and decodes its embeddings into positions
+  // [sp.begin, sp.end). A failed or cancelled decode leaves no part of the image in the KV.
+  auto decode_media = [&](const PromptPlan & plan, const PromptPlan::Span & sp) {
+#if SE_HAVE_MTMD
+    const mtmd_input_chunk * chunk = plan.chunk(sp.chunk);
+    if (mtmd_decode_use_non_causal(model->mtmd, chunk) && sp.n_tokens > std::min(n_batch, n_ubatch)) {
+      // Non-causal attention cannot be micro-batched: llama-context.cpp:1787 GGML_ASSERTs n_ubatch >= n_tokens.
+      fail(SE_ERR_INVALID_ARG, "an image of this model takes " + std::to_string(sp.n_tokens) +
+                                   " tokens in one batch; create the session with n_batch and n_ubatch >= that");
+    }
+    bool      encoded = false;
+    int32_t   rc      = 0;
+    llama_pos next    = (llama_pos) sp.begin;
+    {
+      // The projector's context and its output buffer are shared by every session on this model.
+      std::lock_guard<std::mutex> lk(model->mtmd_mu);
+      encoded = mtmd_encode_chunk(model->mtmd, chunk) == 0;
+      if (encoded) {
+        rc = mtmd_helper_decode_image_chunk(model->mtmd, ctx, chunk, mtmd_get_output_embd(model->mtmd),
+                                            (llama_pos) sp.begin, 0, (int32_t) n_batch, &next, nullptr, nullptr);
+      }
+    }
+    if (!encoded) fail(SE_ERR_DECODE, "the vision projector failed to encode an image");
+    if (rc != 0) {
+      llama_memory_seq_rm(mem, 0, (llama_pos) sp.begin, -1);
+      check_rc(rc, "image decode");
+    }
+#else
+    (void) plan;
+    (void) sp;
+    fail(SE_ERR_UNSUPPORTED, "this engine was built without multimodal support");
+#endif
+  };
 
   try {
     // ---- 1. template -------------------------------------------------------------------------------
@@ -412,21 +446,30 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
     parser_ready = true;
 
     // ---- 3. prompt -------------------------------------------------------------------------------
-    const std::vector<llama_token> prompt = tokenize_prompt(vocab, chat.prompt, true);
+    // One entry per position; image chunks (media requests) hold pseudo tokens, see build_prompt.
+    const PromptPlan plan = build_prompt(*model, chat.prompt, req.media);
+    const std::vector<llama_token> & prompt = plan.tokens;
     if (prompt.empty()) fail(SE_ERR_INVALID_ARG, "the rendered prompt is empty");
-    n_prompt = (int32_t) prompt.size();
-    if (prompt.size() + 1 > n_ctx_seq) {
-      fail(SE_ERR_CONTEXT_FULL, "prompt has " + std::to_string(prompt.size()) + " tokens; the context holds " +
+    // The last prompt token is decoded in the loop below for fresh logits, so it must be text.
+    if (plan.has_media() && plan.spans.back().end >= prompt.size()) {
+      fail(SE_ERR_TEMPLATE, "the rendered prompt ends with an image (no text after it)");
+    }
+    n_prompt = (int32_t) plan.n_cells;
+    if (std::max(prompt.size(), plan.n_cells) + 1 > n_ctx_seq) {
+      fail(SE_ERR_CONTEXT_FULL, "prompt has " + std::to_string(plan.n_cells) + " tokens; the context holds " +
                                     std::to_string(n_ctx_seq));
     }
     // Penalty samplers look at the prompt too (server-context.cpp:378-384); grammar/budget do not.
-    for (const llama_token t : prompt) common_sampler_accept(smpl.get(), t, false);
+    for (const llama_token t : prompt) {
+      if (!is_media_token(t)) common_sampler_accept(smpl.get(), t, false);
+    }
 
     // spec_on: draft this reply. feed_dft: keep a draft model / MTP context in lockstep with the target
     // (it has its own KV); it stays on after an auto-disable so the next reply can speculate again and
-    // the draft context can still reuse the prompt cache.
-    const bool use_draft_ctx = spec && ctx_dft && req.speculative;
-    bool       spec_on       = spec != nullptr && req.speculative;
+    // the draft context can still reuse the prompt cache. A context with images is never drafted: a
+    // draft model cannot see them and n-gram tables would propose pseudo tokens.
+    const bool use_draft_ctx = spec && ctx_dft && req.speculative && !plan.has_media();
+    bool       spec_on       = spec != nullptr && req.speculative && !plan.has_media();
     bool       feed_dft      = use_draft_ctx;
 
     // ---- 4. prompt cache: reuse the longest common prefix of the KV cache --------------------------
@@ -437,6 +480,13 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
     // The last prompt token is always (re)decoded inside the loop so sampling sees fresh logits; state
     // files and old KV never provide logits (R04 §13).
     keep = std::min(keep, prompt.size() - 1);
+    // Never resume inside an image chunk (a cancelled or failed decode may have left part of one).
+    for (const auto & sp : plan.spans) {
+      if (keep > sp.begin && keep < sp.end) {
+        keep = sp.begin;
+        break;
+      }
+    }
     // A draft model keeps its own KV; it can only reuse what it has seen.
     if (use_draft_ctx) keep = std::min(keep, n_dft_synced);
     if (keep < history.size()) {
@@ -456,7 +506,7 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
         n_dft_synced = dk;
       }
     }
-    n_cached = (int32_t) keep;
+    n_cached = (int32_t) plan.cells_before(keep);
 
     // ---- 5. chunked prefill of prompt[keep .. n-1), cancellable between chunks ----------------------
     t_prefill0 = Clock::now();
@@ -465,13 +515,29 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
       const size_t end = prompt.size() - 1;
       Event pe;
       pe.ev.type           = SE_EVENT_PROMPT_PROGRESS;
-      pe.ev.progress_done  = (int32_t) keep;
+      pe.ev.progress_done  = n_cached;
       pe.ev.progress_total = n_prompt;
       emit(std::move(pe));
+      size_t si = 0;  // next image chunk at or after i
+      while (si < plan.spans.size() && plan.spans[si].end <= keep) ++si;
       // Chunks of at most n_batch tokens: llama_decode GGML_ASSERTs n_tokens <= n_batch (llama-context.cpp:1785).
-      for (size_t i = keep; i < end; i += n_batch) {
+      for (size_t i = keep, e = keep; i < end; i = e) {
         if (cancel.load()) fail(SE_ERR_CANCELLED, "cancelled");
-        const size_t e = std::min(end, i + n_batch);
+        if (si < plan.spans.size() && plan.spans[si].begin == i) {
+          const PromptPlan::Span & sp = plan.spans[si++];
+          decode_media(plan, sp);
+          history.insert(history.end(), prompt.begin() + sp.begin, prompt.begin() + sp.end);
+          n_prefilled += (int32_t) sp.n_tokens;
+          e = sp.end;
+          Event pr;
+          pr.ev.type           = SE_EVENT_PROMPT_PROGRESS;
+          pr.ev.progress_done  = (int32_t) plan.cells_before(e);
+          pr.ev.progress_total = n_prompt;
+          emit(std::move(pr));
+          continue;
+        }
+        e = std::min(end, i + n_batch);
+        if (si < plan.spans.size()) e = std::min(e, plan.spans[si].begin);
         batch.clear();
         for (size_t k = i; k < e; ++k) batch.add(prompt[k], (llama_pos) k, 0, false);
         const int32_t rc = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
@@ -490,7 +556,7 @@ void SessionImpl::run_generation(uint32_t gen_id, ChatRequest & req) {
         }
         Event pr;
         pr.ev.type           = SE_EVENT_PROMPT_PROGRESS;
-        pr.ev.progress_done  = (int32_t) e;
+        pr.ev.progress_done  = (int32_t) plan.cells_before(e);
         pr.ev.progress_total = n_prompt;
         emit(std::move(pr));
       }

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../../services/inference/on_device_ids.dart' show isOnDeviceProviderId;
 import '../../../services/inference/runner_extras.dart'
     show ModelSummarizer, remoteSummaryTimeout, withSummarizer;
 import '../../../services/mcp/composer_sources.dart';
@@ -61,7 +62,8 @@ final chatContextExtrasProvider = Provider<RunnerExtrasFor>((ref) {
   final modelSummaries = ref.watch(uiSettingsProvider.select((s) => s.modelSummaries));
   final clock = ref.watch(clockProvider);
   return (provider, choice, base) {
-    final remote = choice.providerId != localProviderId;
+    // On-device chats summarize with their own model (chatRunnerExtrasProvider).
+    final remote = !isOnDeviceProviderId(choice.providerId);
     final b = remote && modelSummaries
         ? withSummarizer(
             base,

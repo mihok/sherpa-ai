@@ -24,6 +24,12 @@ abstract interface class PlatformBackend {
 
   Future<bool> notificationsPermitted();
 
+  Future<bool> requestNotificationsPermission();
+
+  Future<bool> notifyRunFinished(FinishedNotice notice);
+
+  Future<void> clearFinishedNotices();
+
   Future<LeaseResult> beginLease(LeaseRequest request);
 
   Future<void> updateLease(String id, double? progress, String? text);
@@ -95,6 +101,15 @@ final class PigeonPlatformBackend implements PlatformBackend {
   Future<bool> notificationsPermitted() => _api.notificationsPermitted();
 
   @override
+  Future<bool> requestNotificationsPermission() => _api.requestNotificationsPermission();
+
+  @override
+  Future<bool> notifyRunFinished(FinishedNotice notice) => _api.notifyRunFinished(notice);
+
+  @override
+  Future<void> clearFinishedNotices() => _api.clearFinishedNotices();
+
+  @override
   Future<LeaseResult> beginLease(LeaseRequest request) => _api.beginLease(request);
 
   @override
@@ -143,6 +158,15 @@ final class UnsupportedPlatformBackend implements PlatformBackend {
 
   @override
   Future<bool> notificationsPermitted() async => false;
+
+  @override
+  Future<bool> requestNotificationsPermission() async => false;
+
+  @override
+  Future<bool> notifyRunFinished(FinishedNotice notice) async => false;
+
+  @override
+  Future<void> clearFinishedNotices() async {}
 
   @override
   Future<LeaseResult> beginLease(LeaseRequest request) async => LeaseResult(

@@ -149,6 +149,17 @@ class MotionTokens {
   /// Scales an arbitrary duration (e.g. a third-party widget parameter).
   Duration scale(Duration d) => reduced ? Duration.zero : d;
 
+  /// For framework widgets that animate on their own and take an
+  /// [AnimationStyle] (`showModalBottomSheet`'s `sheetAnimationStyle`,
+  /// `showDialog`'s `animationStyle`, `ExpansionTile`'s
+  /// `expansionAnimationStyle`): no animation under reduced motion, the
+  /// widget's own default otherwise. None of them read
+  /// `MediaQuery.disableAnimations` themselves.
+  AnimationStyle? get style => reduced ? AnimationStyle.noAnimation : null;
+
+  /// For `TabController.animationDuration` (tab taps slide the view).
+  Duration get tabs => scale(const Duration(milliseconds: 300));
+
   @override
   bool operator ==(Object other) => other is MotionTokens && other.reduced == reduced;
 
