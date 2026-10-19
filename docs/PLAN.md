@@ -64,7 +64,7 @@ Rules:
 
 | Interface | Package | Real implementations | Test double |
 |---|---|---|---|
-| `ModelProvider` | core | Anthropic, OpenAI Chat, OpenAI Responses, llama.cpp (FFI / Android isolated process), MLX, LiteRT-LM, AICore, Apple FM | `ScriptedProvider` |
+| `ModelProvider` | core | Anthropic, OpenAI Chat, OpenAI Responses, llama.cpp (FFI / Android `:inference` process), MLX, LiteRT-LM, Gemini Nano (AICore), Apple FM | `ScriptedProvider`, `FakeEngineHost`, fake Pigeon backends |
 | `ContextManager` / `ContextStrategy` | core | `LadderContextManager` (M3), model/extractive summarizers | `PassthroughContextManager`, deterministic summarizer |
 | `ToolRouter` | core | `CompositeToolRouter` over built-ins, on-device servers, `McpToolRouter` | `LocalToolRouter` |
 | `McpConnection` | mcp | dual-era Streamable HTTP, legacy HTTP+SSE, in-process | mock server (shelf) + reference servers |
@@ -102,7 +102,11 @@ usage, perf, finish), thread-safe cancel, tokenize/count, state save/load (prefi
   AIDL → Pigeon event channel) so a native crash restarts the engine instead of killing the app; in-process
   FFI is the fallback.
 - MLX (iOS), LiteRT-LM and Gemini Nano (Android), and Apple Foundation Models are separate providers behind
-  Pigeon, because their SDKs are Swift/Kotlin only.
+  Pigeon, because their SDKs are Swift/Kotlin only. They live in their own plugins (`sherpa_apple_ml`,
+  `sherpa_litert`) so the llama.cpp plugin stays lean and each app build only carries what its platform
+  uses.
+- The Android host is a *private* process, not `android:isolatedProcess`: an isolated uid cannot open the
+  GGUF that llama.cpp mmaps by path (implementation note, M2).
 - Build: pinned llama.cpp commit, `native/llama/build_{android,ios}.sh` produce prebuilt artifacts
   (`jniLibs`, xcframework); arm64-v8a only; KleidiAI on; GPU/NPU feature-detected and parity-checked against
   CPU before use.
@@ -112,7 +116,8 @@ Dual-era client behind `McpConnection`. Default: adopt `mcp_dart` 2.4.x for prot
 code audit in M4**, behind our interface with contract tests against the reference servers; OAuth is ours
 (pure Dart, R02 algorithm). Elicitation forms are native widgets; URL elicitation opens the system browser
 only after showing the full URL. MCP Apps render in `sherpa_webview`: trusted shell page + inner
-`sandbox="allow-scripts allow-forms"` `srcdoc` iframe, CSP built only from declared domains, no network
+`sandbox="allow-scripts"` `srcdoc` iframe (no `allow-forms`: form submission is blocked by CSP anyway, and
+apps use button handlers), CSP built only from declared domains, no network
 until the user consents per server, non-persistent storage, host-enforced visibility and same-server rules.
 
 ---
@@ -128,17 +133,21 @@ packages/
   sherpa_providers/          OpenAI Chat, OpenAI Responses, Anthropic, server detection, tool-call repair
   sherpa_data/               Drift schema + SessionStore, settings, model library, MCP servers, downloads
   sherpa_hub/                HF Hub client, name parser, device-fit engine, download planner
-  sherpa_mcp/                JSON-RPC, transports, era detection, OAuth, tool router, Apps host protocol
-  sherpa_inference/          Flutter plugin: engine FFI + Android isolated service; MLX/LiteRT/AICore/FM
+  sherpa_mcp/                JSON-RPC, transports, era detection, tool router + hygiene, in-process servers
+  sherpa_auth/               OAuth 2.1 for MCP servers and Hugging Face
+  sherpa_markdown/           incremental streaming Markdown renderer
+  sherpa_inference/          Flutter plugin: engine FFI + Android :inference service, lifecycle, autotune
+  sherpa_litert/             Flutter plugin (Android): LiteRT-LM and Gemini Nano providers
+  sherpa_apple_ml/           Flutter plugin (iOS): MLX and Apple Foundation Models providers
   sherpa_platform/           Flutter plugin: memory/thermal/device signals, background execution
-  sherpa_webview/            Flutter plugin: sandboxed WebView for MCP Apps
+  sherpa_webview/            Flutter plugin: sandboxed WebView for MCP Apps (shell page + bridge)
+  sherpa_evals/              eval harness L0-L4 (scripted, local model, remote) and host benchmarks
 app/                         Flutter app: design system, screens, wiring
 native/
   engine/                    sherpa_engine C ABI over llama.cpp (+ host CMake build and C++ tests)
   llama/                     pinned commit, fetch/build scripts (LLAMA_CPP_SRC override for offline)
-tools/
-  evals/                     eval harness (scripted + real small local model + remote)
-  bench/                     perf budgets (JSON baselines) and comparison script
+bench/                       perf budgets (JSON baselines per device class), frame-bench scaffolding
+tools/                       test_all.sh, perf_gate.dart
 docs/                        PLAN.md, research/, milestone notes, ADRs
 .github/workflows/           CI
 ```
