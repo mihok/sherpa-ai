@@ -84,6 +84,8 @@ final class OpenAiResponsesProvider implements ModelProvider {
       headers: _endpoint.headers(stream: true),
       body: jsonEncode(built.body),
       abort: abort,
+      headersTimeout: config.streamStartTimeout,
+      idleTimeout: config.streamIdleTimeout,
     );
     for (var attempt = 0; !response.ok; attempt++) {
       final text = await response.readText(maxBytes: 64 * 1024);
@@ -109,6 +111,8 @@ final class OpenAiResponsesProvider implements ModelProvider {
         headers: _endpoint.headers(stream: true),
         body: jsonEncode(built.body),
         abort: abort,
+        headersTimeout: config.streamStartTimeout,
+        idleTimeout: config.streamIdleTimeout,
       );
     }
 

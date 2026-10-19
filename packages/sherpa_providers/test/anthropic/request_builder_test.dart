@@ -589,13 +589,125 @@ void main() {
           ));
       expect(r.body['stream'], isTrue);
       expect(r.body['stop_sequences'], ['\nObservation:']);
+      // Structured outputs require additionalProperties: false on every
+      // object (finding 16), so the builder adds it.
       expect(r.body['output_config'], {
         'effort': 'max',
-        'format': {'type': 'json_schema', 'schema': {'type': 'object'}},
+        'format': {
+          'type': 'json_schema',
+          'schema': {'type': 'object', 'additionalProperties': false},
+        },
       });
       expect(r.body['metadata'], {'user_id': 'h'});
       expect(r.countTokensBody.keys, ['model', 'system', 'messages', 'thinking']);
       expect(r.body.keys.take(3), ['model', 'max_tokens', 'stream']);
+    });
+  });
+
+  group('structured output schema (finding 16)', () {
+    test('compaction-style schema: unsupported constraints are moved into descriptions and reported', () {
+      const schema = {
+        'type': 'object',
+        'additionalProperties': false,
+        'properties': {
+          'schemaVersion': {
+            'type': 'integer',
+            'enum': [2],
+          },
+          'goal': {'type': 'string', 'maxLength': 400, 'description': 'The goal.'},
+          'constraints': {
+            'type': 'array',
+            'maxItems': 12,
+            'minItems': 1,
+            'items': {'type': 'string', 'maxLength': 200},
+          },
+          'score': {'type': 'number', 'minimum': 0, 'maximum': 1},
+          'when': {'type': 'string', 'format': 'date-time'},
+          'color': {'type': 'string', 'format': 'hex-color'},
+          'nested': {
+            'type': 'object',
+            'properties': {
+              'tags': {'type': 'array', 'minItems': 2, 'items': {'type': 'string'}},
+            },
+          },
+          'either': {
+            'oneOf': [
+              {'type': 'string'},
+              {'type': 'integer'},
+            ],
+          },
+          'map': {
+            'type': 'object',
+            'additionalProperties': {'type': 'string'},
+          },
+        },
+        'required': ['schemaVersion', 'goal'],
+      };
+      final r = build([user('u', 'x')], params: const GenerationParams(jsonSchema: schema));
+      final sent = ((r.body['output_config']! as Map)['format']! as Map)['schema']! as Map;
+      final props = sent['properties']! as Map;
+      expect(props['schemaVersion'], {
+        'type': 'integer',
+        'enum': [2],
+      });
+      expect(props['goal'], {'type': 'string', 'description': 'The goal.\n\n{maxLength: 400}'});
+      final constraints = props['constraints']! as Map;
+      expect(constraints.containsKey('maxItems'), isFalse);
+      expect(constraints['minItems'], 1);
+      expect(constraints['items'], {'type': 'string', 'description': '{maxLength: 200}'});
+      expect(props['score'], {'type': 'number', 'description': '{minimum: 0, maximum: 1}'});
+      expect(props['when'], {'type': 'string', 'format': 'date-time'});
+      expect(props['color'], {'type': 'string', 'description': '{format: hex-color}'});
+      final nested = props['nested']! as Map;
+      expect(nested['additionalProperties'], isFalse);
+      expect(((nested['properties']! as Map)['tags']! as Map).containsKey('minItems'), isFalse);
+      expect((props['either']! as Map).keys, ['anyOf']);
+      expect(props['map'], {
+        'type': 'object',
+        'additionalProperties': false,
+        'description': '{additionalProperties: {"type":"string"}}',
+      });
+      expect(sent['required'], ['schemaVersion', 'goal']);
+      expect(sent['additionalProperties'], isFalse);
+
+      // Nothing an Anthropic 400 names survives anywhere in the tree.
+      final encoded = jsonEncode(sent);
+      for (final k in ['maxLength', 'maxItems', 'minimum', 'maximum', 'oneOf', 'hex-color']) {
+        expect(encoded, isNot(contains('"$k"')), reason: k);
+      }
+
+      // Never silent: one notice names every relaxed keyword.
+      final notice = r.notices.singleWhere((n) => n.code == 'anthropic.schema_relaxed');
+      expect(notice.message, allOf(contains('maxLength (2x)'), contains('maxItems'), contains('oneOf')));
+      expect(notice.data['relaxed'], contains('#/properties/goal: maxLength'));
+    });
+
+    test('a schema already in the supported subset is sent unchanged and without a notice', () {
+      const schema = {
+        'type': 'object',
+        'properties': {
+          'a': {'type': 'string', 'format': 'uuid'},
+          'b': {
+            'type': 'array',
+            'items': {r'$ref': '#/\$defs/item'},
+          },
+        },
+        r'$defs': {
+          'item': {
+            'type': 'object',
+            'properties': {
+              'x': {'type': 'integer'},
+            },
+            'required': ['x'],
+            'additionalProperties': false,
+          },
+        },
+        'required': ['a', 'b'],
+        'additionalProperties': false,
+      };
+      final r = build([user('u', 'x')], params: const GenerationParams(jsonSchema: schema));
+      expect(((r.body['output_config']! as Map)['format']! as Map)['schema'], schema);
+      expect(r.notices.where((n) => n.code == 'anthropic.schema_relaxed'), isEmpty);
     });
   });
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_net/sherpa_net.dart';
 
+import '../common/tool_call_accumulator.dart' show ToolCallCutoff;
 import 'errors.dart';
 import 'tool_names.dart';
 
@@ -27,7 +28,11 @@ import 'tool_names.dart';
 /// Tool calls are held back until `message_delta` reveals the stop reason:
 /// a `refusal` must never run the turn's tools (R10 §7.6), and the runner
 /// turns every started call into a tool call. To keep block order intact,
-/// everything after the first `tool_use` block is deferred together.
+/// everything after the first `tool_use` block is deferred together. When
+/// the stop reason says generation was cut off (`max_tokens`,
+/// `model_context_window_exceeded`), a call whose input is not complete,
+/// strict JSON is released as truncated ([ToolCallCutoff]), the same rule
+/// the OpenAI adapters apply, and is never repaired.
 final class AnthropicStreamDecoder {
   AnthropicStreamDecoder({
     required this.providerId,
@@ -260,6 +265,8 @@ final class AnthropicStreamDecoder {
         final sig = b.signature.toString();
         if (sig.isNotEmpty) out.emit(ReasoningSignature(signature: sig));
       case _Kind.toolUse:
+        if (b.stopped) return;
+        b.stopped = true;
         out.emit(ToolCallComplete(index: b.toolIndex, call: _parseCall(b)));
       case _Kind.text || _Kind.redacted || _Kind.ignored:
         break;
@@ -310,7 +317,7 @@ final class AnthropicStreamDecoder {
     final u = data.optObj('usage');
     if (u != null) _readUsage(u);
     final refused = _stopReason == 'refusal';
-    _release(out, dropToolCalls: refused);
+    _release(out, dropToolCalls: refused, cutoff: _cutoff());
     if (refused) {
       final d = _stopDetails ?? const {};
       out.emit(ProviderNotice(
@@ -323,19 +330,57 @@ final class AnthropicStreamDecoder {
   }
 
   void _finish(_Out out) {
-    _release(out, dropToolCalls: _stopReason == 'refusal');
+    _release(out, dropToolCalls: _stopReason == 'refusal', cutoff: _cutoff());
     _done = true;
     out.emit(Finish(mapStopReason(_stopReason), rawReason: _stopReason));
   }
 
-  void _release(_Out out, {required bool dropToolCalls}) {
+  /// Whether the stop reason means generation stopped mid-output.
+  ToolCallCutoff? _cutoff() => switch (_stopReason) {
+        'max_tokens' => ToolCallCutoff.tokenLimit,
+        'model_context_window_exceeded' => ToolCallCutoff.contextWindow,
+        _ => null,
+      };
+
+  void _release(_Out out, {required bool dropToolCalls, ToolCallCutoff? cutoff}) {
     final held = _deferred;
     if (held == null) return;
     _deferred = null;
     for (final e in held) {
       if (dropToolCalls && (e is ToolCallStart || e is ToolCallArgsDelta || e is ToolCallComplete)) continue;
-      out.events.add(e);
+      if (cutoff != null && e is ToolCallComplete) {
+        out.events.addAll(_asTruncated(e, cutoff));
+      } else {
+        out.events.add(e);
+      }
     }
+    if (dropToolCalls) return;
+    // A tool block the server never closed (no content_block_stop before the
+    // stop reason): complete it here so it is reported, not left half-open.
+    for (final b in _blocks.values) {
+      if (b.kind != _Kind.toolUse || b.stopped) continue;
+      b.stopped = true;
+      final done = ToolCallComplete(index: b.toolIndex, call: _parseCall(b));
+      out.events.addAll(_asTruncated(done, cutoff ?? ToolCallCutoff.unfinished));
+      _track(done);
+    }
+  }
+
+  /// Replaces a call cut off mid-input with a truncated, invalid one. Input
+  /// that is complete JSON (or came whole in `content_block_start`) stands.
+  List<ModelEvent> _asTruncated(ToolCallComplete e, ToolCallCutoff cutoff) {
+    final call = e.call;
+    final raw = call.rawArguments ?? '';
+    if (raw.trim().isEmpty && call.arguments.isNotEmpty) return [e];
+    final error = cutoff.errorFor(raw);
+    if (error == null) return [e];
+    return [
+      ToolCallComplete(
+        index: e.index,
+        call: ToolCall(id: call.id, name: call.name, arguments: const {}, rawArguments: raw, argumentsError: error),
+      ),
+      cutoff.notice(call.name, e.index, raw),
+    ];
   }
 
   /// Usage is cumulative: later frames override fields they carry.
@@ -413,6 +458,7 @@ final class _Block {
   final StringBuffer signature = StringBuffer();
   final StringBuffer json = StringBuffer();
   int toolIndex = -1;
+  bool stopped = false;
   String id = '';
   String name = '';
   JsonMap? initialInput;

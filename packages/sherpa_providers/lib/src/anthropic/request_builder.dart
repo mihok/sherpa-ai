@@ -5,6 +5,7 @@ import 'package:meta/meta.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
 import 'model_traits.dart';
+import 'output_schema.dart';
 import 'tool_names.dart';
 
 /// A rendered Messages API request plus what decoding its reply needs.
@@ -163,9 +164,10 @@ final class AnthropicRequestBuilder {
     final toolChoice = toolsJson.isEmpty ? null : _toolChoice(params, t, names, tools, thinkingActive, notices);
     final sampling = _sampling(params, t, thinkingActive, notices);
 
+    final format = _outputFormat(params.jsonSchema, notices);
     final outputConfig = <String, Object?>{
       if (effort != null) 'effort': effort.name,
-      if (params.jsonSchema != null) 'format': {'type': 'json_schema', 'schema': params.jsonSchema},
+      'format': ?format,
     };
 
     final body = <String, Object?>{
@@ -185,6 +187,29 @@ final class AnthropicRequestBuilder {
     };
     _deepMerge(body, params.extra);
     return AnthropicWireRequest(body: body, toolNames: names, traits: t, notices: notices);
+  }
+
+  /// `output_config.format` for [schema], rewritten into the subset
+  /// structured outputs accept ([AnthropicOutputSchema]); constraints that
+  /// had to be relaxed are reported, never dropped silently.
+  static JsonMap? _outputFormat(JsonMap? schema, List<ProviderNotice> notices) {
+    if (schema == null) return null;
+    final cleaned = AnthropicOutputSchema.of(schema);
+    if (cleaned.relaxed.isNotEmpty) {
+      final keywords = <String, int>{};
+      for (final r in cleaned.relaxed) {
+        final k = r.substring(r.lastIndexOf(': ') + 2);
+        keywords[k] = (keywords[k] ?? 0) + 1;
+      }
+      notices.add(ProviderNotice(
+        'anthropic.schema_relaxed',
+        'Anthropic structured outputs do not support some constraints in the requested JSON schema; they were '
+            'moved into field descriptions and are not enforced by the API: '
+            '${[for (final e in keywords.entries) e.value == 1 ? e.key : '${e.key} (${e.value}x)'].join(', ')}.',
+        data: {'relaxed': cleaned.relaxed},
+      ));
+    }
+    return {'type': 'json_schema', 'schema': cleaned.schema};
   }
 
   /// `input_schema` must be an object schema; MCP servers occasionally omit

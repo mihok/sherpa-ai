@@ -34,13 +34,26 @@ final class UrlPolicy {
   const UrlPolicy({
     this.scope = NetworkScope.publicOnly,
     this.allowHttp = false,
+    this.httpRequiresLocalAddress = false,
     this.resolver = _systemResolve,
   });
 
   final NetworkScope scope;
 
   /// Plain http is only ever acceptable for loopback/LAN development servers.
+  /// On its own it is gated by [scope] only, so a public host given by name
+  /// would pass; set [httpRequiresLocalAddress] to enforce the address too.
   final bool allowHttp;
+
+  /// With [allowHttp]: a plain-http URL must point at the user's own network.
+  /// Its host (the literal, or every address the name resolves to in
+  /// [check]) must be loopback, private (RFC 1918, CGNAT, ULA) or
+  /// link-local, never public, so prompts and credentials are never sent
+  /// unencrypted across the internet. `.local` (mDNS) names and literal
+  /// private addresses pass; https URLs are unaffected. [checkSyntax] can
+  /// only judge literals, so names are settled by [check] (call it again
+  /// before connecting: DNS answers change).
+  final bool httpRequiresLocalAddress;
   final Future<List<InternetAddress>> Function(String host) resolver;
 
   static Future<List<InternetAddress>> _systemResolve(String host) => InternetAddress.lookup(host);
@@ -62,7 +75,10 @@ final class UrlPolicy {
       throw UrlPolicyViolation(raw, 'plain http is only allowed for local servers you add yourself');
     }
     final literal = InternetAddress.tryParse(_stripBrackets(uri.host));
-    if (literal != null) _checkAddress(raw, literal);
+    if (literal != null) {
+      _checkAddress(raw, literal);
+      if (scheme == 'http') _checkHttpAddress(raw, literal);
+    }
     final host = uri.host.toLowerCase();
     if (scope == NetworkScope.publicOnly && (host == 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal'))) {
       throw UrlPolicyViolation(raw, 'local host names are not allowed here');
@@ -85,10 +101,20 @@ final class UrlPolicy {
       throw UrlPolicyViolation(raw, 'host does not resolve (${e.message})');
     }
     if (addresses.isEmpty) throw UrlPolicyViolation(raw, 'host does not resolve');
+    final http = uri.scheme.toLowerCase() == 'http';
     for (final a in addresses) {
       _checkAddress(raw, a);
+      if (http) _checkHttpAddress(raw, a);
     }
     return uri;
+  }
+
+  void _checkHttpAddress(String raw, InternetAddress a) {
+    if (!httpRequiresLocalAddress || isLocalAddressKind(classify(a))) return;
+    throw UrlPolicyViolation(
+      raw,
+      'plain http is only allowed to a server on your own network; ${a.address} is a public address',
+    );
   }
 
   void _checkAddress(String raw, InternetAddress a) {
@@ -106,6 +132,14 @@ final class UrlPolicy {
 }
 
 enum AddressKind { public, private, loopback, linkLocal, unspecified, multicast, reserved }
+
+/// Whether [kind] is an address on this device or the user's own network
+/// (loopback, private incl. ULA and CGNAT, link-local): what
+/// [UrlPolicy.httpRequiresLocalAddress] accepts for plain http.
+bool isLocalAddressKind(AddressKind kind) => switch (kind) {
+      AddressKind.loopback || AddressKind.private || AddressKind.linkLocal => true,
+      _ => false,
+    };
 
 /// Classifies an address. Link-local (incl. 169.254.169.254 cloud metadata)
 /// is never allowed, whatever the scope.

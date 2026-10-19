@@ -142,6 +142,66 @@ void main() {
     expect(input.any((i) => i.containsKey('id')), isFalse);
   });
 
+  group('cut-off function calls (finding 12)', () {
+    List<ModelEvent> parse(List<Map<String, Object?>> payloads) {
+      final p = ResponsesStreamParser(names: ToolNameMapper(['get_weather']), newCallId: (i) => 'synth_$i');
+      return [
+        for (final e in payloads) ...p.addPayload(e['type']! as String, e),
+        ...p.finish(),
+      ];
+    }
+
+    Map<String, Object?> added(int index) => {
+          'type': 'response.output_item.added',
+          'output_index': index,
+          'item': {'type': 'function_call', 'id': 'fc_$index', 'call_id': 'call_$index', 'name': 'get_weather', 'arguments': ''},
+        };
+    Map<String, Object?> delta(int index, String text) =>
+        {'type': 'response.function_call_arguments.delta', 'output_index': index, 'delta': text};
+
+    test('incomplete (max_output_tokens) with a call still open: invalid, not repaired', () {
+      final events = parse([
+        added(0),
+        delta(0, '{"city":"Par'),
+        {
+          'type': 'response.incomplete',
+          'response': {
+            'status': 'incomplete',
+            'incomplete_details': {'reason': 'max_output_tokens'},
+          },
+        },
+      ]);
+      final call = events.whereType<ToolCallComplete>().single.call;
+      expect(call.isValid, isFalse);
+      expect(call.repaired, isFalse);
+      expect(call.argumentsError, contains('output-token limit'));
+      expect((events.last as Finish).reason, FinishReason.length);
+    });
+
+    test('a call finished by output_item.done stands; one left open at completed is invalid', () {
+      final events = parse([
+        added(0),
+        delta(0, '{"city":"Oslo"}'),
+        {
+          'type': 'response.output_item.done',
+          'output_index': 0,
+          'item': {'type': 'function_call', 'id': 'fc_0', 'call_id': 'call_0', 'name': 'get_weather', 'arguments': '{"city":"Oslo"}'},
+        },
+        added(1),
+        delta(1, '{"city":"Ber'),
+        {
+          'type': 'response.completed',
+          'response': {'status': 'completed'},
+        },
+      ]);
+      final calls = events.whereType<ToolCallComplete>().map((e) => e.call).toList();
+      expect(calls[0].arguments, {'city': 'Oslo'});
+      expect(calls[0].isValid, isTrue);
+      expect(calls[1].isValid, isFalse);
+      expect(calls[1].argumentsError, contains('before the response finished'));
+    });
+  });
+
   group('over HTTP', () {
     late FakeServer server;
     late http.Client client;

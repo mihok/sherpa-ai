@@ -115,6 +115,8 @@ final class OpenAiChatProvider implements ModelProvider {
           headers: _endpoint.headers(stream: true),
           body: jsonEncode(b.body),
           abort: abort,
+          headersTimeout: config.streamStartTimeout,
+          idleTimeout: config.streamIdleTimeout,
         );
 
     var response = await send(built);

@@ -6,14 +6,29 @@ import 'package:sherpa_net/sherpa_net.dart';
 /// The URL policy for a user-configured model endpoint.
 ///
 /// Public endpoints must be https on public addresses. When the user marked
-/// the endpoint as their own local server, http and private addresses are
-/// allowed, and so is loopback: a server on the phone itself (Termux,
-/// an on-device llama-server) or the host machine seen from an iOS
-/// simulator is reached via `localhost`. Link-local and metadata addresses
-/// stay blocked whatever the setting (enforced by [UrlPolicy]).
-UrlPolicy endpointUrlPolicy({required bool allowLocalNetwork}) => allowLocalNetwork
-    ? const UrlPolicy(scope: NetworkScope.loopback, allowHttp: true)
-    : const UrlPolicy();
+/// the endpoint as their own local server, private addresses are allowed,
+/// and so is loopback: a server on the phone itself (Termux, an on-device
+/// llama-server) or the host machine seen from an iOS simulator is reached
+/// via `localhost`. Plain http is allowed then too, but only to a host that
+/// resolves to such a local address ([UrlPolicy.httpRequiresLocalAddress]):
+/// the opt-in must never send prompts and the API key unencrypted to a
+/// public server named by hostname. Link-local and metadata addresses stay
+/// blocked whatever the setting (enforced by [UrlPolicy]).
+///
+/// [resolver] replaces system DNS (tests, or a caller that resolves itself).
+UrlPolicy endpointUrlPolicy({
+  required bool allowLocalNetwork,
+  Future<List<InternetAddress>> Function(String host)? resolver,
+}) {
+  if (resolver != null) {
+    return allowLocalNetwork
+        ? UrlPolicy(scope: NetworkScope.loopback, allowHttp: true, httpRequiresLocalAddress: true, resolver: resolver)
+        : UrlPolicy(resolver: resolver);
+  }
+  return allowLocalNetwork
+      ? const UrlPolicy(scope: NetworkScope.loopback, allowHttp: true, httpRequiresLocalAddress: true)
+      : const UrlPolicy();
+}
 
 /// Where prompts sent to [baseUrl] are processed, for the privacy
 /// indicator. Decided from the URL alone (no DNS), erring towards

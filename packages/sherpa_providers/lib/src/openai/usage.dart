@@ -4,42 +4,61 @@ import '../common/json_read.dart';
 
 /// Chat Completions `usage` → [Usage].
 ///
-/// Sherpa's [Usage] follows Anthropic's convention: [Usage.inputTokens]
-/// excludes cache reads and writes, so `input + cacheRead + cacheWrite` is
-/// the prompt size (the agent loop calibrates its estimator on
-/// `input + cacheRead`). OpenAI's `prompt_tokens` includes cached tokens,
-/// so they are subtracted. Every `*_details` field is optional (llama.cpp
-/// sends only `cached_tokens`; Ollama sends it when set) (R10 §3.3).
+/// Core convention ([Usage]): [Usage.inputTokens] is every prompt token
+/// that was not a cache read, cache writes included, so `inputTokens +
+/// cacheReadTokens` is the whole prompt (the agent loop calibrates its
+/// estimator on exactly that). [Usage.cacheWriteTokens] is the written
+/// subset of [Usage.inputTokens]. The Anthropic decoder produces the same
+/// numbers from its disjoint fields.
+///
+/// OpenAI's `prompt_tokens` is the whole prompt, and the
+/// `prompt_tokens_details` counts (`cached_tokens`, `cache_write_tokens`)
+/// are subsets of it (R10 §3.3: `text_tokens` equals `prompt_tokens`), so
+/// only cache reads are subtracted. Every `*_details` field is optional
+/// (llama.cpp sends only `cached_tokens`; Ollama sends it when set).
 Usage parseChatUsage(JsonMap u) {
-  final prompt = u.integer('prompt_tokens') ?? 0;
-  final promptDetails = u.child('prompt_tokens_details');
-  final cached = promptDetails?.integer('cached_tokens') ?? 0;
-  final cacheWrite = promptDetails?.integer('cache_write_tokens') ?? 0;
-  final reasoning = u.child('completion_tokens_details')?.integer('reasoning_tokens') ?? 0;
-  final uncached = prompt - cached - cacheWrite;
-  return Usage(
-    inputTokens: uncached < 0 ? 0 : uncached,
-    outputTokens: u.integer('completion_tokens') ?? 0,
-    cacheReadTokens: cached,
-    cacheWriteTokens: cacheWrite,
-    reasoningTokens: reasoning,
+  final details = u.child('prompt_tokens_details');
+  return _usage(
+    prompt: u.integer('prompt_tokens') ?? 0,
+    cacheRead: details?.integer('cached_tokens') ?? 0,
+    cacheWrite: details?.integer('cache_write_tokens') ?? 0,
+    output: u.integer('completion_tokens') ?? 0,
+    reasoning: u.child('completion_tokens_details')?.integer('reasoning_tokens') ?? 0,
   );
 }
 
-/// Responses `response.usage` → [Usage] (same convention as
-/// [parseChatUsage]; `input_tokens` includes cached tokens).
+/// Responses `response.usage` → [Usage], with the same convention as
+/// [parseChatUsage]: `input_tokens` is the whole prompt and
+/// `input_tokens_details.cached_tokens` / `cache_write_tokens` are subsets.
 Usage parseResponsesUsage(JsonMap u) {
-  final input = u.integer('input_tokens') ?? 0;
   final details = u.child('input_tokens_details');
-  final cached = details?.integer('cached_tokens') ?? 0;
-  final cacheWrite = details?.integer('cache_write_tokens') ?? 0;
-  final uncached = input - cached - cacheWrite;
+  return _usage(
+    prompt: u.integer('input_tokens') ?? 0,
+    cacheRead: details?.integer('cached_tokens') ?? 0,
+    cacheWrite: details?.integer('cache_write_tokens') ?? 0,
+    output: u.integer('output_tokens') ?? 0,
+    reasoning: u.child('output_tokens_details')?.integer('reasoning_tokens') ?? 0,
+  );
+}
+
+/// [prompt] is the whole prompt; [cacheRead] and [cacheWrite] are subsets.
+/// A server reporting inconsistent numbers can never produce a negative
+/// input or a cache write larger than the uncached part.
+Usage _usage({
+  required int prompt,
+  required int cacheRead,
+  required int cacheWrite,
+  required int output,
+  required int reasoning,
+}) {
+  final read = cacheRead < 0 ? 0 : cacheRead;
+  final uncached = prompt - read < 0 ? 0 : prompt - read;
   return Usage(
-    inputTokens: uncached < 0 ? 0 : uncached,
-    outputTokens: u.integer('output_tokens') ?? 0,
-    cacheReadTokens: cached,
-    cacheWriteTokens: cacheWrite,
-    reasoningTokens: u.child('output_tokens_details')?.integer('reasoning_tokens') ?? 0,
+    inputTokens: uncached,
+    outputTokens: output,
+    cacheReadTokens: read,
+    cacheWriteTokens: cacheWrite < 0 ? 0 : (cacheWrite > uncached ? uncached : cacheWrite),
+    reasoningTokens: reasoning,
   );
 }
 

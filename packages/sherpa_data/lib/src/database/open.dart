@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:drift/isolate.dart' show DriftRemoteException;
 import 'package:drift/native.dart';
+import 'package:meta/meta.dart';
 import 'package:sherpa_core/sherpa_core.dart' show SecretStore;
 import 'package:sqlite3/common.dart';
 
@@ -22,6 +23,13 @@ enum EncryptionFailure {
 
   /// The key does not decrypt the file: a wrong key, a plaintext file, or a
   /// corrupt one. SQLite cannot tell these apart.
+  ///
+  /// Only the cipher's wrong-key signature counts: `SQLITE_NOTADB` ("file is
+  /// not a database") on the first page read after `PRAGMA key`. Any other
+  /// SQLite failure while opening (disk full, I/O error, busy or locked,
+  /// out of memory, corruption detected after a successful decrypt) is a
+  /// [DatabaseOpenException] instead, because the key and the file may be
+  /// fine and resetting the database would discard the user's data.
   keyRejected,
 
   /// The database file exists but its key is gone from secure storage (for
@@ -45,6 +53,56 @@ final class DatabaseEncryptionException implements Exception {
 
   @override
   String toString() => 'DatabaseEncryptionException(${failure.name}): $message';
+}
+
+/// SQLite failed to open the database for a reason other than the key: the
+/// disk is full, an I/O error, another connection holds a lock, memory ran
+/// out, the file is corrupt even though it decrypted, or it cannot be
+/// opened at all (permissions, a missing directory).
+///
+/// Unlike [EncryptionFailure.keyRejected], nothing says the key or the data
+/// are lost, so callers must not quarantine or reset the database: report
+/// the failure and let the user retry (most causes clear up on their own,
+/// see [isTransient]).
+final class DatabaseOpenException implements Exception {
+  const DatabaseOpenException({
+    required this.resultCode,
+    required this.extendedResultCode,
+    required this.message,
+  });
+
+  /// From a [SqliteException]; [what] names the step that failed. Only the
+  /// SQLite message is kept: the causing statement can be the key pragma.
+  factory DatabaseOpenException.from(SqliteException e, String what) => DatabaseOpenException(
+        resultCode: e.resultCode,
+        extendedResultCode: e.extendedResultCode,
+        message: '$what failed: ${e.message}${e.explanation == null ? '' : ' (${e.explanation})'}',
+      );
+
+  /// SQLite primary result code (`SQLITE_FULL`, `SQLITE_IOERR`, ...).
+  final int resultCode;
+
+  /// SQLite extended result code (e.g. `SQLITE_IOERR_SHMSIZE`).
+  final int extendedResultCode;
+
+  /// Diagnostic detail. Never contains key material.
+  final String message;
+
+  /// Whether the same open can succeed later without anyone touching the
+  /// file: busy/locked, out of memory, disk full, I/O errors.
+  bool get isTransient => const {
+        SqlError.SQLITE_BUSY,
+        SqlError.SQLITE_LOCKED,
+        SqlError.SQLITE_NOMEM,
+        SqlError.SQLITE_IOERR,
+        SqlError.SQLITE_FULL,
+        SqlError.SQLITE_CANTOPEN,
+        SqlError.SQLITE_PROTOCOL,
+        SqlError.SQLITE_INTERRUPT,
+      }.contains(resultCode);
+
+  @override
+  String toString() => 'DatabaseOpenException(code $extendedResultCode): $message';
 }
 
 /// Name of the database key in the app's [SecretStore].
@@ -122,8 +180,9 @@ Future<String> loadOrCreateDatabaseKey(
 /// selected at build time by the root pubspec's `hooks.user_defines`. The
 /// call fails closed: if the cipher is unavailable, the [key] is malformed
 /// or does not decrypt the file, it throws [DatabaseEncryptionException] and
-/// never falls back to plaintext. A file written by a newer schema throws
-/// [SchemaDowngradeException].
+/// never falls back to plaintext. Any other SQLite failure while opening
+/// (disk full, I/O, locks, corruption) throws [DatabaseOpenException]. A
+/// file written by a newer schema throws [SchemaDowngradeException].
 ///
 /// With [background] (the default) SQLite runs on a drift background
 /// isolate so queries never block the UI isolate.
@@ -189,14 +248,20 @@ void Function(CommonDatabase) encryptionSetup(String hexKey) {
     );
   }
   return (CommonDatabase raw) {
-    // The x'…' form is raw key material: sqlite3mc uses the 32 bytes as the
-    // cipher key directly instead of running them through PBKDF2 (64k
-    // iterations by default for chacha20). A random key gains nothing from
-    // stretching, every open gets cheaper, and there is no ambiguity about
-    // how a passphrase string would be encoded. The pattern check above
-    // guarantees the statement contains nothing but hex digits.
-    raw.execute('PRAGMA key = "x\'$hexKey\'";');
-    if (cipherFromRows(raw.select('PRAGMA cipher;')) == null) {
+    final String? cipher;
+    try {
+      // The x'…' form is raw key material: sqlite3mc uses the 32 bytes as the
+      // cipher key directly instead of running them through PBKDF2 (64k
+      // iterations by default for chacha20). A random key gains nothing from
+      // stretching, every open gets cheaper, and there is no ambiguity about
+      // how a passphrase string would be encoded. The pattern check above
+      // guarantees the statement contains nothing but hex digits.
+      raw.execute('PRAGMA key = "x\'$hexKey\'";');
+      cipher = cipherFromRows(raw.select('PRAGMA cipher;'));
+    } on SqliteException catch (e) {
+      throw DatabaseOpenException.from(e, 'setting the database key');
+    }
+    if (cipher == null) {
       throw const DatabaseEncryptionException(
         EncryptionFailure.cipherUnavailable,
         'SQLite was built without SQLite3MultipleCiphers; put '
@@ -208,12 +273,26 @@ void Function(CommonDatabase) encryptionSetup(String hexKey) {
       // fails ("file is not a database") when the key is wrong.
       raw.select('SELECT count(*) FROM sqlite_schema;');
     } on SqliteException catch (e) {
-      throw DatabaseEncryptionException(
-        EncryptionFailure.keyRejected,
-        'the key does not decrypt this database (${e.message})',
-      );
+      throw classifyOpenError(e, step: 'reading the first database page');
     }
   };
+}
+
+/// What a SQLite failure while opening the database means. Only
+/// `SQLITE_NOTADB` is the cipher's wrong-key signature (sqlite3mc reports a
+/// page that does not decrypt, or fails its MAC, as "file is not a
+/// database"); everything else is about the file system, locks, memory or
+/// a file that decrypted but is damaged, and must not be mistaken for a
+/// lost key. [step] names what was being done, for the message.
+@visibleForTesting
+Exception classifyOpenError(SqliteException e, {String step = 'opening the database'}) {
+  if (e.resultCode == SqlError.SQLITE_NOTADB) {
+    return DatabaseEncryptionException(
+      EncryptionFailure.keyRejected,
+      'the key does not decrypt this database (${e.message})',
+    );
+  }
+  return DatabaseOpenException.from(e, step);
 }
 
 /// Errors from the background isolate arrive wrapped in a
@@ -226,11 +305,8 @@ Exception? _typedOpenError(Object error) {
     cause = cause.remoteCause;
   }
   return switch (cause) {
-    DatabaseEncryptionException() || SchemaDowngradeException() => cause as Exception,
-    SqliteException(resultCode: SqlError.SQLITE_NOTADB) => DatabaseEncryptionException(
-        EncryptionFailure.keyRejected,
-        'the key does not decrypt this database (${cause.message})',
-      ),
+    DatabaseEncryptionException() || DatabaseOpenException() || SchemaDowngradeException() => cause as Exception,
+    SqliteException() => classifyOpenError(cause),
     _ => null,
   };
 }

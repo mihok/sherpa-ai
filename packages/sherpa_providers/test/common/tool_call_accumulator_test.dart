@@ -176,4 +176,40 @@ void main() {
       '1 call_2 {}',
     ]);
   });
+
+  group('cut-off turns (finding 12)', () {
+    test('a call cut off mid-arguments is invalid, not repaired', () {
+      final a = acc()
+        ..addChatDeltas([frag(0, id: 'c1', name: 'write_file', args: '{"path":"notes.md","content":"Line one. Line tw')]);
+      final events = a.completeAll(cutoff: ToolCallCutoff.tokenLimit);
+      final call = events.whereType<ToolCallComplete>().single.call;
+      expect(call.isValid, isFalse);
+      expect(call.repaired, isFalse);
+      expect(call.arguments, isEmpty);
+      expect(call.argumentsError, contains('output-token limit'));
+      expect(call.rawArguments, '{"path":"notes.md","content":"Line one. Line tw');
+      final notice = events.whereType<ProviderNotice>().single;
+      expect(notice.code, 'tool_args_truncated');
+      expect(notice.data['cutoff'], 'tokenLimit');
+    });
+
+    test('a call that finished before the cut keeps its arguments; empty text counts as cut', () {
+      final a = acc()
+        ..addChatDeltas([frag(0, id: 'c1', name: 'f', args: '{"a":1}')])
+        ..addChatDeltas([frag(1, id: 'c2', name: 'g', args: '')]);
+      final calls = a.completeAll(cutoff: ToolCallCutoff.tokenLimit).whereType<ToolCallComplete>().toList();
+      expect(calls[0].call.isValid, isTrue);
+      expect(calls[0].call.arguments, {'a': 1});
+      expect(calls[1].call.isValid, isFalse);
+      expect(calls[1].call.argumentsError, contains('no argument text'));
+    });
+
+    test('without a cut-off the same text is still repaired (small-model slips)', () {
+      final a = acc()..addChatDeltas([frag(0, id: 'c1', name: 'f', args: '{"a":"b"')]);
+      final call = a.completeAll().whereType<ToolCallComplete>().single.call;
+      expect(call.isValid, isTrue);
+      expect(call.repaired, isTrue);
+      expect(call.arguments, {'a': 'b'});
+    });
+  });
 }

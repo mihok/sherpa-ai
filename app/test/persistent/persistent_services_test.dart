@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show InternetAddress;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -8,6 +9,7 @@ import 'package:sherpa/state/persistent/provider_registry.dart';
 import 'package:sherpa/state/services.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_data/sherpa_data.dart';
+import 'package:sherpa_net/sherpa_net.dart' show UrlPolicyViolation;
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 void main() {
@@ -81,6 +83,39 @@ void main() {
     expect(await reg.hasApiKey('a1'), isFalse);
     expect(reg.configs.single.displayName, 'Work');
     expect(emitted, [1, 1]);
+  });
+
+  test('saving refuses plain http to a host that resolves to a public address (finding 23)', () async {
+    Future<List<InternetAddress>> dns(String host) async =>
+        host == 'studio.local' ? [InternetAddress('192.168.1.30')] : [InternetAddress('104.18.32.47')];
+    final reg = DocumentProviderRegistry(documents: docs, secrets: secrets, client: modelsClient(), resolver: dns);
+    final groq = ProviderConfig(
+      id: 'g',
+      flavor: ApiFlavor.openAiChat,
+      displayName: 'Groq',
+      baseUrl: Uri.parse('http://api.groq.com/openai/v1'),
+      allowLocalNetwork: true,
+    );
+    await expectLater(reg.add(groq, apiKey: 'gsk_secret'), throwsA(isA<UrlPolicyViolation>()));
+    expect(reg.configs, isEmpty);
+    expect(await docs.get(DocumentCollections.providerConfigs, 'g'), isNull);
+    expect(await secrets.read(groq.secretKey), isNull, reason: 'the key is not stored either');
+
+    final lan = ProviderConfig(
+      id: 'l',
+      flavor: ApiFlavor.openAiChat,
+      displayName: 'LM Studio',
+      baseUrl: Uri.parse('http://studio.local:1234/v1'),
+      allowLocalNetwork: true,
+    );
+    await reg.add(lan);
+    expect(reg.configs.single.id, 'l');
+    // Editing a saved LAN provider to point at a public host is refused too.
+    await expectLater(
+      reg.update(lan.copyWith(baseUrl: Uri.parse('http://api.groq.com/v1'))),
+      throwsA(isA<UrlPolicyViolation>()),
+    );
+    expect(reg.configs.single.baseUrl.host, 'studio.local');
   });
 
   test('preferences round-trip through the database', () async {

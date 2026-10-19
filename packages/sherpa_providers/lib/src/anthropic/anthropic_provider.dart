@@ -7,6 +7,8 @@ import 'package:http/http.dart' as http;
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_net/sherpa_net.dart';
 
+import '../common/endpoint_policy.dart' show endpointUrlPolicy;
+import '../common/http_runner.dart' show withIdleTimeout;
 import '../config.dart';
 import 'errors.dart';
 import 'model_traits.dart';
@@ -32,12 +34,9 @@ final class AnthropicProvider implements ModelProvider {
         _apiKey = apiKey,
         _client = client,
         _clock = clock,
-        _policy = UrlPolicy(
-          // allowLocalNetwork is for the user's own proxy/gateway, which may
-          // also run on this device.
-          scope: config.allowLocalNetwork ? NetworkScope.loopback : NetworkScope.publicOnly,
-          allowHttp: config.allowLocalNetwork,
-        ),
+        // allowLocalNetwork is for the user's own proxy/gateway, which may
+        // also run on this device; plain http only to a local address.
+        _policy = endpointUrlPolicy(allowLocalNetwork: config.allowLocalNetwork),
         _builder = AnthropicRequestBuilder(
           providerId: config.id,
           // Proxies and older gateways may reject the field (claude-api
@@ -57,10 +56,11 @@ final class AnthropicProvider implements ModelProvider {
   static const String firstPartyHost = 'api.anthropic.com';
   static final Uri defaultBaseUrl = Uri.parse('https://$firstPartyHost');
 
-  /// A stream that delivers no bytes for this long is treated as dead.
-  /// Anthropic sends `ping` events during long thinking, so this only
-  /// fires on half-open connections (e.g. a cellular handoff).
-  static const Duration idleTimeout = Duration(minutes: 5);
+  /// A stream that delivers no bytes for this long is treated as dead
+  /// ([ProviderConfig.streamIdleTimeout], 90 s unless configured). Anthropic
+  /// sends `ping` events during long thinking, so this only fires on
+  /// half-open connections (e.g. a cellular handoff).
+  Duration get idleTimeout => _config.streamIdleTimeout;
 
   /// Deadline for the small JSON endpoints (models, count_tokens).
   static const Duration requestTimeout = Duration(seconds: 30);
@@ -437,7 +437,15 @@ final class _StreamCall {
         ..followRedirects = false
         ..headers.addAll(_p._headers(stream: true))
         ..bodyBytes = utf8.encode(wire.encode());
-      final resp = await _p._send(req);
+      final resp = await _p._send(req).timeout(_p._config.streamStartTimeout, onTimeout: () {
+        _abortHttp();
+        throw ProviderException(
+          ProviderErrorKind.timeout,
+          'Anthropic did not start its response within ${_p._config.streamStartTimeout.inSeconds} s; '
+          'the connection was closed.',
+          providerId: _p.info.id,
+        );
+      });
       if (_closed) {
         // Cancelled while waiting for headers: release the response.
         unawaited(resp.stream.listen(null, onError: (Object _) {}).cancel());
@@ -473,12 +481,15 @@ final class _StreamCall {
         toolNames: wire.toolNames,
         requestedModel: _request.modelId,
       );
-      _sub = resp.stream
-          .timeout(AnthropicProvider.idleTimeout, onTimeout: (sink) {
-            sink
-              ..addError(TimeoutException('no data from Anthropic for ${AnthropicProvider.idleTimeout.inMinutes} min'))
-              ..close();
-          })
+      // Silence fails the stream with a retryable timeout and closes the
+      // request; the error then flows through onError to _fail.
+      _sub = withIdleTimeout(
+        resp.stream,
+        idle: _p.idleTimeout,
+        start: _p._config.streamStartTimeout,
+        onTimeout: _abortHttp,
+        providerId: _p.info.id,
+      )
           .transform(const SseDecoder())
           .listen(
             (sse) => _guarded(() {
@@ -577,9 +588,15 @@ final class _StreamCall {
     _abortRequest();
   }
 
+  /// Closes the HTTP request (`AbortableRequest`) without detaching the
+  /// listener, so an error already on its way is still delivered.
+  void _abortHttp() {
+    if (!_abort.isCompleted) _abort.complete();
+  }
+
   void _abortRequest() {
     _drain?.cancel();
-    if (!_abort.isCompleted) _abort.complete();
+    _abortHttp();
     final sub = _sub;
     _sub = null;
     if (sub != null) unawaited(sub.cancel());

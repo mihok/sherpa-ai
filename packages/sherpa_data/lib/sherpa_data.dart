@@ -18,6 +18,7 @@ export 'src/database/database.dart'
 export 'src/database/open.dart'
     show
         DatabaseEncryptionException,
+        DatabaseOpenException,
         EncryptionFailure,
         databaseKeySecretName,
         encryptionSetup,

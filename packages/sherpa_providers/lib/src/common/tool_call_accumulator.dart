@@ -41,7 +41,9 @@ final class _Slot {
 ///   arguments were received) opens a new call;
 /// * missing ids are synthesized via [newId] (stable for the call's life);
 /// * argument text is parsed with [ToolArgumentsRepair] at completion; failures go
-///   to [ToolCall.argumentsError] rather than an exception.
+///   to [ToolCall.argumentsError] rather than an exception;
+/// * in a turn that was cut off (see [completeAll]'s `cutoff`), argument
+///   text that is not strict JSON is reported as truncated, never repaired.
 ///
 /// The same slot API serves the Responses adapter, which keys calls by
 /// `output_index` and knows names up front.
@@ -212,21 +214,39 @@ final class ToolCallAccumulator {
   }
 
   /// Completes every open call in order. Called when the stream finishes.
-  List<ModelEvent> completeAll() => [
+  ///
+  /// [cutoff] says the turn stopped while these calls were still open (Chat
+  /// `finish_reason: length`, Responses `incomplete`, or a terminal event
+  /// before a call's item finished). Then an open call whose argument text
+  /// is not strict JSON is completed with [ToolCallCutoff.errorFor] as its
+  /// [ToolCall.argumentsError] rather than repaired: closing the open
+  /// strings of a half-written `write_file` would yield a valid call with
+  /// silently truncated content. Repair stays for complete turns, where
+  /// malformed JSON is a small model's syntax slip, not missing data.
+  List<ModelEvent> completeAll({ToolCallCutoff? cutoff}) => [
         for (final slot in _slots)
-          if (!slot.completed) ..._complete(slot),
+          if (!slot.completed) ..._complete(slot, cutoff: cutoff),
       ];
 
-  List<ModelEvent> _complete(_Slot slot) {
+  List<ModelEvent> _complete(_Slot slot, {ToolCallCutoff? cutoff}) {
     final out = <ModelEvent>[];
     if (!slot.started) out.addAll(_start(slot));
     slot.completed = true;
     final raw = slot.args.toString();
-    final parsed = ToolArgumentsRepair.parseArguments(raw);
     final missingName = slot.wireName == null;
+    final name = _resolveName(slot.wireName ?? '');
+    if (cutoff?.errorFor(raw) case final truncated?) {
+      return out
+        ..add(ToolCallComplete(
+          index: slot.ordinal,
+          call: ToolCall(id: slot.id!, name: name, arguments: const {}, rawArguments: raw, argumentsError: truncated),
+        ))
+        ..add(cutoff!.notice(name, slot.ordinal, raw));
+    }
+    final parsed = ToolArgumentsRepair.parseArguments(raw);
     final call = ToolCall(
       id: slot.id!,
-      name: _resolveName(slot.wireName ?? ''),
+      name: name,
       arguments: parsed.value ?? const {},
       rawArguments: raw,
       argumentsError: missingName ? 'The tool call had no tool name.' : parsed.error,
@@ -242,4 +262,58 @@ final class ToolCallAccumulator {
     }
     return out;
   }
+}
+
+/// Why a turn stopped while a tool call's arguments were still streaming.
+///
+/// Every adapter uses it the same way: a call cut off mid-arguments becomes
+/// an invalid call (never a repaired one), with an error the model can act
+/// on. The agent runner, for its part, never executes calls from a turn
+/// that finished with [FinishReason.length].
+enum ToolCallCutoff {
+  /// The output-token limit (`max_tokens`, Chat `length`, Responses
+  /// `max_output_tokens`).
+  tokenLimit('at the output-token limit'),
+
+  /// The server's content filter stopped generating.
+  contentFilter("by the server's content filter"),
+
+  /// The context window filled up (Anthropic
+  /// `model_context_window_exceeded`).
+  contextWindow('when the context window filled up'),
+
+  /// The response ended (or reported another stop) before the call's item
+  /// was finished.
+  unfinished('before the response finished');
+
+  const ToolCallCutoff(this._where);
+
+  final String _where;
+
+  /// The [ToolCall.argumentsError] for a call whose argument text [raw] was
+  /// cut off, or null when [raw] is complete, strict JSON (the call finished
+  /// before the cut). Empty text counts as cut off: in a stopped turn it
+  /// means the arguments never started.
+  String? errorFor(String raw) {
+    final String detail;
+    if (raw.trim().isEmpty) {
+      detail = 'no argument text arrived';
+    } else {
+      try {
+        jsonDecode(raw);
+        return null;
+      } on FormatException catch (e) {
+        detail = 'malformed JSON: ${e.message}';
+      }
+    }
+    final hint = this == tokenLimit ? ' Retry with shorter arguments, for example by splitting a large write into parts.' : '';
+    return 'The tool call arguments were truncated $_where ($detail), so the call was not run.$hint';
+  }
+
+  /// Tells the UI that call [index] ([name]) was dropped as truncated.
+  ProviderNotice notice(String name, int index, String raw) => ProviderNotice(
+        'tool_args_truncated',
+        'The arguments for ${name.isEmpty ? 'a tool call' : name} were cut off $_where, so the call will not run.',
+        data: {'index': index, 'cutoff': this.name, 'rawLength': raw.length},
+      );
 }

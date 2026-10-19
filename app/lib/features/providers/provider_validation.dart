@@ -1,20 +1,24 @@
 import 'dart:io' show InternetAddress;
 
 import 'package:sherpa_net/sherpa_net.dart';
+import 'package:sherpa_providers/sherpa_providers.dart' show endpointUrlPolicy;
 
 /// Pure validation for the provider form, shared by onboarding and settings
 /// (and unit-tested without widgets).
 
-/// The [UrlPolicy] a user-entered base URL is checked against.
+/// The [UrlPolicy] a user-entered base URL is checked against: the one the
+/// provider itself applies before every connection ([endpointUrlPolicy]).
 ///
 /// Public HTTPS only, unless the user ticked "This is a server on my own
-/// network": then http, private (RFC 1918 / ULA / .local) and loopback
-/// addresses are allowed too. Link-local (incl. 169.254.169.254 cloud
-/// metadata) is refused either way by the policy itself.
-UrlPolicy baseUrlPolicy({required bool allowLocalNetwork}) => UrlPolicy(
-      scope: allowLocalNetwork ? NetworkScope.loopback : NetworkScope.publicOnly,
-      allowHttp: allowLocalNetwork,
-    );
+/// network": then private (RFC 1918 / ULA / .local) and loopback addresses
+/// are allowed too, and so is plain http, but only to a host that is (or
+/// resolves to) such a local address. Link-local (incl. 169.254.169.254
+/// cloud metadata) is refused either way by the policy itself.
+UrlPolicy baseUrlPolicy({
+  required bool allowLocalNetwork,
+  Future<List<InternetAddress>> Function(String host)? resolver,
+}) =>
+    endpointUrlPolicy(allowLocalNetwork: allowLocalNetwork, resolver: resolver);
 
 /// Outcome of checking the base URL field.
 sealed class BaseUrlCheck {
@@ -35,6 +39,10 @@ final class BaseUrlError extends BaseUrlCheck {
 }
 
 /// Syntactic check (no DNS) with copy a person can act on.
+///
+/// A plain-http host given by name passes here (only DNS can tell whether
+/// it is on the user's network); [verifyBaseUrl] settles it before saving,
+/// and the provider checks again before every connection.
 BaseUrlCheck checkBaseUrl(String raw, {required bool allowLocalNetwork}) {
   final text = raw.trim();
   if (text.isEmpty) return const BaseUrlError('Enter the server address.');
@@ -54,15 +62,52 @@ BaseUrlCheck checkBaseUrl(String raw, {required bool allowLocalNetwork}) {
   if (uri.hasQuery || uri.hasFragment) {
     return const BaseUrlError('Leave out ?query and #fragment parts; use the base address only.');
   }
-  // The opt-in is for the user's own network. Plain http to a public IP
-  // would send prompts unencrypted across the internet.
-  final literal = InternetAddress.tryParse(uri.host.replaceAll('[', '').replaceAll(']', ''));
-  if (uri.scheme == 'http' && literal != null && classify(literal) == AddressKind.public) {
+  return BaseUrlOk(normalizeBaseUrl(uri));
+}
+
+/// The opt-in is for the user's own network. Plain http to a public
+/// address would send prompts and the key unencrypted across the internet.
+const BaseUrlError _publicHttp = BaseUrlError(
+  'This is a public internet address. Use https:// so your messages are encrypted on the way.',
+);
+
+/// The save-time check: [checkBaseUrl]'s rules plus DNS, so a plain-http
+/// host *name* that resolves to a public address is refused too (e.g.
+/// `http://api.groq.com/v1` with "my own network" ticked). Hostnames on
+/// the user's network (`.local` via mDNS, split-horizon names) and literal
+/// private addresses pass.
+///
+/// A name that does not resolve right now (the LAN server is off, the
+/// phone is elsewhere) is accepted: the provider repeats this check before
+/// every connection, so it can never connect to a public host over http.
+Future<BaseUrlCheck> verifyBaseUrl(
+  Uri uri, {
+  required bool allowLocalNetwork,
+  Future<List<InternetAddress>> Function(String host)? resolver,
+}) async {
+  final syntax = checkBaseUrl(uri.toString(), allowLocalNetwork: allowLocalNetwork);
+  if (syntax is! BaseUrlOk) return syntax;
+  try {
+    await baseUrlPolicy(allowLocalNetwork: allowLocalNetwork, resolver: resolver).check(syntax.uri.toString());
+    return syntax;
+  } on UrlPolicyViolation catch (v) {
+    if (v.reason.startsWith('host does not resolve')) return syntax;
+    return explainUrlViolation(v, allowLocalNetwork: allowLocalNetwork);
+  }
+}
+
+/// Copy for a [UrlPolicyViolation] (e.g. one a provider registry raised
+/// while saving), keyed by its reason.
+BaseUrlError explainUrlViolation(UrlPolicyViolation v, {required bool allowLocalNetwork}) {
+  final r = v.reason;
+  if (r.contains('public address')) return _publicHttp;
+  if (!allowLocalNetwork && (r.startsWith('private address') || r.startsWith('loopback address'))) {
     return const BaseUrlError(
-      'This is a public internet address. Use https:// so your messages are encrypted on the way.',
+      'This address is on a local network. Tick "This is a server on my own network" to allow it.',
+      needsLocalNetworkOptIn: true,
     );
   }
-  return BaseUrlOk(normalizeBaseUrl(uri));
+  return _explain(v, v.url, allowLocalNetwork: allowLocalNetwork);
 }
 
 /// Drops a trailing slash so `…/v1/` and `…/v1` are the same provider.
@@ -76,6 +121,7 @@ Uri normalizeBaseUrl(Uri uri) {
 
 BaseUrlError _explain(UrlPolicyViolation v, String url, {required bool allowLocalNetwork}) {
   final r = v.reason;
+  if (r.contains('public address') || _isPublicHttpLiteral(url)) return _publicHttp;
   // Would the same URL pass with the opt-in? Then say so, instead of
   // making the user guess which rule they hit.
   if (!allowLocalNetwork) {
@@ -101,6 +147,13 @@ BaseUrlError _explain(UrlPolicyViolation v, String url, {required bool allowLoca
     return const BaseUrlError("Sherpa won't connect to link-local or reserved addresses.");
   }
   return BaseUrlError('This address is not allowed: $r.');
+}
+
+bool _isPublicHttpLiteral(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.scheme.toLowerCase() != 'http') return false;
+  final literal = InternetAddress.tryParse(uri.host.replaceAll('[', '').replaceAll(']', ''));
+  return literal != null && classify(literal) == AddressKind.public;
 }
 
 /// Header names that carry credentials. Secrets belong in the API key field,

@@ -93,6 +93,40 @@ void main() {
     });
   });
 
+  group('httpRequiresLocalAddress (finding 23)', () {
+    Future<List<InternetAddress>> dns(String host) async => switch (host) {
+          'api.groq.com' => [InternetAddress('104.18.32.47')],
+          'nas.local' => [InternetAddress('192.168.1.20')],
+          'corp.example.com' => [InternetAddress('10.1.2.3'), InternetAddress('fd00::7')],
+          'mixed.example.com' => [InternetAddress('10.1.2.3'), InternetAddress('104.18.32.47')],
+          _ => throw const SocketException('no such host'),
+        };
+    final strict = UrlPolicy(scope: NetworkScope.loopback, allowHttp: true, httpRequiresLocalAddress: true, resolver: dns);
+
+    test('plain http to a public host by name or literal is refused', () async {
+      await expectLater(strict.check('http://api.groq.com/openai/v1'), throwsA(isA<UrlPolicyViolation>()));
+      await expectLater(strict.check('http://mixed.example.com/v1'), throwsA(isA<UrlPolicyViolation>()));
+      expect(() => strict.checkSyntax('http://8.8.8.8/v1'), throwsA(isA<UrlPolicyViolation>()));
+      // Names are settled by DNS, not by the syntax check.
+      expect(strict.checkSyntax('http://api.groq.com/v1').host, 'api.groq.com');
+    });
+
+    test('mDNS names, private names and literal private / loopback addresses keep working', () async {
+      expect((await strict.check('http://nas.local:11434/v1')).host, 'nas.local');
+      expect((await strict.check('http://corp.example.com/v1')).host, 'corp.example.com');
+      expect((await strict.check('http://192.168.1.20:1234/v1')).port, 1234);
+      expect((await strict.check('http://[fd00::1]:8080/v1')).port, 8080);
+      expect((await strict.check('http://127.0.0.1:8080/v1')).port, 8080);
+      expect((await strict.check('http://100.101.102.103/v1')).host, '100.101.102.103'); // CGNAT / Tailscale
+    });
+
+    test('https is unaffected, and the default stays as before', () async {
+      expect((await strict.check('https://api.groq.com/openai/v1')).scheme, 'https');
+      final legacy = UrlPolicy(scope: NetworkScope.loopback, allowHttp: true, resolver: dns);
+      expect((await legacy.check('http://api.groq.com/openai/v1')).host, 'api.groq.com');
+    });
+  });
+
   group('Retry-After', () {
     test('seconds, ms, HTTP-date and vendor reset formats', () {
       final now = DateTime.utc(2026, 10, 18, 12);

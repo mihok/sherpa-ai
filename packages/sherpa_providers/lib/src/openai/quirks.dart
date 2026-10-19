@@ -101,7 +101,9 @@ final class ServerQuirks {
   final ReasoningReplay reasoningReplay;
 
   /// DeepSeek needs reasoning back only when `tools` are present (and
-  /// ignores it otherwise), so don't spend the bytes without tools.
+  /// ignores it otherwise), so don't spend the bytes without tools. The
+  /// [ReasoningReplay.asReceived] profiles follow the same rule, since tool
+  /// loops are where a server requires it (DeepSeek, R10 §4.6).
   final bool replayReasoningOnlyWithTools;
   final ToolChoiceSupport toolChoice;
   final MaxTokensField maxTokensField;
@@ -169,10 +171,14 @@ final class ServerQuirks {
       effort: EffortStyle.reasoningEffort,
       splitThinkTags: true,
     ),
-    // LM Studio: replay field and reasoning_effort support are UNVERIFIED;
-    // `required` is documented as "llama.cpp engine only".
+    // LM Studio: reasoning_effort support is UNVERIFIED; `required` is
+    // documented as "llama.cpp engine only". Its reasoning field depends on
+    // the model and a setting (R10 §2), so reasoning goes back in the field
+    // it came in.
     ServerProfile.lmStudio: ServerQuirks(
       profile: ServerProfile.lmStudio,
+      reasoningReplay: ReasoningReplay.asReceived,
+      replayReasoningOnlyWithTools: true,
       toolChoice: ToolChoiceSupport.stringOnly,
       contextDiscovery: ContextDiscovery.lmStudioModels,
       splitThinkTags: true,
@@ -220,12 +226,18 @@ final class ServerQuirks {
     // (UNVERIFIED), so stay with the most common subset.
     ServerProfile.huggingFaceRouter: ServerQuirks(
       profile: ServerProfile.huggingFaceRouter,
+      reasoningReplay: ReasoningReplay.asReceived,
+      replayReasoningOnlyWithTools: true,
       contextDiscovery: ContextDiscovery.huggingFaceModels,
       splitThinkTags: true,
     ),
-    // Unknown server: R10 §5 conservative defaults.
+    // Unknown server: R10 §5 conservative defaults. Reasoning is written
+    // back in the field it arrived in (R10 §0.4), so DeepSeek or OpenRouter
+    // behind a gateway keep working in tool loops.
     ServerProfile.generic: ServerQuirks(
       profile: ServerProfile.generic,
+      reasoningReplay: ReasoningReplay.asReceived,
+      replayReasoningOnlyWithTools: true,
       splitThinkTags: true,
     ),
   };

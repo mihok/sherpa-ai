@@ -28,6 +28,104 @@ Exception mapTransportError(Object error, {String? providerId}) => switch (error
           providerId: providerId, cause: error),
     };
 
+/// Fails [body] with a retryable [ProviderErrorKind.timeout] when it goes
+/// quiet: no first chunk within [start] (defaults to [idle]), or no chunk
+/// for [idle] after that.
+///
+/// When the countdown fires, [onTimeout] runs first (callers abort their
+/// `AbortableRequest` there, so a half-open socket is torn down instead of
+/// left dangling), then the body subscription is cancelled and the error is
+/// delivered. The countdown is stopped while the consumer is paused
+/// (backpressure is not silence) and whenever the stream ends, fails or is
+/// cancelled, so no timer outlives the stream.
+Stream<List<int>> withIdleTimeout(
+  Stream<List<int>> body, {
+  required Duration idle,
+  Duration? start,
+  required void Function() onTimeout,
+  String? providerId,
+}) {
+  late final StreamController<List<int>> out;
+  // Cancelled on timeout and in onCancel; dropped once the body is done.
+  // ignore: cancel_subscriptions
+  StreamSubscription<List<int>>? sub;
+  Timer? timer;
+  var started = false;
+  var finished = false;
+
+  void stop() {
+    timer?.cancel();
+    timer = null;
+  }
+
+  void fire(Duration waited) {
+    timer = null;
+    if (finished) return;
+    finished = true;
+    onTimeout();
+    final s = sub;
+    sub = null;
+    s?.cancel().ignore();
+    out.addError(ProviderException(
+      ProviderErrorKind.timeout,
+      started
+          ? 'The server stopped sending data for ${_describe(waited)}; the connection was closed.'
+          : 'The server did not start its response within ${_describe(waited)}; the connection was closed.',
+      providerId: providerId,
+    ));
+    unawaited(out.close());
+  }
+
+  void arm() {
+    stop();
+    if (finished) return;
+    final wait = started ? idle : (start ?? idle);
+    timer = Timer(wait, () => fire(wait));
+  }
+
+  out = StreamController<List<int>>(
+    onListen: () {
+      sub = body.listen(
+        (chunk) {
+          if (finished) return;
+          started = true;
+          out.add(chunk);
+          if (!out.isPaused) arm();
+        },
+        onError: (Object e, StackTrace st) {
+          if (!finished) out.addError(e, st);
+        },
+        onDone: () {
+          stop();
+          if (finished) return;
+          finished = true;
+          unawaited(out.close());
+        },
+      );
+      arm();
+    },
+    onPause: () {
+      stop();
+      sub?.pause();
+    },
+    onResume: () {
+      sub?.resume();
+      arm();
+    },
+    onCancel: () {
+      stop();
+      finished = true;
+      final s = sub;
+      sub = null;
+      return s?.cancel();
+    },
+  );
+  return out.stream;
+}
+
+String _describe(Duration d) =>
+    d.inSeconds >= 120 && d.inSeconds % 60 == 0 ? '${d.inMinutes} min' : d.inMilliseconds >= 1000 ? '${d.inSeconds} s' : '${d.inMilliseconds} ms';
+
 /// A response whose headers have arrived but whose body has not been read.
 ///
 /// Keeping the body as a stream is what makes token streaming incremental
@@ -105,7 +203,10 @@ final class ProviderHttp {
   /// [abort] tears the socket down at any point: before the request is
   /// sent, while waiting for headers, or mid-body. [headersTimeout] bounds
   /// only the wait for headers (a reasoning model may legitimately stream
-  /// for minutes afterwards). Throws [ProviderException] for transport
+  /// for minutes afterwards). [idleTimeout] bounds the silence between body
+  /// chunks (and the wait for the first chunk, by [headersTimeout] when
+  /// set): see [withIdleTimeout]; it aborts the request through [abort].
+  /// Throws [ProviderException] for transport
   /// failures and [CancelledException] when aborted; HTTP error statuses
   /// are returned, not thrown, so callers can inspect the body (e.g. to
   /// retry without an optional parameter the server rejected).
@@ -120,6 +221,7 @@ final class ProviderHttp {
     String? body,
     AbortSignal? abort,
     Duration? headersTimeout,
+    Duration? idleTimeout,
     bool followRedirects = false,
   }) async {
     final signal = abort ?? AbortSignal();
@@ -137,7 +239,16 @@ final class ProviderHttp {
         });
       }
       final response = await pending;
-      return OpenedResponse._(response.statusCode, response.headers, response.stream, providerId);
+      final body = idleTimeout == null
+          ? response.stream
+          : withIdleTimeout(
+              response.stream,
+              idle: idleTimeout,
+              start: headersTimeout,
+              onTimeout: signal.abort,
+              providerId: providerId,
+            );
+      return OpenedResponse._(response.statusCode, response.headers, body, providerId);
     } on Object catch (e) {
       throw mapTransportError(e, providerId: providerId);
     }

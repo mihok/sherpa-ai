@@ -202,6 +202,38 @@ void main() {
       expect(describe(events.last), 'finish:length:max_tokens');
     });
 
+    test('max_tokens: tool input that never arrived, or a block never closed, is truncated (finding 12)', () async {
+      const empty = 'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"w","input":{}}}\n\n'
+          'data: {"type":"content_block_stop","index":0}\n\n'
+          'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":5}}\n\n'
+          'data: {"type":"message_stop"}\n\n';
+      final emptyCall = (await decode(empty)).whereType<ToolCallComplete>().single.call;
+      expect(emptyCall.isValid, isFalse);
+      expect(emptyCall.argumentsError, contains('output-token limit'));
+
+      const unclosed = 'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t2","name":"w","input":{}}}\n\n'
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\": \\"a"}}\n\n'
+          'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":5}}\n\n'
+          'data: {"type":"message_stop"}\n\n';
+      final events = await decode(unclosed);
+      final call = events.whereType<ToolCallComplete>().single.call;
+      expect(call.isValid, isFalse);
+      expect(call.rawArguments, '{"path": "a');
+      expect(call.argumentsError, contains('output-token limit'));
+      expect(events.map(describe), contains('notice:tool_args_truncated'));
+      expect(describe(events.last), 'finish:length:max_tokens');
+
+      // A complete call before the cut stands.
+      const whole = 'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t3","name":"w","input":{}}}\n\n'
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"a\\": 1}"}}\n\n'
+          'data: {"type":"content_block_stop","index":0}\n\n'
+          'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":5}}\n\n'
+          'data: {"type":"message_stop"}\n\n';
+      final ok = (await decode(whole)).whereType<ToolCallComplete>().single.call;
+      expect(ok.isValid, isTrue);
+      expect(ok.arguments, {'a': 1});
+    });
+
     test('non-object tool input is rejected', () async {
       const sse = 'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"w","input":{}}}\n\n'
           'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"[1]"}}\n\n'

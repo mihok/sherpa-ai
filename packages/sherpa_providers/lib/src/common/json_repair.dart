@@ -6,9 +6,16 @@ import 'package:sherpa_core/sherpa_core.dart';
 /// Outcome of parsing a tool call's argument text.
 ///
 /// Exactly one of [value] and [error] is set. [repaired] marks arguments
-/// that were not valid JSON as produced; the agent's approval policy treats
-/// a repaired call to a non-read-only tool as needing confirmation (R11
-/// §9.6.7), and [fixes] names the repair classes for metrics.
+/// that were not valid JSON as produced, and [fixes] names the repair
+/// classes for metrics.
+///
+/// Repair is for complete but malformed JSON (a small model's syntax slip).
+/// It is not applied to calls cut off mid-arguments: the adapters complete
+/// those as invalid calls ([ToolCallCutoff]). The agent runner then adds
+/// two safety rules (R11 §7, §9.6.7): it never executes the calls of a turn
+/// that finished with [FinishReason.length], and it always asks the user to
+/// confirm a [ToolCall.repaired] call to a non-read-only tool, whatever the
+/// session's grants.
 @immutable
 final class ArgumentsParseResult {
   const ArgumentsParseResult.ok(JsonMap this.value, {this.repaired = false, this.fixes = const {}}) : error = null;

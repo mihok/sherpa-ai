@@ -16,5 +16,6 @@ dependencies:
   sherpa_net: any
 
 dev_dependencies:
+  fake_async: ^1.3.3
   shelf: ^1.4.3
   test: ^1.31.1

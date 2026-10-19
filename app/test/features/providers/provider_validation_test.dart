@@ -1,3 +1,5 @@
+import 'dart:io' show InternetAddress, SocketException;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sherpa/features/providers/connection.dart';
 import 'package:sherpa/features/providers/provider_validation.dart';
@@ -57,6 +59,51 @@ void main() {
       expect(check('https://api.example.com/v1?key=1'), isA<BaseUrlError>());
       expect(check(''), isA<BaseUrlError>());
       expect(check('not a url at all'), isA<BaseUrlError>());
+    });
+  });
+
+  group('"my own network" with DNS (finding 23)', () {
+    Future<List<InternetAddress>> dns(String host) async => switch (host) {
+          'api.groq.com' => [InternetAddress('104.18.32.47')],
+          'ollama.myvps.example.com' => [InternetAddress('203.0.113.9'), InternetAddress('2606:4700::6810:84e5')],
+          'studio.local' => [InternetAddress('192.168.1.30')],
+          'nas.corp.example.com' => [InternetAddress('10.0.0.5')],
+          _ => throw const SocketException('Failed host lookup'),
+        };
+    Future<BaseUrlCheck> verify(String url, {bool lan = true}) =>
+        verifyBaseUrl(Uri.parse(url), allowLocalNetwork: lan, resolver: dns);
+
+    test('plain http to a public host *name* is refused even with the opt-in', () async {
+      for (final url in ['http://api.groq.com/openai/v1', 'http://ollama.myvps.example.com:11434/v1']) {
+        final r = await verify(url);
+        expect(r, isA<BaseUrlError>(), reason: url);
+        expect((r as BaseUrlError).message, contains('https://'), reason: url);
+        expect(r.needsLocalNetworkOptIn, isFalse, reason: url);
+      }
+      expect(await verify('http://8.8.8.8/v1'), isA<BaseUrlError>());
+    });
+
+    test('mDNS names, LAN names and literal private / loopback addresses still work', () async {
+      for (final url in [
+        'http://studio.local:1234/v1',
+        'http://nas.corp.example.com:8080/v1',
+        'http://192.168.1.20:11434/v1',
+        'http://[fd00::1]:8080/v1',
+        'http://127.0.0.1:8080/v1',
+        'http://localhost:8080/v1',
+      ]) {
+        expect(await verify(url), isA<BaseUrlOk>(), reason: url);
+      }
+    });
+
+    test('https to a public host is fine; a host that does not resolve right now is accepted', () async {
+      expect(await verify('https://api.groq.com/openai/v1'), isA<BaseUrlOk>());
+      expect(await verify('http://offline-box.lan:8080/v1'), isA<BaseUrlOk>());
+    });
+
+    test('a private name without the opt-in asks for it', () async {
+      final r = await verify('https://nas.corp.example.com/v1', lan: false);
+      expect((r as BaseUrlError).needsLocalNetworkOptIn, isTrue);
     });
   });
 

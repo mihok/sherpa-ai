@@ -8,8 +8,16 @@ import 'tool_names.dart';
 /// Which reasoning field (if any) a server wants back on earlier assistant
 /// turns (R10 §2, rec. 5).
 enum ReasoningReplay {
-  /// Drop reasoning from history (OpenAI Chat, unknown servers).
+  /// Drop reasoning from history (OpenAI Chat).
   none,
+
+  /// Write each of this provider's reasoning parts back in the field it
+  /// arrived in (R10 §0.4: "on replay, write back the field you received").
+  /// For servers whose profile does not fix the field (unknown servers,
+  /// gateways in front of DeepSeek or OpenRouter, LM Studio): the stream
+  /// parser records the field with [reasoningFieldSignature]. Parts with no
+  /// recorded field (e.g. `<think>` text split out of `content`) are dropped.
+  asReceived,
 
   /// `reasoning_content` (DeepSeek: required with tools, else 400;
   /// llama.cpp: rendered by the chat template when it wants it).
@@ -22,6 +30,17 @@ enum ReasoningReplay {
   /// Claude-via-OpenRouter tool loops).
   reasoningDetails,
 }
+
+const String _replayFieldKey = 'replay_field';
+const Set<String> _replayableFields = {'reasoning_content', 'reasoning'};
+
+/// The [ReasoningSignature.signature] that records which Chat field
+/// ([field]: `reasoning_content` or `reasoning`) a reasoning segment arrived
+/// in, so [ReasoningReplay.asReceived] can write it back there. It is a JSON
+/// object, so it never collides with OpenRouter `reasoning_details` (a JSON
+/// array in the same slot), and like every signature it is only read back
+/// by the provider that produced it ([ReasoningPart.providerId]).
+String reasoningFieldSignature(String field) => jsonEncode({_replayFieldKey: field});
 
 /// Result of mapping a transcript; [notices] explain dropped content.
 final class MappedMessages {
@@ -217,6 +236,8 @@ final class OpenAiChatMessageMapper {
     switch (reasoningReplay) {
       case ReasoningReplay.none:
         return;
+      case ReasoningReplay.asReceived:
+        _addAsReceived(own, msg);
       case ReasoningReplay.reasoningContent || ReasoningReplay.reasoning:
         final text = own.map((r) => r.text).join();
         if (text.isEmpty) return;
@@ -229,6 +250,28 @@ final class OpenAiChatMessageMapper {
         ];
         if (details.isNotEmpty) msg['reasoning_details'] = details;
     }
+  }
+
+  static void _addAsReceived(List<ReasoningPart> own, JsonMap msg) {
+    final details = <Object?>[];
+    final fields = <String, StringBuffer>{};
+    for (final r in own) {
+      final sig = r.signature;
+      if (sig == null) continue;
+      switch (tryDecode(sig)) {
+        case final List<Object?> list:
+          details.addAll(list);
+        case final Map<String, Object?> marker:
+          final field = marker[_replayFieldKey];
+          if (field is String && _replayableFields.contains(field) && r.text.isNotEmpty) {
+            fields.putIfAbsent(field, StringBuffer.new).write(r.text);
+          }
+      }
+    }
+    for (final e in fields.entries) {
+      msg[e.key] = e.value.toString();
+    }
+    if (details.isNotEmpty) msg['reasoning_details'] = details;
   }
 
   void _mapToolResults(List<ToolResultPart> results, List<JsonMap> out, List<ProviderNotice> notices) {

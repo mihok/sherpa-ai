@@ -188,10 +188,22 @@ final class ResponsesStreamParser {
       throw ProviderException(ProviderErrorKind.network, 'The stream ended before the response was complete.',
           providerId: providerId);
     }
-    final out = <ModelEvent>[..._calls.completeAll()];
+    // A call is complete at its `output_item.done`; one still open here was
+    // cut off (an `incomplete` turn, or a terminal event before the item
+    // finished), so its arguments must not be repaired into a valid call.
+    final out = <ModelEvent>[..._calls.completeAll(cutoff: _cutoff())];
     if (_usage case final u?) out.add(UsageUpdate(u));
     out.add(Finish(_reason(), rawReason: _incompleteReason ?? _status));
     return out;
+  }
+
+  ToolCallCutoff _cutoff() {
+    if (_status != 'incomplete') return ToolCallCutoff.unfinished;
+    return switch (_incompleteReason) {
+      'content_filter' => ToolCallCutoff.contentFilter,
+      'max_output_tokens' || null => ToolCallCutoff.tokenLimit,
+      _ => ToolCallCutoff.unfinished,
+    };
   }
 
   FinishReason _reason() {

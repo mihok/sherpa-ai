@@ -5,6 +5,7 @@ import 'package:sherpa_net/sherpa_net.dart';
 
 import '../common/error_mapping.dart';
 import '../common/json_read.dart';
+import '../common/openai_messages.dart';
 import '../common/think_splitter.dart';
 import '../common/tool_call_accumulator.dart';
 import '../common/tool_names.dart';
@@ -45,6 +46,11 @@ final class ChatStreamParser {
   /// OpenRouter `reasoning_details` of the current reasoning phase, merged
   /// by `index`, replayed verbatim.
   final List<JsonMap> _details = [];
+
+  /// The Chat field the current reasoning phase arrived in, recorded for
+  /// [ReasoningReplay.asReceived] profiles only (known profiles replay a
+  /// fixed field).
+  String? _phaseField;
 
   /// True after `[DONE]`.
   bool get isDone => _done;
@@ -114,7 +120,11 @@ final class ChatStreamParser {
     // R10 §2: `reasoning_content` (DeepSeek, llama.cpp, LM Studio setting)
     // or `reasoning` (vLLM, Ollama, OpenRouter, LM Studio gpt-oss). Parse
     // both whatever the profile; silent empty reasoning is the failure mode.
-    final reasoning = d.text('reasoning_content') ?? d.text('reasoning');
+    final rc = d.text('reasoning_content');
+    final reasoning = rc ?? d.text('reasoning');
+    if (reasoning != null && reasoning.isNotEmpty && _quirks.reasoningReplay == ReasoningReplay.asReceived) {
+      _phaseField ??= rc != null ? 'reasoning_content' : 'reasoning';
+    }
     final details = d.maps('reasoning_details');
     if (details.isNotEmpty) _mergeDetails(details);
     final detailText = reasoning == null && details.isNotEmpty ? _detailsText(details) : null;
@@ -150,10 +160,19 @@ final class ChatStreamParser {
   /// signature right after their reasoning text, so the agent stores both
   /// on one [ReasoningPart]. Each reasoning phase (interleaved thinking
   /// between tool calls) gets its own group, so replay never duplicates.
+  ///
+  /// For [ReasoningReplay.asReceived] profiles, a phase without details is
+  /// signed with [reasoningFieldSignature] instead, recording the field it
+  /// came in (R10 rec. 5: persist the exact field on the ReasoningPart).
   void _endReasoning(List<ModelEvent> out) {
-    if (_details.isEmpty) return;
-    out.add(ReasoningSignature(signature: jsonEncode(_details)));
-    _details.clear();
+    final field = _phaseField;
+    _phaseField = null;
+    if (_details.isNotEmpty) {
+      out.add(ReasoningSignature(signature: jsonEncode(_details)));
+      _details.clear();
+    } else if (field != null) {
+      out.add(ReasoningSignature(signature: reasoningFieldSignature(field)));
+    }
   }
 
   /// Streamed detail fragments for the same `index` are concatenated
@@ -199,12 +218,20 @@ final class ChatStreamParser {
     final think = _think;
     if (think != null) out.addAll(think.flush());
     _endReasoning(out);
-    out.addAll(_calls.completeAll());
+    out.addAll(_calls.completeAll(cutoff: _cutoff()));
     if (_usage case final u?) out.add(UsageUpdate(u));
     if (_perf case final p?) out.add(p);
     out.add(Finish(_mapFinish(), rawReason: _finish));
     return out;
   }
+
+  /// Why open calls may be incomplete: the server stopped generating
+  /// mid-turn, so a call's arguments can end anywhere.
+  ToolCallCutoff? _cutoff() => switch (_finish) {
+        'length' => ToolCallCutoff.tokenLimit,
+        'content_filter' => ToolCallCutoff.contentFilter,
+        _ => null,
+      };
 
   FinishReason _mapFinish() {
     final hasCalls = !_calls.isEmpty;

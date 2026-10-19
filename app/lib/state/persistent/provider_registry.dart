@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io' show InternetAddress;
 
 import 'package:http/http.dart' as http;
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_data/sherpa_data.dart';
+import 'package:sherpa_net/sherpa_net.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 import '../services.dart';
@@ -10,6 +12,13 @@ import '../services.dart';
 /// [ProviderRegistry] backed by the encrypted document store (configs) and
 /// the [SecretStore] (API keys). Configs are cached in memory after [load]
 /// so the UI can read them synchronously.
+///
+/// [add] and [update] check a plain-http base URL against the provider's
+/// own URL policy, DNS included, and throw [UrlPolicyViolation] instead of
+/// saving a config it would refuse: plain http (the "my own network"
+/// opt-in) to a host name that resolves to a public address. A host that does not
+/// resolve right now is saved; the provider checks again before every
+/// connection, so DNS changes after saving are caught there.
 final class DocumentProviderRegistry implements ProviderRegistry {
   DocumentProviderRegistry({
     required JsonDocumentStore documents,
@@ -17,16 +26,19 @@ final class DocumentProviderRegistry implements ProviderRegistry {
     required http.Client client,
     Clock clock = const SystemClock(),
     this.probeTimeout = const Duration(seconds: 8),
+    Future<List<InternetAddress>> Function(String host)? resolver,
   })  : _docs = documents,
         _secrets = secrets,
         _client = client,
-        _clock = clock;
+        _clock = clock,
+        _resolver = resolver;
 
   final JsonDocumentStore _docs;
   final SecretStore _secrets;
   final http.Client _client;
   final Clock _clock;
   final Duration probeTimeout;
+  final Future<List<InternetAddress>> Function(String host)? _resolver;
 
   final StreamController<List<ProviderConfig>> _changes = StreamController.broadcast();
   final Map<String, ProviderConfig> _configs = {};
@@ -70,6 +82,7 @@ final class DocumentProviderRegistry implements ProviderRegistry {
   }
 
   Future<ProviderConfig> _save(ProviderConfig config, {String? apiKey}) async {
+    await _checkBaseUrl(config);
     await _docs.put(_collection, config.id, config.toJson());
     if (apiKey != null && apiKey.isNotEmpty) await _secrets.write(config.secretKey, apiKey.trim());
     _configs[config.id] = config;
@@ -133,6 +146,19 @@ final class DocumentProviderRegistry implements ProviderRegistry {
       return EndpointStatus.unreachable;
     } on Object {
       return EndpointStatus.error;
+    }
+  }
+
+  /// Only plain http needs DNS here (the opt-in rule); https endpoints are
+  /// fully checked by the provider before it connects.
+  Future<void> _checkBaseUrl(ProviderConfig config) async {
+    if (config.baseUrl.scheme.toLowerCase() != 'http') return;
+    final policy = endpointUrlPolicy(allowLocalNetwork: config.allowLocalNetwork, resolver: _resolver);
+    try {
+      await policy.check(config.baseUrl.toString());
+    } on UrlPolicyViolation catch (v) {
+      if (v.reason.startsWith('host does not resolve')) return;
+      rethrow;
     }
   }
 
