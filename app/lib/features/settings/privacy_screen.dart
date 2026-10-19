@@ -12,6 +12,7 @@ import '../../design/widgets/section_header.dart';
 import '../../routing/routes.dart';
 import '../../state/app_providers.dart';
 import '../../state/provider_location.dart';
+import '../context/data/data_actions.dart';
 import '../providers/fields.dart';
 import 'settings_page.dart';
 
@@ -105,38 +106,24 @@ class PrivacyScreen extends ConsumerWidget {
         ListTile(
           leading: const Icon(Icons.file_download_outlined),
           title: const Text('Export my data'),
-          subtitle: const Text('Coming in a later update'),
-          onTap: () => unawaited(_comingSoon(
-            context,
-            title: 'Export is on the way',
-            message: 'A full export of your chats and settings (without keys) arrives with the context '
-                'manager update (M3). Until then, everything stays on this phone.',
-          )),
+          subtitle: const Text('All chats and settings as a JSON file, never keys'),
+          onTap: () => unawaited(exportAllData(context, ref)),
         ),
         ListTile(
-          leading: const Icon(Icons.delete_forever_outlined),
-          title: const Text('Delete all data'),
-          subtitle: const Text('Coming in a later update'),
-          onTap: () => unawaited(_comingSoon(
-            context,
-            title: 'One-tap delete is on the way',
-            message: 'It arrives in M3. For now, delete chats from the list (swipe left), remove providers '
-                'to delete their keys, or clear Sherpa\'s storage in your system settings.',
-          )),
+          leading: const Icon(Icons.move_down_rounded),
+          title: const Text('Import a handoff'),
+          subtitle: const Text('Continue a task from another device'),
+          onTap: () => unawaited(context.push<void>(Routes.handoffImport)),
+        ),
+        ListTile(
+          leading: Icon(Icons.delete_forever_outlined, color: theme.colorScheme.error),
+          title: Text('Delete all data', style: TextStyle(color: theme.colorScheme.error)),
+          subtitle: const Text('Chats, providers, keys and preferences on this phone'),
+          onTap: () => unawaited(deleteAllData(context, ref)),
         ),
       ],
     );
   }
-
-  Future<void> _comingSoon(BuildContext context, {required String title, required String message}) =>
-      showDialog<void>(
-        context: context,
-        builder: (dialog) => AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('OK'))],
-        ),
-      );
 }
 
 class _RightNowCard extends ConsumerWidget {

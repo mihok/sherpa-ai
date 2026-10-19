@@ -26,6 +26,15 @@ abstract final class Routes {
 
   static String chat(String sessionId) => '/chat/${Uri.encodeComponent(sessionId)}';
 
+  /// What the model sees for a chat: budget, items, overlays, undo (M3).
+  static String chatContext(String sessionId) => '${chat(sessionId)}/context';
+
+  /// Review a handoff bundle of a chat, then continue it elsewhere (M3).
+  static String chatHandoff(String sessionId) => '${chat(sessionId)}/handoff';
+
+  /// Continue a task from a handoff file, pasted text or a QR code.
+  static const handoffImport = '/handoff/import';
+
   static String provider(String providerId) => '/settings/providers/${Uri.encodeComponent(providerId)}';
 
   /// New-provider form preselected with a preset id from `ProviderPresets`.

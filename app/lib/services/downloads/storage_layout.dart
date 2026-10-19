@@ -20,9 +20,9 @@ import 'package:path_provider/path_provider.dart';
 /// model visible to the engine.
 ///
 /// The app support directory (not documents) keeps models out of the
-/// Files app and out of user-visible storage. Known gap: iOS includes it in
-/// iCloud backups unless each file is marked `isExcludedFromBackup`, which
-/// needs the platform plugin.
+/// Files app and out of user-visible storage. It is backed up by default, so
+/// `bootstrap()` marks [root] `isExcludedFromBackup` on iOS and the Android
+/// backup rules exclude `models/`.
 final class ModelStorageLayout {
   ModelStorageLayout(this.root);
 

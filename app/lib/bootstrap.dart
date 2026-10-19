@@ -16,8 +16,14 @@ import 'package:sherpa_platform/sherpa_platform.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 import 'features/chat/state/chat_dependencies.dart';
+import 'features/context/data/data_erase.dart';
+import 'features/models/models_bootstrap.dart';
+import 'features/models/state/models_providers.dart';
 import 'routing/chat_route.dart';
 import 'routing/chat_screen_binding.dart';
+import 'routing/context_route.dart';
+import 'services/device/platform_device_profile_source.dart';
+import 'services/downloads/downloads.dart' show ModelStorageLayout;
 import 'state/in_memory/in_memory_preferences_store.dart';
 import 'state/in_memory/in_memory_provider_registry.dart';
 import 'state/observable_session_store.dart';
@@ -56,6 +62,8 @@ Future<List<Override>> bootstrap({bool inMemory = false}) async {
   final prefs = DocumentPreferencesStore(docs);
   final ui = DocumentUiPreferencesStore(docs);
   await Future.wait([registry.load(), prefs.load(), ui.load()]);
+  final models = await modelFeatureOverrides(docs: docs, hubClient: _httpClient(), device: PlatformDeviceProfileSource());
+  unawaited(_excludeModelStorageFromBackup());
 
   return [
     secretStoreProvider.overrideWithValue(secrets),
@@ -64,9 +72,53 @@ Future<List<Override>> bootstrap({bool inMemory = false}) async {
     preferencesProvider.overrideWithValue(prefs),
     uiPreferencesStoreProvider.overrideWithValue(ui),
     chatScreenBuilderProvider.overrideWithValue(buildChatScreen),
+    contextScreensProvider.overrideWithValue(contextScreens),
+    dataEraseHooksProvider.overrideWith((ref) => [() => _eraseModels(ref)]),
     chatContextManagerProvider.overrideWith(_contextManager),
     memoryMonitorProvider.overrideWithValue(PlatformMemoryMonitor()),
+    ...models,
   ];
+}
+
+/// "Delete all data" also removes downloads in flight and every model in
+/// the library (files first via the library's own record-then-files order).
+Future<void> _eraseModels(Ref ref) async {
+  final downloads = ref.read(downloadManagerProvider);
+  for (final job in downloads.jobs) {
+    await downloads.cancel(job.id);
+  }
+  await downloads.clearFinished();
+  final library = ref.read(modelLibraryProvider);
+  for (final model in library.models) {
+    await library.delete(model.id);
+  }
+}
+
+/// background_downloader keeps its task records (signed CDN URLs, valid
+/// about an hour) in these Localstore collections under the support
+/// directory.
+const List<String> _downloaderStores = [
+  'backgroundDownloaderTaskRecords',
+  'backgroundDownloaderResumeData',
+  'backgroundDownloaderPausedTasks',
+];
+
+/// Multi-GB model files and download bookkeeping do not belong in iCloud
+/// (Android: the backup rules XML lists the same folders). The flag must
+/// be set on an existing directory, so the stores are created first; it
+/// covers everything inside.
+Future<void> _excludeModelStorageFromBackup() async {
+  if (!Platform.isIOS) return;
+  try {
+    final support = await getApplicationSupportDirectory();
+    final layout = await ModelStorageLayout.fromSupportDirectory();
+    for (final dir in [layout.root, for (final s in _downloaderStores) p.join(support.path, s)]) {
+      await Directory(dir).create(recursive: true);
+      await BackupExclusion.exclude(dir, includeSqliteSidecars: false);
+    }
+  } on Object catch (e) {
+    debugPrint('Backup exclusion failed: ${e.runtimeType}');
+  }
 }
 
 /// The escalation ladder (prune → truncate → compact → handoff → hard stop).
@@ -118,9 +170,10 @@ http.Client _httpClient() {
   return IOClient(HttpClient()..connectionTimeout = const Duration(seconds: 20));
 }
 
-List<Override> _inMemoryOverrides() {
+Future<List<Override>> _inMemoryOverrides() async {
   final secrets = InMemorySecretStore();
   final client = _httpClient();
+  final models = await inMemoryModelFeatureOverrides();
   return [
     secretStoreProvider.overrideWithValue(secrets),
     sessionStoreProvider.overrideWithValue(ObservableSessionStore(InMemorySessionStore())),
@@ -131,7 +184,10 @@ List<Override> _inMemoryOverrides() {
     preferencesProvider.overrideWithValue(InMemoryPreferencesStore()),
     uiPreferencesStoreProvider.overrideWithValue(InMemoryUiPreferencesStore()),
     chatScreenBuilderProvider.overrideWithValue(buildChatScreen),
+    contextScreensProvider.overrideWithValue(contextScreens),
+    dataEraseHooksProvider.overrideWith((ref) => [() => _eraseModels(ref)]),
     chatContextManagerProvider.overrideWith(_contextManager),
+    ...models,
   ];
 }
 

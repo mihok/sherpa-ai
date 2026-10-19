@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../design/widgets/state_views.dart';
+import '../features/context/handoff/handoff_import_screen.dart';
 import '../features/home/home_screen.dart';
 import '../features/models/downloads_screen.dart';
 import '../features/models/hf_account_screen.dart';
@@ -18,6 +19,7 @@ import '../features/settings/settings_screen.dart';
 import '../shell/app_shell.dart';
 import '../state/providers.dart';
 import 'chat_route.dart';
+import 'context_route.dart';
 import 'routes.dart';
 import 'sherpa_page.dart';
 
@@ -27,6 +29,9 @@ import 'sherpa_page.dart';
 /// /onboarding                    first-run flow (outside the shell)
 /// /                              home: sessions list (phone) / placeholder (tablet)
 /// /chat/:id                      a chat (detail pane on tablets)
+/// /chat/:id/context              what the model sees: budget, items, changes, undo
+/// /chat/:id/handoff              review a handoff bundle, then continue elsewhere
+/// /handoff/import                continue from a handoff file, text or QR code
 /// /settings                      settings root
 /// /settings/providers            configured providers
 /// /settings/providers/new        add a provider (?preset=openai|anthropic|…)
@@ -79,6 +84,30 @@ final routerProvider = Provider<GoRouter>((ref) {
                     child: ChatRouteView(sessionId: id),
                   );
                 },
+                routes: [
+                  // Chat-owned screens, through the ContextScreens seam
+                  // (the router never compiles the chat feature).
+                  GoRoute(
+                    path: 'context',
+                    pageBuilder: (context, state) => SherpaPage<void>(
+                      key: state.pageKey,
+                      restorationId: 'chat-context',
+                      child: ContextScreenView(sessionId: state.pathParameters['id']!, screen: ContextScreen.inspector),
+                    ),
+                  ),
+                  GoRoute(
+                    path: 'handoff',
+                    pageBuilder: (context, state) => SherpaPage<void>(
+                      key: state.pageKey,
+                      child: ContextScreenView(sessionId: state.pathParameters['id']!, screen: ContextScreen.handoff),
+                    ),
+                  ),
+                ],
+              ),
+              GoRoute(
+                path: 'handoff/import',
+                pageBuilder: (context, state) =>
+                    SherpaPage<void>(key: state.pageKey, restorationId: 'handoff-import', child: const HandoffImportScreen()),
               ),
               GoRoute(
                 path: 'settings',

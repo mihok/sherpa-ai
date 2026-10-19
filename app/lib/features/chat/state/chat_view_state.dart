@@ -133,7 +133,7 @@ String sourceLabelOf(ToolSource? source) {
 enum ChatNoticeKind { progress, info, warning }
 
 /// What an inline notice can offer.
-enum ChatNoticeAction { continueRun }
+enum ChatNoticeAction { continueRun, handOff }
 
 @immutable
 final class ChatNotice {

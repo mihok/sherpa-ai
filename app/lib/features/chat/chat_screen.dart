@@ -161,8 +161,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  void _onOverflow(_ChatMenu item) => switch (item) {
+        _ChatMenu.context => _push(_routes.context(widget.sessionId)),
+        _ChatMenu.compact => unawaited(_compactNow()),
+        _ChatMenu.handoff => _push(_routes.handoff(widget.sessionId)),
+      };
+
+  /// "Compact now": summarizes older turns right away and says what it did,
+  /// with an Undo (the transcript is untouched; undo deletes the overlay).
+  Future<void> _compactNow() async {
+    try {
+      final outcome = await _controller.compactNow();
+      if (!mounted || outcome == null) return;
+      final overlay = outcome.overlay;
+      if (overlay == null) {
+        _toast('Nothing to summarize yet: ${outcome.skippedReason ?? 'the chat is short'}.');
+        return;
+      }
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+          content: Text('Summarized earlier messages, freed ${formatTokenCount(overlay.tokensSaved)} tokens.'),
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => unawaited(_controller.undoContextChange(overlay.id).catchError((Object _) => null)),
+          ),
+        ));
+    } on StateError catch (e) {
+      _toast("Couldn't summarize: ${e.message}.");
+    } on Object {
+      _toast("Couldn't summarize the conversation. Try again.");
+    }
+  }
+
   void _onNoticeAction(ChatNoticeAction action) => switch (action) {
         ChatNoticeAction.continueRun => unawaited(_controller.continueRun()),
+        ChatNoticeAction.handOff => _push(_routes.handoff(widget.sessionId)),
       };
 
   void _onCommand(SlashCommand c) {
@@ -332,9 +367,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       level: level,
                       estimate: estimate,
                       modelName: model?.modelName,
+                      lastChange: _controller.lastContextChange(),
+                      onInspect: () => _push(_routes.context(widget.sessionId)),
                     )),
                   ),
-                  SizedBox(width: tokens.space.xs),
+                  _ChatOverflowMenu(
+                    canCompact: !running && availability == ProviderAvailability.ready && hasItems,
+                    canHandOff: hasItems,
+                    onSelected: _onOverflow,
+                  ),
                 ],
               ),
             ),
@@ -421,4 +462,41 @@ class _EmptyChat extends StatelessWidget {
       ),
     );
   }
+}
+
+enum _ChatMenu { context, compact, handoff }
+
+/// The app bar's overflow: context tools that are useful but not frequent
+/// enough for their own buttons.
+class _ChatOverflowMenu extends StatelessWidget {
+  const _ChatOverflowMenu({required this.canCompact, required this.canHandOff, required this.onSelected});
+
+  /// False while a reply is running (a rewrite would race it) or before
+  /// there is a model and something to summarize.
+  final bool canCompact;
+  final bool canHandOff;
+  final void Function(_ChatMenu item) onSelected;
+
+  @override
+  Widget build(BuildContext context) => PopupMenuButton<_ChatMenu>(
+        tooltip: 'More',
+        icon: const Icon(Icons.more_vert_rounded),
+        onSelected: onSelected,
+        itemBuilder: (_) => [
+          const PopupMenuItem(
+            value: _ChatMenu.context,
+            child: ListTile(leading: Icon(Icons.manage_search_rounded), title: Text('Context details')),
+          ),
+          PopupMenuItem(
+            value: _ChatMenu.compact,
+            enabled: canCompact,
+            child: const ListTile(leading: Icon(Icons.compress_rounded), title: Text('Compact now')),
+          ),
+          PopupMenuItem(
+            value: _ChatMenu.handoff,
+            enabled: canHandOff,
+            child: const ListTile(leading: Icon(Icons.move_up_rounded), title: Text('Hand off…')),
+          ),
+        ],
+      );
 }

@@ -51,6 +51,7 @@ class NoticeTile extends StatelessWidget {
                   onPressed: () => onAction!(action),
                   child: Text(switch (action) {
                     ChatNoticeAction.continueRun => 'Continue',
+                    ChatNoticeAction.handOff => 'Hand off…',
                   }),
                 ),
             ],

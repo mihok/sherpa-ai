@@ -33,6 +33,7 @@ class SessionsScreen extends ConsumerWidget {
               icon: const Icon(Icons.settings_outlined),
               onPressed: () => context.go(Routes.settings),
             ),
+          const _HomeOverflow(),
         ],
       ),
       body: const SessionsList(header: SliverToBoxAdapter(child: SessionSearchField())),
@@ -79,6 +80,7 @@ class SessionsPane extends ConsumerWidget {
                     ),
                   ),
                   const _ArchivedToggle(),
+                  const _HomeOverflow(),
                 ],
               ),
             ),
@@ -105,4 +107,23 @@ class _ArchivedToggle extends ConsumerWidget {
       onPressed: () => ref.read(showArchivedProvider.notifier).toggle(),
     );
   }
+}
+
+/// Less frequent list actions. "Import handoff…" continues a task that was
+/// handed off on another device (or saved earlier) as a new chat.
+class _HomeOverflow extends StatelessWidget {
+  const _HomeOverflow();
+
+  @override
+  Widget build(BuildContext context) => PopupMenuButton<String>(
+        tooltip: 'More',
+        icon: const Icon(Icons.more_vert_rounded),
+        onSelected: (route) => unawaited(context.push<void>(route)),
+        itemBuilder: (_) => const [
+          PopupMenuItem(
+            value: Routes.handoffImport,
+            child: ListTile(leading: Icon(Icons.move_down_rounded), title: Text('Import handoff…')),
+          ),
+        ],
+      );
 }

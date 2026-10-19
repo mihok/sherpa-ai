@@ -8,6 +8,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Sherpa uses the camera only to scan a handoff QR code that you choose to import.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Sherpa connects to model and tool servers you run on your local network.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>

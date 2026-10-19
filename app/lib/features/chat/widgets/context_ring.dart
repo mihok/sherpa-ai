@@ -131,14 +131,29 @@ class _RingPainter extends CustomPainter {
       old.value != value || old.color != color || old.track != track || old.stroke != stroke;
 }
 
-/// Small sheet with the budget breakdown (the full inspector is M3).
+/// Small sheet with the budget breakdown, the last context change (why it
+/// happened, in the ladder's own words) and the way into the full inspector.
 class ContextBudgetSheet extends StatelessWidget {
-  const ContextBudgetSheet({super.key, required this.budget, required this.level, this.estimate = false, this.modelName});
+  const ContextBudgetSheet({
+    super.key,
+    required this.budget,
+    required this.level,
+    this.estimate = false,
+    this.modelName,
+    this.lastChange,
+    this.onInspect,
+  });
 
   final ContextBudget? budget;
   final ContextLevel? level;
   final bool estimate;
   final String? modelName;
+
+  /// The newest overlay (elision, truncation or summary), if any.
+  final Future<ContextOverlay?>? lastChange;
+
+  /// Opens the context inspector; the sheet closes first.
+  final VoidCallback? onInspect;
 
   static Future<void> show(
     BuildContext context, {
@@ -146,13 +161,27 @@ class ContextBudgetSheet extends StatelessWidget {
     required ContextLevel? level,
     bool estimate = false,
     String? modelName,
+    Future<ContextOverlay?>? lastChange,
+    VoidCallback? onInspect,
   }) =>
       showModalBottomSheet<void>(
         context: context,
         showDragHandle: true,
         useSafeArea: true,
         isScrollControlled: true,
-        builder: (_) => ContextBudgetSheet(budget: budget, level: level, estimate: estimate, modelName: modelName),
+        builder: (sheet) => ContextBudgetSheet(
+          budget: budget,
+          level: level,
+          estimate: estimate,
+          modelName: modelName,
+          lastChange: lastChange,
+          onInspect: onInspect == null
+              ? null
+              : () {
+                  Navigator.of(sheet).pop();
+                  onInspect();
+                },
+        ),
       );
 
   @override
@@ -205,6 +234,18 @@ class ContextBudgetSheet extends StatelessWidget {
             if (b.safetyMargin > 0) _row(context, 'Safety margin (estimate)', b.safetyMargin),
             _row(context, 'Free', math.max(0, b.remaining)),
             _row(context, 'Window', b.limit, bold: true),
+          ],
+          if (lastChange != null) _LastChange(change: lastChange!),
+          if (onInspect != null) ...[
+            SizedBox(height: tokens.space.lg),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonalIcon(
+                onPressed: onInspect,
+                icon: const Icon(Icons.manage_search_rounded),
+                label: const Text('See what the model sees'),
+              ),
+            ),
           ],
         ],
       ),
@@ -293,6 +334,68 @@ class _BudgetBar extends StatelessWidget {
           },
         ),
       ),
+    );
+  }
+}
+
+/// "Last change": the newest overlay's own reason line ("Context was 83%
+/// full (compaction starts at 80%): summarized 14 earlier messages…"), so
+/// a shorter context is never a mystery (docs/research/11 §9).
+class _LastChange extends StatelessWidget {
+  const _LastChange({required this.change});
+
+  final Future<ContextOverlay?> change;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    return FutureBuilder<ContextOverlay?>(
+      future: change,
+      builder: (context, snap) {
+        final o = snap.data;
+        if (o == null) return const SizedBox.shrink();
+        final what = switch (o) {
+          CompactedRange() => 'Earlier messages were summarized',
+          ToolOutputElided() => 'An old tool result was shortened',
+          PayloadTruncated() => 'A large payload was trimmed',
+        };
+        return Padding(
+          padding: EdgeInsets.only(top: t.space.lg),
+          child: Semantics(
+            container: true,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(t.radius.md),
+              ),
+              child: Padding(
+                padding: EdgeInsets.all(t.space.md),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.history_rounded, color: theme.colorScheme.onSurfaceVariant),
+                    SizedBox(width: t.space.sm),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Last change: $what', style: theme.textTheme.titleSmall),
+                          SizedBox(height: t.space.xxs),
+                          Text(
+                            o.reason,
+                            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

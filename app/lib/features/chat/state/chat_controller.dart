@@ -9,6 +9,7 @@ import 'package:sherpa_providers/sherpa_providers.dart';
 
 import '../../../state/providers.dart';
 import '../../../state/services.dart';
+import '../../context/state/context_actions.dart';
 import 'chat_dependencies.dart';
 import 'chat_errors.dart';
 import 'chat_view_state.dart';
@@ -432,6 +433,65 @@ class ChatController extends Notifier<ChatViewState> {
   void dismissNotice(String code) => _dismissNotice(code);
 
   // ---------------------------------------------------------------------------
+  // Context (M3). The inspector, "Compact now" and undo go through the
+  // controller so a context rewrite can never race a run (for append-only
+  // models a rewrite inside a tool loop would invalidate that turn's
+  // reasoning) and the context ring reflects the change at once. Unlike the
+  // chat actions above these throw: the inspector reports failures in place.
+
+  ContextActions get _contextActions => ContextActions(
+        store: _store,
+        registry: _registry,
+        router: _router,
+        config: _config,
+        manager: ref.read(chatContextManagerProvider),
+        memory: ref.read(memoryMonitorProvider),
+        clock: _clock,
+        ids: ref.read(idGeneratorProvider),
+      );
+
+  /// What the next request would send, for the context inspector; null
+  /// while the chat has no usable model (the window size is unknown then).
+  Future<ContextSnapshot?> inspectContext() async {
+    await _loaded;
+    final model = state.model;
+    if (model == null || state.availability != ProviderAvailability.ready) return null;
+    return _contextActions.snapshot(sessionId, model.choice);
+  }
+
+  /// Summarizes older turns now, persisted like a ladder-made overlay.
+  /// Null when a run is active or there is no model.
+  Future<CompactionOutcome?> compactNow() =>
+      _contextChange((choice) => _contextActions.compactNow(sessionId, choice));
+
+  /// Undoes [overlayId] together with the overlays built on it; returns the
+  /// ids removed (null when a run is active or there is no model).
+  Future<List<String>?> undoContextChange(String overlayId) =>
+      _contextChange((choice) => _contextActions.undo(sessionId, choice, overlayId));
+
+  /// The newest recorded context change (the context ring's "last change").
+  Future<ContextOverlay?> lastContextChange() => _contextActions.latestOverlay(sessionId);
+
+  Future<T?> _contextChange<T>(Future<T> Function(ModelChoice choice) body) async {
+    await _loaded;
+    final model = state.model;
+    if (_runActive || model == null || state.availability != ProviderAvailability.ready) return null;
+    _runActive = true; // a send waits for the overlay to be persisted
+    try {
+      final result = await body(model.choice);
+      final after = await _contextActions.snapshot(sessionId, model.choice);
+      _commit(state.copyWith(
+        budget: after.budget,
+        contextLevel: after.inspection.level,
+        budgetIsEstimate: true,
+      ));
+      return result;
+    } finally {
+      _runActive = false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Loading and model resolution
 
   Future<void> _load() async {
@@ -761,6 +821,8 @@ class ChatController extends Notifier<ChatViewState> {
           code: code,
           message: _noticeCopy(code, message),
           kind: code == 'retrying' ? ChatNoticeKind.progress : ChatNoticeKind.info,
+          // The ladder's advice comes with the way to act on it.
+          action: code == 'handoff_recommended' ? ChatNoticeAction.handOff : null,
         );
         _flush(base: state.copyWith(notices: [...state.notices.where((n) => n.code != code), notice]));
       case RunFinished():

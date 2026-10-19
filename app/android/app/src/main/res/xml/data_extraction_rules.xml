@@ -19,6 +19,12 @@
              Sherpa state lives in the excluded DB or the Keystore, so no prefs are
              worth restoring. -->
         <exclude domain="sharedpref" path="." />
+        <!-- On-device models (multi-GB, re-downloadable) and background_downloader's
+             task records (signed CDN URLs) under the support directory. -->
+        <exclude domain="file" path="models" />
+        <exclude domain="file" path="backgroundDownloaderTaskRecords" />
+        <exclude domain="file" path="backgroundDownloaderResumeData" />
+        <exclude domain="file" path="backgroundDownloaderPausedTasks" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="sherpa.db" />
@@ -30,5 +36,11 @@
              Sherpa state lives in the excluded DB or the Keystore, so no prefs are
              worth restoring. -->
         <exclude domain="sharedpref" path="." />
+        <!-- On-device models (multi-GB, re-downloadable) and background_downloader's
+             task records (signed CDN URLs) under the support directory. -->
+        <exclude domain="file" path="models" />
+        <exclude domain="file" path="backgroundDownloaderTaskRecords" />
+        <exclude domain="file" path="backgroundDownloaderResumeData" />
+        <exclude domain="file" path="backgroundDownloaderPausedTasks" />
     </device-transfer>
 </data-extraction-rules>

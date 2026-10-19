@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- More headroom for on-device models on devices that support it. The
+	     app still sizes models from os_proc_available_memory() at runtime
+	     (docs/research/06-ios-native.md). Must also be in the provisioning
+	     profile; an entry here alone does nothing. -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
+</dict>
+</plist>

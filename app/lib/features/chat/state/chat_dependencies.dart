@@ -38,6 +38,8 @@ final class ChatRoutes {
     this.newProvider = '/settings/providers/new',
     this.editProvider = _editProvider,
     this.chat = _chat,
+    this.context = _context,
+    this.handoff = _handoff,
   });
 
   /// Provider setup (the "no provider configured" call to action).
@@ -49,8 +51,16 @@ final class ChatRoutes {
   /// A chat by session id (used by /new and "Start a new chat").
   final String Function(String sessionId) chat;
 
+  /// The context inspector of a chat (context ring, overflow menu).
+  final String Function(String sessionId) context;
+
+  /// The handoff review of a chat ("Hand off…").
+  final String Function(String sessionId) handoff;
+
   static String _editProvider(String providerId) => '/settings/providers/${Uri.encodeComponent(providerId)}';
   static String _chat(String sessionId) => '/chat/${Uri.encodeComponent(sessionId)}';
+  static String _context(String sessionId) => '${_chat(sessionId)}/context';
+  static String _handoff(String sessionId) => '${_chat(sessionId)}/handoff';
 }
 
 /// Haptic moments, mapped per docs/research/12 §1.9. Never per token.

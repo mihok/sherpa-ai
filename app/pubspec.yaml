@@ -26,8 +26,10 @@ dependencies:
   go_router: ^18.1.0
   http: ^1.6.0
   material_ui: ^1.7.0
+  mobile_scanner: ^7.4.2
   path: ^1.9.1
   path_provider: ^2.1.6
+  qr_flutter: ^4.1.0
   share_plus: ^13.3.1
   sherpa_core: any
   sherpa_data: any
