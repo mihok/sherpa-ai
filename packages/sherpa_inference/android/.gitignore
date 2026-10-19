@@ -1,0 +1,5 @@
+# AGP externalNativeBuild (CMake) and Gradle state for the JNI shim; never commit.
+.cxx/
+.gradle/
+/build/
+/local.properties

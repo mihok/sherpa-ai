@@ -517,7 +517,10 @@ enum EngineHostKind {
   /// Android fallback).
   inProcessFfi,
 
-  /// The engine in Android's isolated `:inference` process (bound service).
+  /// The engine isolated from the app in Android's `:inference` process
+  /// ([ProcessEngineHost]: a bound service in a private process of the app's
+  /// own uid — not `android:isolatedProcess`, which could not open the
+  /// model files).
   isolatedProcess,
 
   /// A test double.

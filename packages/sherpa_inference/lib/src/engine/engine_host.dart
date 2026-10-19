@@ -11,9 +11,10 @@ import 'engine_types.dart';
 /// * [FfiEngineHost]: the engine in this process via Dart FFI, every
 ///   blocking call on a long-lived background isolate and event polling on a
 ///   second one. Used on iOS, in host tests and as the Android fallback.
-/// * An Android isolated-process host: the same `.so` in a bound
-///   `:inference` service (AIDL/Pigeon), so a native crash restarts the
-///   engine instead of killing the app (PLAN "Local inference engine").
+/// * [ProcessEngineHost]: the same `.so` in a bound `:inference` service
+///   (Pigeon → AIDL/Binder → JNI), so a native crash restarts the engine
+///   instead of killing the app (PLAN "Local inference engine").
+///   [createDefaultEngineHost] picks it on Android.
 ///
 /// ## Contract
 ///

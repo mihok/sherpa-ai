@@ -21,7 +21,7 @@ ModelLifecycleManager ── admission (se_estimate_memory × MemoryMonitor) · 
       │                  pressure/background policy · crash forensics · PrefixCacheStore · Autotuner
       ▼
 EngineHost (interface) ── FfiEngineHost: worker isolate (blocking calls) + pump isolate (events)
-      │                └─ (next) Android :inference process host over Binder/Pigeon
+      │                └─ ProcessEngineHost: Android `:inference` process (Pigeon → AIDL/Binder → JNI)
       ▼
 lib/src/ffi: hand-written bindings (39 se_* functions), library loader
 ```
@@ -60,6 +60,88 @@ for runners that live on a background isolate.
   only during a synchronous call on the engine's thread, which no Dart callback type honours (header comment;
   this supersedes PLAN's earlier `NativeCallable.listener` note). The engine's log callback stays NULL for the
   same reason (stderr / logcat `sherpa_engine`).
+
+## Hosts: in-process FFI and the Android `:inference` process
+
+`createDefaultEngineHost(crashBreadcrumbPath: forensics.engineBreadcrumbPath)` returns a `ProcessEngineHost` on
+Android once its service binds, falling back to `FfiEngineHost` when it cannot bind (plugin not registered, service
+missing from the merged manifest, binding refused/timed out); `FfiEngineHost` everywhere else. A missing engine `.so`
+is not a bind failure: the process host reports "engine unavailable" on `start()`, as the FFI host would.
+
+```
+Dart ProcessEngineHost ──Pigeon (send: serial TaskQueue; one ordered event channel back)── SherpaInferencePlugin
+   (epochs, pending calls, credits,                                                       (InferenceClient: bind,
+    crash backoff — all policy)                                                            death, exit records)
+                                                    │ AIDL, oneway, Blob (inline ≤ 32 KiB, else SharedMemory)
+                                                    ▼
+                            :inference process ── InferenceService ── EngineCore (per client) ── EventPump
+                                                                          │ JNI (sherpa_jni.c, dlopen)
+                                                                          ▼
+                                                                    libsherpa_engine.so
+```
+
+* **Process type.** `android:process=":inference"`, `exported="false"`, a private process of the app's uid — **not**
+  `isolatedProcess`: an isolated uid cannot open the GGUF (llama.cpp mmaps it by path), prefix-cache state files or
+  LoRAs, and the C ABI is path-based throughout (fd passing would need a new ABI and still not cover state save).
+  Nothing Flutter-related runs there: the Application is the platform default, ContentProviders (androidx.startup,
+  …) are installed only in the main process, no FlutterEngine is created; the only Flutter class loaded is the
+  plain-Java `StandardMessageCodec` behind the wire format. An app with a custom `Application` must skip heavy init
+  when `InferenceService.isInferenceProcess(context)`.
+* **Bind flags** (`BindPolicy.adaptive`, default). Base binding `BIND_AUTO_CREATE | BIND_NOT_PERCEPTIBLE`: an idle
+  engine sits just below perceptible while the UI is in front, so the system may reclaim it before perceptible work.
+  While calls or streams are in flight (+2 s), a second `BIND_AUTO_CREATE | BIND_IMPORTANT` binding raises it to its
+  client's level: foreground with top-app CPU scheduling while the UI is visible, the importance of sherpa_platform's
+  `BackgroundRunGuard` foreground service while that runs — so a generation keeps going exactly as long as the app
+  may. Not used: `BIND_ABOVE_CLIENT`, `BIND_INCLUDE_CAPABILITIES` (no while-in-use/network capability needed),
+  `BIND_WAIVE_PRIORITY`, `startService`. After 60 s without handles the host unbinds; the service frees everything
+  and the empty process can go; the next call reconnects transparently (same epoch).
+* **IPC.** One schema (`pigeons/inference_api.dart`) for both hops: Dart builds sealed `EngineCall`s, the plugin
+  forwards them unchanged, serialized with the Pigeon-generated codec, as one oneway transaction each; replies,
+  progress, stream starts, event batches and connection changes come back as `InferenceMessage`s. No transaction
+  carries more than 32 KiB inline; larger payloads (long chat JSON, big token arrays, a long FINISH message) travel in
+  a read-only `SharedMemory`. Handles are salted ids minted by the service (never pointers); unknown ids are
+  `SE_ERR_INVALID_ARG`, and a free waits for in-flight users of the same handle. Ordering: Dart ships calls
+  synchronously in call order → Pigeon serial TaskQueue → one oneway Binder node (delivered one at a time) → each
+  session's calls run on its own serial executor in arrival order; blocking calls (load, bench, state I/O) run on a
+  pool so they never stall another session or a Binder thread; cancels bypass every queue. `SE_ERR_BUSY` is the
+  engine's own (session ops wait ≤ 1 s for a just-finished generation's busy flag, then report it).
+* **Backpressure, end to end.** The service's pump (a port of the FFI pump) coalesces deltas for ~16 ms, sends
+  batches of ≤ 16 KiB, and has at most 4 batches per stream outstanding; Dart returns one credit per delivered batch
+  and none while the subscription is paused. So a paused consumer stops the pump, the engine ring fills and decode
+  blocks — proven against the real engine in `JniEngineHostTest.f_…` (decode_ms covers the whole pause) and
+  `EngineCoreTest` (fake engine blocks on its full ring). Worst case in flight per stream: 4 × 16 KiB.
+* **Crashes.** On binder death the plugin reports at once (every pending call and stream fails with
+  `EngineCrashedException`, the epoch bumps, old handles throw `StaleHandleException`), unbinds (so the system does
+  not restart on its own schedule), and polls `getHistoricalProcessExitReasons` for the `:inference` pid (≤ 2 s).
+  `EngineHostCrashed(nativeStateLost: true)` then carries a precise reason — native crash (signal), LMK / memory
+  limiter kill, signal, ANR, … — the phase the service recorded with `setProcessStateSummary` (`{"v":1,"p":"generating",
+  "m":"<tag>","c":4096,"k":"f16/f16","h":"proc"}`, set from the `:inference` process on every load / generate /
+  state I/O / bench transition), the engine's crash breadcrumb (read and consumed, so `EngineForensics` does not report
+  the same crash again next launch) and, on API 31+, a ≤ 1.5 KB redacted tombstone excerpt (signal, abort message,
+  cause, top 8 frames as file name + symbol; no registers, memory, logs, paths). `ProcessEngineHost.crashes` has the
+  structured `EngineProcessCrash`. Restarts back off 250 ms ×2 up to 30 s (reset after 1 min up); 5 deaths or failed
+  restarts within 3 min are a crash loop: `terminalReason` is set, calls fail with "engine unavailable", `retry()`
+  starts over.
+* **Contract details** match `FfiEngineHost`: cold single-subscription streams with exactly one FINISH after USAGE and
+  PERF, cancel = `se_cancel`, `cancelGeneration`, `CancellationToken`s on `loadModel`/`bench` trip an `se_canceller`
+  in the service (also when cancelled before the call was sent), load progress callbacks, `countBatch` in one hop.
+  `syncTokenizer` returns null (no engine in this process).
+
+Measured on this Linux host (4 cores, 2 threads, Qwen3-0.6B Q4_K_M; same workload, back to back; the JNI numbers
+include the dispatcher, pool, pump and the wire codec both ways but **not** Binder or the platform channel):
+
+| | FfiEngineHost (isolates) | JNI path (EngineCore) |
+|---|---:|---:|
+| `tokenize("hi")` round trip, median | 214 µs | 94 µs |
+| `countChatTokens` round trip, median (template render dominates) | 7.2 ms | 8.2 ms |
+| 40-token greedy reply: TTFT / decode | 242 ms / 26.4 t/s | 226 ms / 25.4 t/s |
+| cancel → FINISH(cancelled) | 10 ms | 2–23 ms |
+
+On a device expect a few hundred µs more per call for the platform channel + Binder; at ≤ 1 batch per token that is
+noise next to decode.
+
+Regenerate the Pigeon code with `dart run pigeon --input pigeons/inference_api.dart` (outputs
+`lib/src/engine/process_messages.pigeon.dart` and `android/src/main/kotlin/.../Messages.g.kt`; no Swift).
 
 ## Provider behaviour
 
@@ -119,8 +201,11 @@ for runners that live on a background isolate.
 
 ## Packaging
 
-**Android** (`android/build.gradle.kts`): an FFI plugin (`ffiPlugin: true`, no plugin class, no native build)
-whose only job is `sourceSets.main.jniLibs.srcDir(native/llama/out/android/jniLibs)` — override with
+**Android** (`android/build.gradle.kts`): an FFI plugin (`ffiPlugin: true`) and, for the process host, a Kotlin
+plugin (`pluginClass: SherpaInferencePlugin`, AIDL, the `:inference` service in its manifest) with a tiny JNI shim
+built by the plugin's CMake (`android/src/main/cpp`, plain C, no STL, arm64-v8a only, 16 KB pages; it compiles
+against `native/engine/include/sherpa_engine.h` only and dlopens the engine at runtime). The engine itself is added
+with `sourceSets.main.jniLibs.srcDir(native/llama/out/android/jniLibs)` — override with
 `-Psherpa.engineJniLibs=<dir>` or `SHERPA_ENGINE_JNILIBS`. The `.so` files are never committed; without them the
 build succeeds with a warning and the provider reports "engine unavailable". Libraries stay uncompressed and
 16 KB-aligned in the APK; the engine `dlopen`s its CPU variant by bare name (no `extractNativeLibs`). Verified
@@ -145,13 +230,19 @@ cd packages/sherpa_inference
 flutter test                                # unit + integration (integration skips without engine/model)
 flutter test test/unit                      # no engine needed
 SHERPA_ENGINE_LIB=/path/libsherpa_engine.so flutter test test/integration
+
+# Kotlin (plain JVM): dispatcher, pump, wire codec, exit decoding — and the JNI shim against the real host
+# engine + model (skips without them). From any app depending on this plugin:
+tool/build_host_jni.sh                      # host shim → build/host-jni/libsherpa_inference_jni.so
+cd <app>/android && ./gradlew :sherpa_inference:testDebugUnitTest
 ```
 
 ## Integrating (app)
 
 ```dart
 final forensics = EngineForensics(Directory('${support.path}/engine'));
-final host = FfiEngineHost(crashBreadcrumbPath: forensics.engineBreadcrumbPath);
+// Android: the :inference process host (FFI fallback when it cannot bind); elsewhere FfiEngineHost.
+final host = await createDefaultEngineHost(crashBreadcrumbPath: forensics.engineBreadcrumbPath);
 final lifecycle = ModelLifecycleManager(
   host: host,
   memory: platformMemoryMonitor,                    // sherpa_platform
@@ -161,8 +252,10 @@ final lifecycle = ModelLifecycleManager(
   prefixCache: PrefixCacheStore(directory: Directory('${caches.path}/kv')),
   autotuner: Autotuner(host: host, store: ..., environment: AutotuneEnvironment(...)),
   backgroundPolicy: Platform.isIOS ? BackgroundPolicy.pauseAndPersist : BackgroundPolicy.persistOnly,
-  onPhase: (r) => platform.setProcessStateSummary(r.compactSummary),   // Android
+  onPhase: (r) => platform.setProcessStateSummary(r.compactSummary),   // Android, main process
 );
+// ProcessEngineHost records the engine's own phases from the :inference process itself and reports live crashes on
+// host.events / (host as ProcessEngineHost).crashes (exit reason, phase, tombstone excerpt).
 final crash = await lifecycle.start();              // show crash?.description once
 lifecycle.register(LocalModelSpec(id: ..., path: ..., identity: 'sha256:…', trainContext: ...));
 final provider = LlamaCppProvider(lifecycle: lifecycle);
@@ -180,6 +273,14 @@ arm64-v8a`); build `native/llama/build_android.sh` before `flutter build apk`. i
 `tool/link_ios_engine.sh` before `flutter build ios`.
 
 ## Known gaps
+
+* The Android process host was **not run on a device or emulator** (none available here): Binder, the service
+  lifecycle, bind flags/importance, `setProcessStateSummary`, exit-record lookup and tombstone reading are written
+  against the API docs and covered by JVM tests of the pure parts and Dart tests over a fake service. The JNI shim and
+  the service-side dispatcher/pump ran against the real engine on a host JVM. `ProcessEngineHost.
+  debugCrashEngineProcess('abort'|'segv'|'kill')` (debuggable builds) exists to exercise crash handling on a device.
+* sherpa_platform's `lastExit` (`getHistoricalProcessExitReasons(pkg, 0, 1)`) now also sees `:inference` exits; it
+  should filter on the main process name.
 
 * iOS packaging and the progress callback path on device are unverified (no macOS/devices here).
 * Vision (mmproj) needs a `SHERPA_ENGINE_MTMD` engine build; images are dropped with a notice until then.

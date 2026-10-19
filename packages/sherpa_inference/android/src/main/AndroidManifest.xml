@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- The on-device engine host (ProcessEngineHost). A private process of the app's own uid:
+             a native crash or an OS memory kill there ends this process, not the UI, and the Dart host
+             restarts it (docs/PLAN.md "Local inference engine").
+             - Not android:isolatedProcess: an isolated uid could not open the GGUF (which llama.cpp
+               mmaps by path), prefix-cache state files or LoRA adapters, and the engine's C ABI is
+               path-based throughout; fd passing would need a new ABI and still breaks state save.
+             - exported="false": only this app can bind it.
+             - Bound only (never started, never in the foreground): it lives while the main process
+               binds it and inherits that process's importance via the bind flags (InferenceClient.kt). -->
+        <service
+            android:name="io.github.mihok.sherpa_inference.InferenceService"
+            android:exported="false"
+            android:process=":inference" />
+    </application>
+</manifest>
