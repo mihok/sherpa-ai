@@ -18,9 +18,11 @@ import 'package:sherpa_core/sherpa_core.dart'
         ToolAnnotations,
         ToolCall,
         ToolDefinition,
+        ResolvedToolCall,
         ToolExecutionContext,
         ToolResult,
         ToolRouter,
+        ToolSelectionHints,
         ToolSource,
         ToolSourceKind;
 import 'package:sherpa_net/sherpa_net.dart' show Redactor;
@@ -114,10 +116,12 @@ final class ToolHygieneInfo {
   bool get requiresConfirmation => quarantined || flagged;
 }
 
-/// A tool call resolved to its real target (unwrapping `call_tool`).
+/// A tool call resolved to its real target (unwrapping `call_tool`), with
+/// the router's own detail. [McpToolRouter.resolve] turns it into
+/// sherpa_core's [ResolvedToolCall] for the agent loop.
 @immutable
-final class ResolvedToolCall {
-  const ResolvedToolCall({
+final class McpResolvedCall {
+  const McpResolvedCall({
     required this.call,
     required this.known,
     this.definition,
@@ -213,6 +217,9 @@ final class _Session {
   Future<List<ToolDefinition>>? pending;
   final List<String> recent = [];
   List<String>? restoredVisible;
+
+  /// `ToolBudget.forModel` from the last [ToolSelectionHints].
+  ToolBudget? hinted;
 }
 
 /// Aggregates the tools of every enabled MCP server (remote and on-device)
@@ -244,21 +251,29 @@ final class _Session {
 ///
 /// **Execution.** Arguments are validated against the ORIGINAL schema with
 /// safe coercions (the model may have seen a normalized one), calls carry
-/// the idempotency key `<sessionId>:<callId>` (R11 §9.8), results are
-/// size-limited, and every failure becomes a model-friendly, redacted
+/// the loop's idempotency key (`ToolExecutionContext.idempotencyKey`,
+/// `<assistantMessageId>:<callId>`, stable across resume; R11 §9.8), results
+/// are size-limited, and every failure becomes a model-friendly, redacted
 /// [ToolResult.error]; only cancellation throws.
 ///
-/// **Approvals.** `call_tool` is declared destructive/open-world so the
-/// agent loop always routes it through the approval handler; wrap the app's
-/// handler in `McpApprovalHandler`, which evaluates the policy on the
-/// TARGET tool instead (see that class).
+/// **Approvals.** The agent loop calls [resolve] before gating: a
+/// `call_tool` call is decided, audited and shown to the user as its
+/// TARGET (a refusal is answered without asking, a corrected name forces a
+/// one-off confirmation), so nothing is ever granted to the proxy.
+/// `call_tool` stays declared destructive/open-world for any caller that
+/// does not resolve. `McpApprovalHandler` is no longer needed with
+/// `AgentRunner` (it passes resolved calls straight through).
+///
+/// **Budget.** Without [setBudget] or an explicit constructor
+/// `defaultBudget`, a session's budget follows the model the loop describes
+/// ([ToolSelectionHints]: `ToolBudget.forModel`).
 final class McpToolRouter implements ToolRouter {
   McpToolRouter({
     required this.manager,
     ToolHygiene? hygiene,
     this.enablement = const AllToolsEnabled(),
     TokenCounter? counter,
-    this.defaultBudget = ToolBudget.remote,
+    ToolBudget? defaultBudget,
     String Function(McpServerConfig config)? namespaceFor,
     Set<String> alwaysOn = const {},
     this.embedder,
@@ -268,6 +283,8 @@ final class McpToolRouter implements ToolRouter {
     this.validateArgs = true,
     this.onGrantsInvalidated,
   })  : hygiene = hygiene ?? ToolHygiene(clock: clock),
+        defaultBudget = defaultBudget ?? ToolBudget.remote,
+        _explicitDefaultBudget = defaultBudget,
         _counter = counter ?? HeuristicTokenCounter(),
         _namespaceFor = namespaceFor,
         _alwaysOn = {...alwaysOn},
@@ -293,7 +310,10 @@ final class McpToolRouter implements ToolRouter {
 
   /// The search proxy. Read-only and closed-world (it only reads the local
   /// index), but its source is non-built-in on purpose: its output quotes
-  /// untrusted server text, so it must taint the session (R11 §9.7).
+  /// untrusted server text, so it must taint the session (R11 §9.7). For
+  /// approvals [resolve] presents it as built-in ([_searchGateDefinition]):
+  /// it is Sherpa's own code, and the untrusted proxy source would
+  /// otherwise make every search ask the user.
   static const ToolDefinition searchToolDefinition = ToolDefinition(
     name: searchToolName,
     title: 'Search tools',
@@ -310,6 +330,15 @@ final class McpToolRouter implements ToolRouter {
     },
     annotations: ToolAnnotations(title: 'Search tools', readOnlyHint: true, idempotentHint: true, openWorldHint: false),
     source: _proxySource,
+  );
+
+  /// [searchToolDefinition] as the approval policy should judge it.
+  static const ToolDefinition _searchGateDefinition = ToolDefinition(
+    name: searchToolName,
+    title: 'Search tools',
+    description: 'Find more tools by what they do.',
+    inputSchema: {'type': 'object'},
+    annotations: ToolAnnotations(title: 'Search tools', readOnlyHint: true, idempotentHint: true, openWorldHint: false),
   );
 
   /// The dispatch proxy. Declared with the untrusted defaults (destructive,
@@ -342,7 +371,12 @@ final class McpToolRouter implements ToolRouter {
   final McpServerManager manager;
   final ToolHygiene hygiene;
   final ToolEnablement enablement;
+
+  /// The budget of sessions without [setBudget] when the agent loop gives
+  /// no [ToolSelectionHints] (remote, unless the constructor was given one;
+  /// a budget given to the constructor also wins over the hints).
   final ToolBudget defaultBudget;
+  final ToolBudget? _explicitDefaultBudget;
   final ToolEmbedder? embedder;
 
   /// How long [toolsForTurn] waits for servers to list their tools; slower
@@ -552,13 +586,20 @@ final class McpToolRouter implements ToolRouter {
       ),
       uiResourceUri: t.uiResourceUri,
       modelVisible: t.modelVisible,
+      // Flagged or not yet approved: the policy asks even where it would
+      // auto-approve. (Binding grants to `definitionHash:
+      // review.currentHash` is the next step; see ApprovalGrant.)
+      requiresConfirmation: review.quarantined || review.flagged,
     );
   }
 
   // ---------------------------------------------------------------- budgets & sessions
 
-  /// The budget of [sessionId] (set it when the session's model is known).
-  ToolBudget budgetFor(String sessionId) => _budgets[sessionId] ?? defaultBudget;
+  /// The budget of [sessionId]: [setBudget], else an explicit constructor
+  /// `defaultBudget`, else the profile for the model the agent loop
+  /// described at the session's last segment start, else [defaultBudget].
+  ToolBudget budgetFor(String sessionId) =>
+      _budgets[sessionId] ?? _explicitDefaultBudget ?? _sessions[sessionId]?.hinted ?? defaultBudget;
 
   /// Sets a session's budget. Takes effect at its next segment (switching
   /// models is a segment boundary: call [resetSegment] too).
@@ -687,12 +728,25 @@ final class McpToolRouter implements ToolRouter {
   // ---------------------------------------------------------------- ToolRouter
 
   @override
-  Future<List<ToolDefinition>> toolsForTurn({required String sessionId, String? query, int? schemaTokenBudget}) async {
+  Future<List<ToolDefinition>> toolsForTurn({
+    required String sessionId,
+    String? query,
+    int? schemaTokenBudget,
+    ToolSelectionHints? hints,
+  }) async {
     final s = _session(sessionId);
     final seg = s.segment;
     if (seg != null) return List.of(seg.tools);
     final pending = s.pending;
     if (pending != null) return List.of(await pending);
+    // Budgets change only at a segment start, like [setBudget].
+    if (hints != null) {
+      s.hinted = ToolBudget.forModel(
+        onDevice: hints.onDevice,
+        parameterBillions: hints.parameterBillions,
+        reservedSlots: hints.reservedTools,
+      );
+    }
     final f = _startSegment(s, query, schemaTokenBudget);
     s.pending = f;
     try {
@@ -822,6 +876,18 @@ final class McpToolRouter implements ToolRouter {
     return _byName[name]?.definition;
   }
 
+  /// The agent loop's view of [resolveCall]: `call_tool` becomes its target
+  /// (a refusal and a corrected name included), `tool_search` is judged as
+  /// the built-in it is. Synchronous, so like [lookup] it only knows
+  /// servers already listed.
+  @override
+  ResolvedToolCall? resolve(ToolCall call, {required String sessionId}) {
+    final r = resolveCall(call, sessionId: sessionId);
+    if (!r.known) return null;
+    final definition = r.call.name == searchToolName && r.refusal == null ? _searchGateDefinition : r.definition;
+    return ResolvedToolCall(call: r.call, tool: definition, refusal: r.refusal, correctedName: r.correctedName);
+  }
+
   @override
   Future<ToolResult> execute(ToolCall call, ToolExecutionContext context) async {
     if (call.name == searchToolName) return _search(call.arguments, context);
@@ -881,20 +947,20 @@ final class McpToolRouter implements ToolRouter {
   /// Unwraps `call_tool` to its target and reports whether the router will
   /// refuse the call — for the approval layer and the UI, which must show
   /// (and decide on) the real tool, never the proxy.
-  ResolvedToolCall resolveCall(ToolCall call, {String? sessionId}) {
+  McpResolvedCall resolveCall(ToolCall call, {String? sessionId}) {
     if (call.name != callToolName) {
       final e = _byName[call.name];
-      if (call.name == searchToolName) return ResolvedToolCall(call: call, known: true, definition: searchToolDefinition);
-      if (e == null) return ResolvedToolCall(call: call, known: false);
-      return ResolvedToolCall(
+      if (call.name == searchToolName) return McpResolvedCall(call: call, known: true, definition: searchToolDefinition);
+      if (e == null) return McpResolvedCall(call: call, known: false);
+      return McpResolvedCall(
         call: call,
         known: true,
         definition: e.definition,
         refusal: _refusal(e, sessionId, forModel: true),
       );
     }
-    ResolvedToolCall refuse(String why) =>
-        ResolvedToolCall(call: call, known: true, definition: callToolDefinition, viaProxy: true, refusal: why);
+    McpResolvedCall refuse(String why) =>
+        McpResolvedCall(call: call, known: true, definition: callToolDefinition, viaProxy: true, refusal: why);
     final rawName = call.arguments['name'];
     if (rawName is! String || rawName.trim().isEmpty) {
       return refuse('call_tool needs "name": the exact tool name from tool_search.');
@@ -921,11 +987,11 @@ final class McpToolRouter implements ToolRouter {
       rawArguments: call.rawArguments,
     );
     if (name == searchToolName) {
-      return ResolvedToolCall(
+      return McpResolvedCall(
           call: inner, known: true, definition: searchToolDefinition, viaProxy: true, correctedName: corrected);
     }
     final e = _byName[name]!;
-    return ResolvedToolCall(
+    return McpResolvedCall(
       call: inner,
       known: true,
       definition: e.definition,
@@ -1025,7 +1091,8 @@ final class McpToolRouter implements ToolRouter {
         timeout: ctx.timeout,
         maxTimeout: ctx.timeout,
         onProgress: ctx.onProgress,
-        idempotencyKey: '${ctx.sessionId}:${call.id}',
+        // Call ids repeat across turns (`call_0`); the loop's key is unique.
+        idempotencyKey: ctx.idempotencyKey ?? '${ctx.sessionId}:${call.id}',
         // Only TRUSTED hints count (the effective annotations).
         retryOnReconnect: e.definition.annotations.isIdempotent,
       );

@@ -352,7 +352,8 @@ final class CompactionSummary {
   /// Real user messages verbatim, newest first, within a token budget.
   final List<String> userMessages;
 
-  /// The most recent user sentence the next step serves.
+  /// The most recent user sentence the next step serves, from the folded
+  /// range; null when a real user turn follows the summary.
   final String? nextStepQuote;
 
   /// File paths, URLs and resource URIs seen in tool arguments and results.
@@ -612,7 +613,8 @@ final class CompactionSummary {
       final args = s.argsPreview == null ? '' : ' ${s.argsPreview}';
       final where = s.server == null ? '' : ' on ${s.server}';
       final result = s.outcome == SideEffectOutcome.ok ? 'done' : 'failed';
-      b.write('\n- ${s.tool}$args$where → $result (call ${s.callId}, args ${s.argsDigest.substring(0, 8)})');
+      final digest = s.argsDigest.length > 8 ? s.argsDigest.substring(0, 8) : s.argsDigest;
+      b.write('\n- ${s.tool}$args$where → $result (call ${s.callId}, args $digest)');
     }
   }
 
@@ -699,8 +701,9 @@ final class CompactionInput {
   /// means "render [previousSummary] + [messages]".
   final List<Message>? contextMessages;
 
-  /// Messages that stay verbatim after the summary (read-only context, e.g.
-  /// for `nextStepQuote`).
+  /// Messages that stay verbatim after the summary (read-only context).
+  /// Nothing from them may be copied into the summary: it applies to every
+  /// branch sharing the folded range, and these messages belong to one.
   final List<Message> keptMessages;
 
   /// The session's system prompt and tools: the same prefix as the main

@@ -19,11 +19,17 @@ import 'mcp_tool_router.dart';
 /// Wraps the app's [ApprovalHandler] so approvals are decided on the tool
 /// that will actually run.
 ///
-/// Why it exists: the agent loop gates a call by the definition its router
-/// returns for the CALLED name. For `call_tool` that is the proxy, which
-/// says nothing about the target, and a grant recorded for "call_tool"
-/// would cover every tool. The proxy is therefore declared destructive so
-/// the loop always asks this handler, and this handler:
+/// **Not needed with `AgentRunner`.** The core loop now resolves calls
+/// through `ToolRouter.resolve` ([McpToolRouter.resolve]) before gating:
+/// it evaluates the policy on the target, answers refusals without asking,
+/// forces a one-off confirmation for corrected names and records grants for
+/// the target. It hands this handler the resolved call, which passes
+/// straight through to [inner]. The wrapper remains for code that drives
+/// approvals for raw `call_tool` calls itself.
+///
+/// For a raw `call_tool` call (the proxy's definition says nothing about the
+/// target, and a grant recorded for "call_tool" would cover every tool),
+/// this handler:
 ///
 /// * evaluates the [ApprovalPolicy] on the TARGET (with `tainted: true`,
 ///   because the handler cannot see the session's taint and the proxy's
@@ -38,10 +44,6 @@ import 'mcp_tool_router.dart';
 ///   disabled, app-only), so the user is not asked to approve something
 ///   that cannot run;
 /// * passes everything else to the inner handler unchanged.
-///
-/// Note for the core: with a `ToolRouter.resolve(call)` hook the loop could
-/// do this itself (and emit approval events for the real tool); until then
-/// this wrapper is required whenever [McpToolRouter] is used.
 final class McpApprovalHandler implements ApprovalHandler {
   McpApprovalHandler({required this.inner, required this.router, required this.policy, this.assumeTainted = true});
 
@@ -69,11 +71,12 @@ final class McpApprovalHandler implements ApprovalHandler {
       return inner.requestApproval(sessionId: sessionId, call: call, tool: tool, requirement: requirement, cancel: cancel);
     }
     final target = r.definition!;
-    var decision = policy.evaluate(target, sessionId, tainted: assumeTainted);
-    if (decision is AutoApprove && r.correctedName && !target.annotations.isReadOnly) {
+    var decision = policy.evaluate(target, sessionId, tainted: assumeTainted, repaired: call.repaired);
+    if (decision is AutoApprove && r.correctedName && !policy.annotationsFor(target).isReadOnly) {
       decision = NeedsConfirmation(
-        ApprovalPolicy.riskOf(target),
+        policy.riskFor(target),
         'The tool name "${call.arguments['name']}" was corrected to "${target.name}"; confirm this is the right tool.',
+        oneOffOnly: true,
       );
     }
     switch (decision) {
@@ -90,7 +93,7 @@ final class McpApprovalHandler implements ApprovalHandler {
           cancel: cancel,
         );
         if (cancel.isCancelled) return const ApprovalResponse(UserDecision.deny);
-        policy.recordFor(target, sessionId, response);
+        policy.recordFor(target, sessionId, response, requirement: decision);
         return ApprovalResponse(response.decision);
     }
   }

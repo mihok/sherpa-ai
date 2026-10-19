@@ -48,3 +48,30 @@ String groupDigits(int n) {
   }
   return b.toString();
 }
+
+/// JSON keys that name a secret: tokens, passwords, API keys, cookies,
+/// signatures, credentials, one-time codes.
+final RegExp secretKey = RegExp(
+  r'(token|secret|passw|signature|credential|api_?key|apikey|auth(?!or)|cookie|private|otp|pin$)',
+  caseSensitive: false,
+);
+
+/// The mask that replaces secret values (same as `HandoffScrubbers.mask`).
+const String secretMask = '«redacted»';
+
+/// [value] with every value under a [secretKey] key replaced by
+/// [secretMask], recursively. Structured masking runs before anything is
+/// encoded, so it does not depend on a text scrubber recognising JSON.
+Object? maskSecretValues(Object? value, {int depth = 0}) {
+  if (depth > 32) return value;
+  return switch (value) {
+    Map<Object?, Object?>() => {
+      for (final e in value.entries)
+        e.key.toString(): secretKey.hasMatch(e.key.toString()) && e.value != null
+            ? secretMask
+            : maskSecretValues(e.value, depth: depth + 1),
+    },
+    List<Object?>() => [for (final e in value) maskSecretValues(e, depth: depth + 1)],
+    _ => value,
+  };
+}

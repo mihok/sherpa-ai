@@ -14,6 +14,7 @@ import '../memory/memory_monitor.dart';
 import '../model/content.dart';
 import '../model/message.dart';
 import '../model/tool.dart';
+import '../provider/capabilities.dart';
 import '../provider/model_event.dart';
 import '../provider/model_provider.dart';
 import '../session/checkpoint.dart';
@@ -209,23 +210,15 @@ final class AgentRunner {
     run.controller = StreamController<AgentEvent>(
       onListen: () async {
         run.emit(RunStarted(runId: run.runId, sessionId: sessionId, resumed: resumed));
+        var threw = false;
         try {
           await body(run);
-        } on CancelledException {
-          await _onCancelled(run);
-        } on ContextOverflowException catch (e) {
-          await _checkpoint(run, RunPhase.failed, error: e.message);
-          run.finish(RunOutcome.needsUserAction, error: e, detail: e.message);
         } on Object catch (e) {
-          if (run.token.isCancelled) {
-            await _onCancelled(run);
-          } else {
-            await _audit(run, AuditKind.error, 'run failed: $e');
-            await _checkpoint(run, RunPhase.failed, error: e.toString());
-            run.finish(RunOutcome.failed, error: e, detail: e.toString());
-          }
+          threw = true;
+          await _settleFailure(run, e);
         } finally {
-          if (!run.finished) run.finish(RunOutcome.completed);
+          // Only a body that returned normally may count as completed.
+          if (!run.finished) run.finish(threw ? RunOutcome.failed : RunOutcome.completed);
           _active = null;
           await run.controller.close();
         }
@@ -238,6 +231,39 @@ final class AgentRunner {
   Future<void> _onCancelled(_Run run) async {
     await _checkpoint(run, RunPhase.cancelled);
     run.finish(RunOutcome.cancelled, detail: run.token.reason);
+  }
+
+  /// Ends a run whose body threw [error]. The outcome comes from [error];
+  /// the audit entry and terminal checkpoint are best effort, because they
+  /// usually hit the same store that just failed (disk full, a session
+  /// deleted mid-run). If they fail too, the run still ends: as failed with
+  /// the original error, or, when it was cancelled or overflowed, as failed
+  /// with the write error, since nothing of it could be saved. Nothing
+  /// escapes as an uncaught error and nothing reports success.
+  Future<void> _settleFailure(_Run run, Object error) async {
+    final cancelled = error is CancelledException || run.token.isCancelled;
+    Object? writeError;
+    try {
+      if (cancelled) {
+        await _checkpoint(run, RunPhase.cancelled);
+      } else if (error is ContextOverflowException) {
+        await _checkpoint(run, RunPhase.failed, error: error.message);
+      } else {
+        await _audit(run, AuditKind.error, 'run failed: $error');
+        await _checkpoint(run, RunPhase.failed, error: error.toString());
+      }
+    } on Object catch (e) {
+      writeError = e;
+    }
+    if (cancelled) {
+      if (writeError == null) return run.finish(RunOutcome.cancelled, detail: run.token.reason);
+      return run.finish(RunOutcome.failed, error: writeError, detail: 'could not save the stopped run: $writeError');
+    }
+    if (error is ContextOverflowException) {
+      if (writeError == null) return run.finish(RunOutcome.needsUserAction, error: error, detail: error.message);
+      return run.finish(RunOutcome.failed, error: writeError, detail: 'could not save the run: $writeError');
+    }
+    run.finish(RunOutcome.failed, error: error, detail: error.toString());
   }
 
   Future<void> _loop(_Run run, {required String leafId, required int startStep, String? draftId}) async {
@@ -287,8 +313,12 @@ final class AgentRunner {
     final plan = await _store.getPlan(sid);
     final query = path.lastWhereOrNull((m) => m.role == Role.user)?.text;
     final caps = await _provider.capabilities(_modelId);
+    final hints = ToolSelectionHints(
+      onDevice: _provider.info.location == ExecutionLocation.onDevice,
+      parameterBillions: caps.parameterCount == null ? null : caps.parameterCount! / 1e9,
+    );
     final offered = caps.canCallTools
-        ? (await _tools.toolsForTurn(sessionId: sid, query: query)).where((t) => t.modelVisible).toList()
+        ? (await _tools.toolsForTurn(sessionId: sid, query: query, hints: hints)).where((t) => t.modelVisible).toList()
         : const <ToolDefinition>[];
 
     final prepared = await _context.prepare(ContextRequest(
@@ -355,7 +385,8 @@ final class AgentRunner {
         final message = prepared.prefixKey == null
             ? streamed
             : streamed.copyWith(metadata: {...streamed.metadata, 'prefixKey': prepared.prefixKey});
-        await _store.putMessage(sid, message);
+        // Through the write queue, so no draft snapshot can land after it.
+        await run.serial(() => _store.putMessage(sid, message));
         await _setLeaf(sid, message.id);
         _calibrate(prepared.budget.inputTokens, message.usage);
         run.usage += message.usage ?? Usage.zero;
@@ -368,13 +399,16 @@ final class AgentRunner {
             // Keep what the user already saw, marked as failed. Unanswered
             // tool calls are dropped so the branch stays valid to continue.
             final partial = acc.build(finishReason: FinishReason.error.name);
-            await _store.putMessage(
-              sid,
-              partial.copyWith(
-                content: partial.content.where((p) => p is! ToolCallPart).toList(),
-                metadata: {'error': e.message},
-              ),
-            );
+            // Through the write queue: a draft snapshot still waiting there
+            // must not overwrite this final version (it would bring back
+            // the unanswered tool calls and drop the error marker).
+            await run.serial(() => _store.putMessage(
+                  sid,
+                  partial.copyWith(
+                    content: partial.content.where((p) => p is! ToolCallPart).toList(),
+                    metadata: {'error': e.message},
+                  ),
+                ));
             await _setLeaf(sid, partial.id);
           }
           rethrow;
@@ -404,7 +438,12 @@ final class AgentRunner {
         run.emit(ModelStreamed(messageId: acc.id, event: event));
         if (++sinceFlush >= _config.draftPersistEvery) {
           sinceFlush = 0;
-          unawaited(run.serial(() => _store.putMessage(run.sessionId, acc.build(draft: true))));
+          unawaited(run.serial(() async {
+            // A snapshot whose turn comes after the stream ended is stale:
+            // the final message (or the failed partial) is written next.
+            if (done.isCompleted) return;
+            await _store.putMessage(run.sessionId, acc.build(draft: true));
+          }));
         }
       },
       onError: (Object e, StackTrace st) {
@@ -424,10 +463,9 @@ final class AgentRunner {
       await sub.cancel();
       await finalize(FinishReason.cancelled.name);
     });
-    return done.future.then((m) async {
-      await run.serial(() async {});
-      return m;
-    }).whenComplete(providerToken.detach);
+    // Drain the write queue on every outcome, errors included, so whatever
+    // the caller writes next is ordered after the last draft snapshot.
+    return done.future.whenComplete(() => run.serial(() async {})).whenComplete(providerToken.detach);
   }
 
   void _calibrate(int estimatedInput, Usage? usage) {
@@ -441,6 +479,11 @@ final class AgentRunner {
   // Tool step
 
   /// Gates and runs the assistant's tool calls; returns the tool message id.
+  ///
+  /// Every decision that answers a call (denied, invalid, unknown, refused,
+  /// cut off, interrupted) is written to the tool message BEFORE the
+  /// checkpoint that records it, so a resume after process death never asks
+  /// again about a call the user already answered.
   Future<String> _toolStep(_Run run, int step, Message assistant, {RunCheckpoint? resume}) async {
     final sid = run.sessionId;
     final calls = assistant.toolCalls;
@@ -455,6 +498,10 @@ final class AgentRunner {
         c.id: results.containsKey(c.id) ? PendingCallStatus.done : (resumeStatus[c.id] ?? PendingCallStatus.pending),
     };
     final createdAt = existing?.createdAt ?? _clock.now();
+    // A reply cut off by the output limit can end inside a tool call whose
+    // JSON only parses after repair; such calls never run (R10 §7.5).
+    final truncated = assistant.finishReason == FinishReason.length.name;
+    final targets = <String, ResolvedToolCall>{};
     run.leafId = assistant.id;
 
     Future<void> persistResults() => run.serial(() async {
@@ -472,6 +519,14 @@ final class AgentRunner {
     ToolResultPart errorResult(ToolCall c, String text) =>
         ToolResultPart(callId: c.id, toolName: c.name, content: [TextPart(text)], isError: true);
 
+    // The result is durable before the status that refers to it.
+    Future<void> answer(ToolCall c, String text, [PendingCallStatus s = PendingCallStatus.done]) async {
+      results[c.id] = errorResult(c, text);
+      status[c.id] = s;
+      await persistResults();
+      await saveStatus(RunPhase.awaitingApproval);
+    }
+
     try {
       await saveStatus(RunPhase.awaitingApproval);
       final tainted = await _isTainted(sid, assistant.id);
@@ -480,57 +535,76 @@ final class AgentRunner {
         run.emit(const RunNotice('untrusted_content',
             'Untrusted tool output is in this conversation; actions now need your approval.'));
       }
+      if (truncated && calls.any((c) => !results.containsKey(c.id))) {
+        run.emit(const RunNotice('tool_call_truncated',
+            'The reply reached the output limit inside a tool call, so the call was not run.'));
+      }
       final toRun = <ToolCall>[];
       for (final c in calls) {
-        if (status[c.id] == PendingCallStatus.done) continue;
-        final tool = _tools.lookup(c.name);
+        if (results.containsKey(c.id)) continue;
+        if (truncated) {
+          await answer(c, 'This call to "${c.name}" was cut off by the output token limit before its arguments '
+              'were complete, so it was not run. Call the tool again with shorter arguments (for example, '
+              'split large content across several calls).');
+          continue;
+        }
         if (!c.isValid) {
-          results[c.id] = errorResult(c, 'Invalid arguments for "${c.name}": ${c.argumentsError}. '
-              'Fix the JSON and call the tool again.');
-          status[c.id] = PendingCallStatus.done;
+          await answer(c, 'Invalid arguments for "${c.name}": ${c.argumentsError}. Fix the JSON and call the tool again.');
           continue;
         }
-        if (tool == null) {
-          results[c.id] = errorResult(c, 'Unknown tool "${c.name}". Use only the tools provided.');
-          status[c.id] = PendingCallStatus.done;
+        final r = _tools.resolve(c, sessionId: sid);
+        final tool = r?.tool;
+        if (r != null && r.refusal != null) {
+          await answer(c, r.refusal!);
           continue;
         }
-        final prior = status[c.id]!;
-        if (prior == PendingCallStatus.running) {
-          // Interrupted mid-execution by process death.
-          if (tool.annotations.isIdempotent) {
-            run.emit(RunNotice('tool_rerun', 'Re-running interrupted ${tool.displayName} (idempotent).'));
+        if (r == null || tool == null) {
+          await answer(c, 'Unknown tool "${c.name}". Use only the tools provided.');
+          continue;
+        }
+        if (!tool.modelVisible) {
+          await answer(c, '"${tool.name}" is not available to the model (it can only be used from its app view).');
+          continue;
+        }
+        targets[c.id] = r;
+        switch (status[c.id]!) {
+          case PendingCallStatus.denied:
+            // Declined before the process died (an older version may not
+            // have saved the result): never ask again.
+            await answer(c, _declinedText, PendingCallStatus.denied);
+          case PendingCallStatus.done:
+            // Marked done but its result never reached the store (older
+            // versions): the outcome is unknown.
+            await answer(c, _interruptedText(tool));
+          case PendingCallStatus.running:
+            // Interrupted mid-execution by process death. Re-run only on
+            // trusted read-only / idempotent annotations (R11 §9.8).
+            if (_approvals.mayRerunInterrupted(tool)) {
+              run.emit(RunNotice('tool_rerun', 'Re-running interrupted ${tool.displayName} (idempotent).'));
+              toRun.add(c);
+            } else {
+              run.emit(RunNotice('tool_interrupted',
+                  '${tool.displayName} was interrupted while running; its outcome is unknown and it was not run again.'));
+              await answer(c, _interruptedText(tool));
+            }
+          case PendingCallStatus.approved:
             toRun.add(c);
-          } else {
-            results[c.id] = errorResult(c, 'The app was interrupted while "${c.name}" was running, so its '
-                'outcome is unknown. It was not re-run automatically because it may not be idempotent; '
-                'ask the user before trying again.');
-            status[c.id] = PendingCallStatus.done;
-          }
-          continue;
+          case PendingCallStatus.pending:
+            if (await _gate(run, c, r, tainted: tainted)) {
+              status[c.id] = PendingCallStatus.approved;
+              await saveStatus(RunPhase.awaitingApproval);
+              toRun.add(c);
+            } else {
+              await answer(c, _declinedText, PendingCallStatus.denied);
+            }
         }
-        if (prior == PendingCallStatus.approved) {
-          toRun.add(c);
-          continue;
-        }
-        final approved = await _gate(run, c, tool, tainted: tainted);
-        if (approved) {
-          status[c.id] = PendingCallStatus.approved;
-          toRun.add(c);
-        } else {
-          status[c.id] = PendingCallStatus.denied;
-          results[c.id] = errorResult(c, 'The user declined this tool call. Do not retry it; '
-              'ask the user how to proceed if it was necessary.');
-        }
-        await saveStatus(RunPhase.awaitingApproval);
       }
 
-      await persistResults();
       await saveStatus(RunPhase.executingTools);
       await _runPool(toRun, run.token, (c) async {
         status[c.id] = PendingCallStatus.running;
         await saveStatus(RunPhase.executingTools);
-        final part = await _execute(run, c, _tools.lookup(c.name)!);
+        final part = await _execute(run, c, targets[c.id]!, idempotencyKey: '${assistant.id}:${c.id}');
         results[c.id] = part;
         status[c.id] = PendingCallStatus.done;
         await persistResults();
@@ -538,7 +612,13 @@ final class AgentRunner {
         final msg = await _store.getMessage(sid, toolMsgId);
         run.emit(ToolCallFinished(
           call: c,
-          result: ToolResult(content: part.content, structured: part.structured, isError: part.isError, uiResourceUri: part.uiResourceUri),
+          result: ToolResult(
+            content: part.content,
+            structured: part.structured,
+            isError: part.isError,
+            uiResourceUri: part.uiResourceUri,
+            meta: part.meta,
+          ),
           message: msg!,
         ));
       });
@@ -554,6 +634,13 @@ final class AgentRunner {
     await _checkpoint(run, RunPhase.preparingContext, step: step + 1);
     return toolMsgId;
   }
+
+  static const String _declinedText =
+      'The user declined this tool call. Do not retry it; ask the user how to proceed if it was necessary.';
+
+  static String _interruptedText(ToolDefinition tool) =>
+      'The app was interrupted while "${tool.name}" was running, so its outcome is unknown. It was not run again '
+      'automatically because Sherpa cannot confirm that repeating it is safe; ask the user before trying again.';
 
   /// True when the context holds output of a non-built-in tool (MCP or
   /// on-device server) or an MCP resource: content an attacker may control.
@@ -596,36 +683,58 @@ final class AgentRunner {
     run.leafId = id;
   }
 
-  Future<bool> _gate(_Run run, ToolCall c, ToolDefinition tool, {bool tainted = false}) async {
-    final req = _approvals.evaluate(tool, run.sessionId, tainted: tainted);
+  /// Decides on [c] by what will actually run ([r]: for a proxy such as
+  /// `call_tool`, its target), so grants, prompts and the audit name the
+  /// real tool and nothing is ever granted to the proxy.
+  Future<bool> _gate(_Run run, ToolCall c, ResolvedToolCall r, {bool tainted = false}) async {
+    final call = r.call;
+    final tool = r.tool!;
+    final via = call.name == c.name ? null : c.name;
+    final req = _approvals.evaluate(
+      tool,
+      run.sessionId,
+      tainted: tainted,
+      repaired: c.repaired || call.repaired,
+      nameCorrected: r.correctedName,
+    );
     switch (req) {
       case AutoApprove(:final reason):
-        await _audit(run, AuditKind.approval, 'auto-approved ${c.name}: $reason', {'callId': c.id});
+        await _audit(run, AuditKind.approval, 'auto-approved ${call.name}: $reason', {'callId': c.id, 'via': via});
         return true;
       case Denied(:final reason):
         run.emit(ToolApprovalResolved(callId: c.id, approved: false, reason: reason));
-        await _audit(run, AuditKind.approval, 'denied ${c.name}: $reason', {'callId': c.id});
+        await _audit(run, AuditKind.approval, 'denied ${call.name}: $reason', {'callId': c.id, 'via': via});
         return false;
       case NeedsConfirmation():
-        run.emit(ToolApprovalRequested(call: c, tool: tool, requirement: req));
+        run.emit(ToolApprovalRequested(call: call, tool: tool, requirement: req));
         final response = await _approvalHandler.requestApproval(
           sessionId: run.sessionId,
-          call: c,
+          call: call,
           tool: tool,
           requirement: req,
           cancel: run.token,
         );
         run.token.throwIfCancelled();
         final ok = response.decision == UserDecision.approve;
-        _approvals.recordFor(tool, run.sessionId, response);
+        // A one-off prompt (repaired / corrected call) never leaves a grant,
+        // whatever scope the handler answered with.
+        _approvals.recordFor(tool, run.sessionId, response, requirement: req);
+        final scope = req.oneOffOnly ? ApprovalScope.once : response.scope;
         run.emit(ToolApprovalResolved(callId: c.id, approved: ok, reason: ok ? 'approved by user' : 'declined by user'));
-        await _audit(run, AuditKind.approval, '${ok ? 'user approved' : 'user declined'} ${c.name}',
-            {'callId': c.id, 'scope': response.scope.name, 'risk': req.risk.name});
+        await _audit(run, AuditKind.approval, '${ok ? 'user approved' : 'user declined'} ${call.name}', {
+          'callId': c.id,
+          'scope': scope.name,
+          'risk': req.risk.name,
+          'via': via,
+          if (req.oneOffOnly) 'oneOffOnly': true,
+        });
         return ok;
     }
   }
 
-  Future<ToolResultPart> _execute(_Run run, ToolCall c, ToolDefinition tool) async {
+  Future<ToolResultPart> _execute(_Run run, ToolCall c, ResolvedToolCall r, {String? idempotencyKey}) async {
+    final tool = r.tool!;
+    final target = r.call.name;
     run.emit(ToolCallStarted(c));
     final started = _clock.now();
     final token = run.token.child();
@@ -639,6 +748,7 @@ final class AgentRunner {
               cancel: token,
               timeout: _config.toolTimeout,
               onProgress: (p) => run.emit(ToolCallProgressed(callId: c.id, progress: p)),
+              idempotencyKey: idempotencyKey,
             ),
           )
           .timeout(_config.toolTimeout, onTimeout: () {
@@ -652,13 +762,15 @@ final class AgentRunner {
     }
     token.detach();
     final ms = _clock.now().difference(started).inMilliseconds;
-    await _audit(run, AuditKind.toolCall, '${c.name}${result.isError ? ' (error)' : ''}', {
+    await _audit(run, AuditKind.toolCall, '$target${result.isError ? ' (error)' : ''}', {
       'callId': c.id,
-      'tool': c.name,
+      'tool': target,
       'server': tool.source.serverId,
+      'via': target == c.name ? null : c.name,
       'durationMs': ms,
       'argsBytes': utf8.encode(jsonEncode(c.arguments)).length,
     });
+    final serverId = tool.source.serverId;
     return ToolResultPart(
       callId: c.id,
       toolName: c.name,
@@ -667,6 +779,13 @@ final class AgentRunner {
       isError: result.isError,
       uiResourceUri: result.uiResourceUri ?? tool.uiResourceUri,
       durationMs: ms,
+      // Attribution is the harness's: it overrides whatever the server put
+      // in its own `_meta`.
+      meta: {
+        ...result.meta,
+        ToolResultPart.metaServerId: ?serverId,
+        if (target != c.name) ToolResultPart.metaTool: target,
+      },
     );
   }
 

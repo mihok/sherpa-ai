@@ -4,6 +4,7 @@ import 'package:meta/meta.dart';
 
 import '../common/json.dart';
 import '../context/compaction.dart';
+import '../context/digest.dart';
 import '../context/text.dart';
 import '../context/untrusted.dart';
 import '../model/message.dart';
@@ -200,6 +201,17 @@ final class HandoffBundle {
   static const String format = 'sherpa.handoff';
   static const int version = 1;
 
+  /// Characters [parse] rejects in any string: NUL and the bidi embedding,
+  /// override and isolate controls (they can disguise text on the review
+  /// screen). Ordinary RTL text needs none of them.
+  static final RegExp forbiddenChars = RegExp(r'[\x00\u202A-\u202E\u2066-\u2069]');
+
+  /// [text] without [forbiddenChars].
+  static String stripForbidden(String text) => text.replaceAll(forbiddenChars, '');
+
+  /// Matches a valid side-effect `argsDigest` (`Digest.args`: FNV-1a 64).
+  static final RegExp argsDigestShape = RegExp(r'^[0-9a-f]{16}$');
+
   final DateTime createdAt;
   final HandoffSource source;
   final String task;
@@ -258,6 +270,205 @@ final class HandoffBundle {
       ],
       notes: notes == null ? null : f(notes!),
     );
+  }
+
+  /// A copy that [parse] with the same [limits] accepts, built from any
+  /// content (what `HandoffBuilder` returns, and what an app must call after
+  /// editing a bundle, e.g. to add the user's notes):
+  /// * [forbiddenChars] are removed from every string and every string is
+  ///   clipped to `maxStringChars` (short fields to 200 characters);
+  /// * lists are cut to their limits (the newest recent turns are kept);
+  ///   connections and artifacts the parser would reject are dropped, and
+  ///   connection URLs lose user info, query and fragment;
+  /// * side-effect digests that are not `Digest.args`-shaped are re-hashed;
+  /// * while the encoding is larger than `maxBytes`, the oldest recent
+  ///   turns, then pinned turns, then earlier user messages are left out,
+  ///   and as a last resort every free-text field is clipped shorter; what
+  ///   was left out is stated in the summary's notes.
+  ///
+  /// Throws [HandoffBundleException] only when even a minimal bundle cannot
+  /// fit [limits].
+  HandoffBundle sanitized({HandoffLimits limits = const HandoffLimits()}) {
+    String clean(String s) => clipText(stripForbidden(s), limits.maxStringChars);
+    String short(String s) => clipText(stripForbidden(s), limits.maxStringChars < 200 ? limits.maxStringChars : 200);
+    final reader = _BundleReader(limits);
+    var b = mapText(clean);
+    final p = b.plan;
+    final summary = b.summary;
+    b = b._copy(
+      source: HandoffSource(
+        appVersion: short(source.appVersion),
+        providerKind: short(source.providerKind),
+        modelId: short(source.modelId),
+        location: source.location,
+        sessionId: source.sessionId == null ? null : short(source.sessionId!),
+      ),
+      plan: p == null ? null : _cleanPlan(p, clean, max: limits.maxPlanItems),
+      summary: summary
+          .copyWith(
+            plan: summary.plan == null ? null : _cleanPlan(summary.plan!, clean, max: limits.maxPlanItems),
+            stateHandles: [
+              for (final h in summary.stateHandles)
+                StateHandle(
+                  key: h.key,
+                  value: h.value,
+                  tool: h.tool,
+                  callId: h.callId == null ? null : clean(h.callId!),
+                ),
+            ],
+            sideEffectLedger: [
+              for (final e in summary.sideEffectLedger)
+                SideEffectRecord(
+                  callId: clean(e.callId),
+                  tool: clean(e.tool),
+                  server: e.server == null ? null : clean(e.server!),
+                  argsDigest: argsDigestShape.hasMatch(e.argsDigest) ? e.argsDigest : Digest.fnv64(e.argsDigest),
+                  outcome: e.outcome,
+                  argsPreview: e.argsPreview,
+                ),
+            ],
+            taint: [
+              for (final t in summary.taint) TaintRecord(source: clean(t.source), firstMessageId: clean(t.firstMessageId)),
+            ],
+            coveredMessageIds: [
+              for (final id in summary.coveredMessageIds.take(limits.maxCoveredIds)) clean(id),
+            ],
+            // The wrapper nonce belongs to the old session (parse drops it).
+            clearNonce: true,
+          )
+          .normalized(),
+      pinned: [
+        for (final t in b.pinned.take(limits.maxPinned))
+          HandoffTurn(role: t.role, text: t.text, toolName: t.toolName == null ? null : clean(t.toolName!)),
+      ],
+      recentTurns: [
+        for (final t in b.recentTurns.length <= limits.maxRecentTurns
+            ? b.recentTurns
+            : b.recentTurns.sublist(b.recentTurns.length - limits.maxRecentTurns))
+          HandoffTurn(role: t.role, text: t.text, toolName: t.toolName == null ? null : clean(t.toolName!)),
+      ],
+      connections: [
+        for (final c in b.connections)
+          ?reader.connectionOrNull(
+            HandoffConnection(name: short(c.name), url: HandoffConnection.sanitizeUrl(c.url), authKind: c.authKind),
+          ),
+      ].take(limits.maxConnections).toList(),
+      artifacts: [
+        for (final a in b.artifacts)
+          ?reader.artifactOrNull(
+            HandoffArtifact(name: short(a.name), mimeType: a.mimeType, sha256: a.sha256, size: a.size, path: a.path),
+          ),
+      ].take(limits.maxArtifacts).toList(),
+    );
+    return b._fit(limits);
+  }
+
+  static Plan _cleanPlan(Plan p, String Function(String) clean, {required int max}) => Plan(
+        task: p.task == null ? null : clean(p.task!),
+        updatedAt: p.updatedAt,
+        items: [
+          for (final i in p.items.take(max))
+            PlanItem(id: clean(i.id), title: clean(i.title), status: i.status, notes: i.notes == null ? null : clean(i.notes!)),
+        ],
+      );
+
+  HandoffBundle _copy({
+    HandoffSource? source,
+    Plan? plan,
+    CompactionSummary? summary,
+    List<HandoffTurn>? pinned,
+    List<HandoffTurn>? recentTurns,
+    List<HandoffConnection>? connections,
+    List<HandoffArtifact>? artifacts,
+  }) =>
+      HandoffBundle(
+        createdAt: createdAt,
+        source: source ?? this.source,
+        task: task,
+        plan: plan ?? this.plan,
+        summary: summary ?? this.summary,
+        pinned: pinned ?? this.pinned,
+        recentTurns: recentTurns ?? this.recentTurns,
+        connections: connections ?? this.connections,
+        artifacts: artifacts ?? this.artifacts,
+        notes: notes,
+      );
+
+  int get _encodedBytes => utf8.encode(encode()).length;
+
+  static int _bytesOf(Object? json) => utf8.encode(jsonEncode(json)).length + 1;
+
+  /// Leaves content out, oldest first, until the encoding fits.
+  HandoffBundle _fit(HandoffLimits limits) {
+    final max = limits.maxBytes;
+    var size = _encodedBytes;
+    if (size <= max) return this;
+    final recent = [...recentTurns];
+    final pinnedTurns = [...pinned];
+    final users = [...summary.userMessages]; // newest first
+    var droppedRecent = 0;
+    var droppedPinned = 0;
+    var droppedUsers = 0;
+    var clipTo = limits.maxStringChars;
+    final baseNotes = summary.notes;
+    HandoffBundle current = this;
+
+    HandoffBundle rebuild() {
+      final parts = [
+        if (droppedRecent > 0) '$droppedRecent older turn${droppedRecent == 1 ? '' : 's'}',
+        if (droppedPinned > 0) '$droppedPinned pinned message${droppedPinned == 1 ? '' : 's'}',
+        if (droppedUsers > 0) '$droppedUsers earlier user message${droppedUsers == 1 ? '' : 's'}',
+        if (clipTo < limits.maxStringChars) 'the end of long texts',
+      ];
+      final marker = 'This handoff was trimmed to fit ${max ~/ 1024} KB: it leaves out ${parts.join(', ')}.';
+      final room = CompactionSummary.notesChars - marker.length - 1;
+      final notes = baseNotes == null || baseNotes.trim().isEmpty || room < 16
+          ? marker
+          : '${clipText(baseNotes.trim(), room)}\n$marker';
+      var next = _copy(
+        summary: summary.copyWith(userMessages: users, notes: notes).normalized(),
+        pinned: pinnedTurns,
+        recentTurns: recent,
+      );
+      if (clipTo < limits.maxStringChars) {
+        next = next.mapText((s) => clipText(s, clipTo))._copy(connections: next.connections, artifacts: next.artifacts);
+        next = next._copy(summary: next.summary.normalized());
+      }
+      return next;
+    }
+
+    // Drops items from the front of [items] until about [excess] bytes are freed.
+    int dropOldest(List<Object> items, int excess, Object? Function(Object) json) {
+      var freed = 0;
+      var n = 0;
+      while (items.isNotEmpty && freed < excess) {
+        freed += _bytesOf(json(items.removeAt(0)));
+        n++;
+      }
+      return n;
+    }
+
+    while (size > max) {
+      final excess = size - max;
+      if (recent.isNotEmpty) {
+        droppedRecent += dropOldest(recent, excess, (t) => (t as HandoffTurn).toJson());
+      } else if (pinnedTurns.isNotEmpty) {
+        droppedPinned += dropOldest(pinnedTurns, excess, (t) => (t as HandoffTurn).toJson());
+      } else if (users.isNotEmpty) {
+        var freed = 0;
+        while (users.isNotEmpty && freed < excess) {
+          freed += _bytesOf(users.removeLast());
+          droppedUsers++;
+        }
+      } else if (clipTo > 64) {
+        clipTo = clipTo ~/ 2 < 64 ? 64 : clipTo ~/ 2;
+      } else {
+        throw HandoffBundleException('the handoff cannot fit in $max bytes');
+      }
+      current = rebuild();
+      size = current._encodedBytes;
+    }
+    return current;
   }
 
   /// The seed message text for the new session: task, summary (with the
@@ -455,7 +666,6 @@ final class _BundleReader {
     'nextStepQuote', 'artifacts', 'stateHandles', 'sideEffectLedger', 'pendingApprovals', 'taint', //
     'compactionCount', 'coveredMessageIds', 'plan', 'nonce',
   };
-  static final RegExp _forbiddenChars = RegExp(r'[\x00\u202A-\u202E\u2066-\u2069]');
   static final RegExp _mime = RegExp(r'^[A-Za-z0-9][\w.+-]*/[\w.+-]+$');
   static final RegExp _sha256 = RegExp(r'^[0-9a-f]{64}$');
   static final RegExp _secretParam = RegExp(
@@ -477,6 +687,19 @@ final class _BundleReader {
     if (summaryJson['schemaVersion'] != CompactionSummary.currentSchemaVersion) {
       throw const FormatError('summary must be schema version 2');
     }
+    // Shapes the typed readers would otherwise fail on with a TypeError
+    // (or accept and later fail to render): everything parse accepts,
+    // renderForModel and toMarkdown can render.
+    for (final key in const ['stateHandles', 'sideEffectLedger', 'taint']) {
+      _list(summaryJson, key, 1 << 16);
+    }
+    for (final e in _list(summaryJson, 'sideEffectLedger', 1 << 16)) {
+      final digest = e['argsDigest'];
+      if (digest is! String || !HandoffBundle.argsDigestShape.hasMatch(digest)) {
+        throw const FormatError('a side-effect argsDigest must be 16 lowercase hex chars');
+      }
+    }
+    if (summaryJson['plan'] != null) _plan(summaryJson.obj('plan'));
     if ((summaryJson['coveredMessageIds'] as List<Object?>? ?? const []).length > limits.maxCoveredIds) {
       throw const FormatError('summary covers too many messages');
     }
@@ -507,7 +730,7 @@ final class _BundleReader {
     switch (v) {
       case String():
         if (v.length > limits.maxStringChars) throw FormatError('a string in $where is too long');
-        if (_forbiddenChars.hasMatch(v)) throw FormatError('a string in $where has forbidden characters');
+        if (HandoffBundle.forbiddenChars.hasMatch(v)) throw FormatError('a string in $where has forbidden characters');
       case Map<Object?, Object?>():
         for (final e in v.entries) {
           _scan(e.key, where);
@@ -550,6 +773,13 @@ final class _BundleReader {
 
   Plan _plan(JsonMap j) {
     _keys(j, const {'task', 'items', 'updatedAt'}, 'plan');
+    for (final i in _list(j, 'items', 1 << 16)) {
+      _keys(i, const {'id', 'title', 'status', 'notes'}, 'plan items');
+      final status = i['status'];
+      if (status != null && !PlanStatus.values.any((v) => v.name == status)) {
+        throw FormatError('unknown plan status $status');
+      }
+    }
     final plan = Plan.fromJson(j);
     if (plan.items.length > limits.maxPlanItems) throw const FormatError('plan has too many items');
     return plan;
@@ -569,6 +799,28 @@ final class _BundleReader {
         return HandoffTurn(role: r, text: t.req<String>('text'), toolName: t.opt<String>('toolName'));
       }(),
   ];
+
+  /// [c] if the reader accepts it (after a JSON round trip), else null.
+  HandoffConnection? connectionOrNull(HandoffConnection c) {
+    try {
+      final j = c.toJson();
+      _scan(j, 'connections');
+      return _connection(j);
+    } on FormatError {
+      return null;
+    }
+  }
+
+  /// [a] if the reader accepts it (after a JSON round trip), else null.
+  HandoffArtifact? artifactOrNull(HandoffArtifact a) {
+    try {
+      final j = a.toJson();
+      _scan(j, 'artifacts');
+      return _artifact(j);
+    } on FormatError {
+      return null;
+    }
+  }
 
   HandoffConnection _connection(JsonMap c) {
     _keys(c, const {'type', 'name', 'url', 'authKind'}, 'connections');

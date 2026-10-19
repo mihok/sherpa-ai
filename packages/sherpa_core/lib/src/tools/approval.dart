@@ -9,6 +9,11 @@ enum RiskLevel { safe, moderate, destructive }
 enum ApprovalScope { once, session, always }
 
 /// A remembered "always allow" grant with scope and expiry.
+///
+/// A grant is bound to the definition the user saw ([definitionHash], R11
+/// §9.7: "always" is per server + tool + hash): when the tool's definition
+/// changes, the grant no longer covers it. Grants persisted before hashes
+/// existed have no hash and cover only tools without one.
 @immutable
 final class ApprovalGrant {
   const ApprovalGrant({
@@ -17,6 +22,7 @@ final class ApprovalGrant {
     required this.grantedAt,
     this.sessionId,
     this.expiresAt,
+    this.definitionHash,
   });
 
   factory ApprovalGrant.fromJson(JsonMap j) => ApprovalGrant(
@@ -25,6 +31,7 @@ final class ApprovalGrant {
         grantedAt: DateTime.parse(j.req<String>('grantedAt')),
         sessionId: j.opt<String>('sessionId'),
         expiresAt: j.optDate('expiresAt'),
+        definitionHash: j.opt<String>('definitionHash'),
       );
 
   final String toolName;
@@ -33,8 +40,14 @@ final class ApprovalGrant {
   final String? sessionId;
   final DateTime? expiresAt;
 
-  bool covers(String tool, String session, DateTime now) {
+  /// `ToolDefinition.definitionHash` of the tool when it was granted.
+  final String? definitionHash;
+
+  /// Whether this grant lets a call to [tool] (with [definitionHash], the
+  /// tool's current hash) in [session] skip the prompt at [now].
+  bool covers(String tool, String session, DateTime now, {String? definitionHash}) {
     if (tool != toolName) return false;
+    if (definitionHash != this.definitionHash) return false;
     if (expiresAt != null && !now.isBefore(expiresAt!)) return false;
     return switch (scope) {
       ApprovalScope.once => false,
@@ -49,6 +62,7 @@ final class ApprovalGrant {
         'grantedAt': grantedAt.toUtc().toIso8601String(),
         'sessionId': sessionId,
         'expiresAt': expiresAt?.toUtc().toIso8601String(),
+        'definitionHash': definitionHash,
       });
 }
 
@@ -62,9 +76,23 @@ final class AutoApprove extends ApprovalRequirement {
 }
 
 final class NeedsConfirmation extends ApprovalRequirement {
-  const NeedsConfirmation(this.risk, this.reason);
+  const NeedsConfirmation(this.risk, this.reason, {this.oneOffOnly = false});
   final RiskLevel risk;
   final String reason;
+
+  /// Only a one-off answer is possible: no grant skipped this prompt and the
+  /// answer is never remembered, whatever scope the handler returns. Set for
+  /// a repaired or name-corrected call to a tool that is not read-only
+  /// (R11 §9.6.7). An approval UI offers only "Deny" and "Allow once".
+  final bool oneOffOnly;
+
+  /// The scopes an approval UI may offer for "allow": once only for
+  /// [oneOffOnly]; never "always" for a destructive tool (R11 §9.7).
+  List<ApprovalScope> get allowedScopes => oneOffOnly
+      ? const [ApprovalScope.once]
+      : risk == RiskLevel.destructive
+          ? const [ApprovalScope.once, ApprovalScope.session]
+          : ApprovalScope.values;
 }
 
 final class Denied extends ApprovalRequirement {
@@ -82,16 +110,21 @@ final class ApprovalResponse {
   final Duration? expiresIn;
 }
 
-/// Decides whether a call may run without asking. Annotations are hints
-/// from possibly untrusted servers, so [trustedServers] gates whether
-/// `readOnlyHint` alone is enough to auto-run.
+/// Decides whether a call may run without asking.
+///
+/// Tool annotations are hints from possibly untrusted servers: MCP clients
+/// MUST treat them as untrusted unless the server is trusted (R01 §6, R11
+/// §9.7). Every decision here uses [annotationsFor]: the declared hints for
+/// built-in tools and [trustedServers], the MCP worst case (destructive,
+/// open-world, not idempotent) for every other tool. The declared hints of
+/// an untrusted tool are for display only.
 final class ApprovalPolicy {
   ApprovalPolicy({
     Clock clock = const SystemClock(),
     Set<String> trustedServers = const {},
     List<ApprovalGrant> grants = const [],
     this.autoRunReadOnly = true,
-  })  : _clock = clock, 
+  })  : _clock = clock,
         _trusted = {...trustedServers},
         _grants = [...grants];
 
@@ -102,12 +135,38 @@ final class ApprovalPolicy {
 
   List<ApprovalGrant> get grants => List.unmodifiable(_grants);
 
-  static RiskLevel riskOf(ToolDefinition tool) {
-    final a = tool.annotations;
+  /// The risk the tool's annotations DECLARE, trusted or not: display only.
+  /// Decisions use [riskFor].
+  static RiskLevel riskOf(ToolDefinition tool) => _riskOfAnnotations(tool.annotations);
+
+  static RiskLevel _riskOfAnnotations(ToolAnnotations a) {
     if (a.isReadOnly) return RiskLevel.safe;
     if (a.isDestructive) return RiskLevel.destructive;
     return RiskLevel.moderate;
   }
+
+  /// Built-in tools and tools of a server the user trusts.
+  bool isTrusted(ToolDefinition tool) {
+    if (tool.source.kind == ToolSourceKind.builtin) return true;
+    final id = tool.source.serverId;
+    return id != null && _trusted.contains(id);
+  }
+
+  /// The annotations decisions are based on: the declared ones when
+  /// [isTrusted], [ToolAnnotations.untrustedDefaults] otherwise.
+  ToolAnnotations annotationsFor(ToolDefinition tool) =>
+      isTrusted(tool) ? tool.annotations : tool.annotations.untrustedDefaults;
+
+  /// The risk decisions use (untrusted tools count as destructive).
+  RiskLevel riskFor(ToolDefinition tool) => _riskOfAnnotations(annotationsFor(tool));
+
+  /// Whether a call that was running when the process died may run again on
+  /// resume without asking: only when its annotations are trusted and say
+  /// read-only or idempotent (R11 §9.8).
+  bool mayRerunInterrupted(ToolDefinition tool) => annotationsFor(tool).isIdempotent;
+
+  Iterable<ApprovalGrant> _covering(ToolDefinition tool, String sessionId, DateTime now) =>
+      _grants.where((g) => g.covers(tool.name, sessionId, now, definitionHash: tool.definitionHash));
 
   /// [tainted] is true once untrusted content (output of a non-built-in
   /// tool, an MCP resource…) is in the session's context. Then the "Rule of
@@ -116,11 +175,43 @@ final class ApprovalPolicy {
   /// only an explicit "always allow" grant can skip the prompt, and read-only
   /// auto-approval no longer covers open-world tools (a read-only fetch can
   /// still exfiltrate through its arguments).
-  ApprovalRequirement evaluate(ToolDefinition tool, String sessionId, {bool tainted = false}) {
+  ///
+  /// [repaired] (the model's arguments had to be repaired) and
+  /// [nameCorrected] (the tool name was normalized or fuzzy-matched) force a
+  /// one-off confirmation for any tool that is not read-only, whatever the
+  /// grants say (R11 §9.6.7). A tool with
+  /// `ToolDefinition.requiresConfirmation` always asks unless the user
+  /// granted its exact definition.
+  ApprovalRequirement evaluate(
+    ToolDefinition tool,
+    String sessionId, {
+    bool tainted = false,
+    bool repaired = false,
+    bool nameCorrected = false,
+  }) {
     final now = _clock.now();
-    final risk = riskOf(tool);
-    final sensitive = !tool.annotations.isReadOnly || tool.annotations.isOpenWorld;
-    final grants = _grants.where((g) => g.covers(tool.name, sessionId, now));
+    final trusted = isTrusted(tool);
+    final a = annotationsFor(tool);
+    final risk = _riskOfAnnotations(a);
+    if ((repaired || nameCorrected) && !a.isReadOnly) {
+      return NeedsConfirmation(
+        risk,
+        nameCorrected
+            ? 'The model asked for a tool by a slightly different name, and Sherpa matched it to this one. '
+                'Check that this is the right tool and arguments; this can only be allowed once.'
+            : 'The model sent malformed arguments for this call and Sherpa repaired them, so they may not be '
+                'what it meant. Check them before allowing; this can only be allowed once.',
+        oneOffOnly: true,
+      );
+    }
+    final grants = _covering(tool, sessionId, now);
+    if (tool.requiresConfirmation && (tool.definitionHash == null || grants.isEmpty)) {
+      return NeedsConfirmation(
+        risk == RiskLevel.safe ? RiskLevel.moderate : risk,
+        'Sherpa flagged this tool\'s description as suspicious, so every call needs your approval.',
+      );
+    }
+    final sensitive = !a.isReadOnly || a.isOpenWorld;
     if (tainted && sensitive && tool.source.kind != ToolSourceKind.builtin) {
       if (grants.any((g) => g.scope == ApprovalScope.always)) {
         return const AutoApprove('always allowed');
@@ -134,25 +225,25 @@ final class ApprovalPolicy {
     if (grants.isNotEmpty) {
       return const AutoApprove('previously allowed');
     }
-    final isBuiltin = tool.source.kind == ToolSourceKind.builtin;
-    final trusted = isBuiltin || _trusted.contains(tool.source.serverId);
-    if (risk == RiskLevel.safe && autoRunReadOnly && trusted) {
+    // Only trusted annotations can say read-only, so this never auto-runs a
+    // tool on a server's own say-so.
+    if (risk == RiskLevel.safe && autoRunReadOnly) {
       return const AutoApprove('read-only tool from a trusted source');
-    }
-    if (risk == RiskLevel.safe && autoRunReadOnly && !tool.annotations.isOpenWorld) {
-      return const AutoApprove('read-only, closed-world tool');
     }
     return NeedsConfirmation(
       risk,
-      switch (risk) {
-        RiskLevel.destructive => 'This action may modify or delete data.',
-        RiskLevel.moderate => 'This action may change state outside the app.',
-        RiskLevel.safe => 'This server is not trusted to self-declare read-only tools.',
-      },
+      !trusted
+          ? 'This server is not trusted, so Sherpa does not rely on what it says about its tools and treats '
+              'this action as one that may change or delete data.'
+          : switch (risk) {
+              RiskLevel.destructive => 'This action may modify or delete data.',
+              RiskLevel.moderate => 'This action may change state outside the app.',
+              RiskLevel.safe => 'This action only reads data.',
+            },
     );
   }
 
-  void record(String toolName, String sessionId, ApprovalResponse response) {
+  void record(String toolName, String sessionId, ApprovalResponse response, {String? definitionHash}) {
     if (response.decision != UserDecision.approve) return;
     if (response.scope == ApprovalScope.once) return;
     final now = _clock.now();
@@ -162,17 +253,28 @@ final class ApprovalPolicy {
       grantedAt: now,
       sessionId: response.scope == ApprovalScope.session ? sessionId : null,
       expiresAt: response.expiresIn == null ? null : now.add(response.expiresIn!),
+      definitionHash: definitionHash,
     ));
   }
 
-  /// Like [record], but never stores an "always" grant for a destructive
-  /// tool: those are downgraded to the session (docs/research/11 §9.7).
-  void recordFor(ToolDefinition tool, String sessionId, ApprovalResponse response) {
-    final downgrade = response.scope == ApprovalScope.always && riskOf(tool) == RiskLevel.destructive;
+  /// Like [record], bound to [tool]'s current definition, but never stores
+  /// an "always" grant for a destructive tool (untrusted tools count as
+  /// destructive): those are downgraded to the session (docs/research/11
+  /// §9.7). Records nothing when [requirement] was a one-off prompt
+  /// ([NeedsConfirmation.oneOffOnly]).
+  void recordFor(
+    ToolDefinition tool,
+    String sessionId,
+    ApprovalResponse response, {
+    ApprovalRequirement? requirement,
+  }) {
+    if (requirement is NeedsConfirmation && requirement.oneOffOnly) return;
+    final downgrade = response.scope == ApprovalScope.always && riskFor(tool) == RiskLevel.destructive;
     record(
       tool.name,
       sessionId,
       downgrade ? ApprovalResponse(response.decision, scope: ApprovalScope.session) : response,
+      definitionHash: tool.definitionHash,
     );
   }
 

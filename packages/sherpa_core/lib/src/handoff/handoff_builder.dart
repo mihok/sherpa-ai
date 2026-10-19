@@ -22,7 +22,7 @@ import 'handoff_bundle.dart';
 typedef SecretScrubber = String Function(String text);
 
 abstract final class HandoffScrubbers {
-  static const String mask = '«redacted»';
+  static const String mask = secretMask;
 
   static final List<RegExp> _tokens = [
     RegExp(r'\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}'),
@@ -34,9 +34,23 @@ abstract final class HandoffScrubbers {
     RegExp(r'\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}'),
   ];
   static final RegExp _bearer = RegExp(r'(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}', caseSensitive: false);
+  static const String _keys =
+      r'(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|session[_-]?token|'
+      r'client[_-]?secret|private[_-]?key|passphrase|password|passwd|secret|token)';
+
+  /// The separator after a key, also in JSON (`"password": "…"`) and in
+  /// JSON that was itself encoded into a string (`\"password\":\"…\"`).
+  static const String _sep = r'''(\\?["']?\s*[:=]\s*)''';
+
+  /// `key: "a quoted value"` (spaces allowed): the whole quoted value.
+  static final RegExp _quotedAssignment = RegExp(
+    '\\b$_keys$_sep' r'''(\\?["'])((?:(?!\3)[^\\\n]|\\.){1,500}?)\3''',
+    caseSensitive: false,
+  );
+
+  /// `key=value`, `key: value`: up to the next separator.
   static final RegExp _assignment = RegExp(
-    r'\b(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)'
-    r'''(\s*[:=]\s*["']?)[^\s"'&,;]{4,}''',
+    '\\b$_keys$_sep' r'''(\\?["']?)[^\s"'&,;\\]{4,}''',
     caseSensitive: false,
   );
   static final RegExp _query = RegExp(
@@ -44,14 +58,16 @@ abstract final class HandoffScrubbers {
     caseSensitive: false,
   );
 
-  /// Token-shaped strings, bearer values, `key=value` secrets and secret
-  /// query parameters. Defense in depth only: it cannot know every format.
+  /// Token-shaped strings, bearer values, `key=value` / `key: value` /
+  /// JSON `"key": "value"` secrets and secret query parameters. Defense in
+  /// depth only: it cannot know every format.
   static String basic(String text) {
     var out = text.replaceAllMapped(_bearer, (m) => '${m[1]}$mask');
     for (final r in _tokens) {
       out = out.replaceAll(r, mask);
     }
-    out = out.replaceAllMapped(_assignment, (m) => '${m[1]}${m[2]}$mask');
+    out = out.replaceAllMapped(_quotedAssignment, (m) => '${m[1]}${m[2]}${m[3]}$mask${m[3]}');
+    out = out.replaceAllMapped(_assignment, (m) => '${m[1]}${m[2]}${m[3]}$mask');
     return out.replaceAllMapped(_query, (m) => '${m[1]}$mask');
   }
 }
@@ -60,9 +76,12 @@ abstract final class HandoffScrubbers {
 ///
 /// The summary covers the whole active branch: the latest compaction summary
 /// (if any) merged with everything after it, so the bundle stands on its
-/// own. Every free-text field goes through [scrub], connection URLs lose
-/// user info, query and fragment, and the result is clipped to [limits] so
-/// [HandoffBundle.parse] accepts what this produces.
+/// own. Tool-call arguments are masked by key before they are encoded,
+/// every free-text field goes through [scrub] (before it is clipped, so a
+/// cut cannot split a secret out of the scrubber's reach), connection URLs
+/// lose user info, query and fragment, and the result goes through
+/// [HandoffBundle.sanitized]: [HandoffBundle.parse] with the same [limits]
+/// always accepts what this produces (checked before returning).
 final class HandoffBuilder {
   HandoffBuilder({
     required this.store,
@@ -137,15 +156,25 @@ final class HandoffBuilder {
       summary: summary.copyWith(coveredMessageIds: const [], clearNonce: true),
       pinned: [
         for (final m in path)
-          if (m.pinned && m.kind != MessageKind.summary) ...turnsOf(m),
+          if (m.pinned && m.kind != MessageKind.summary) ...turnsOf(m, scrub: _scrub),
       ].take(limits.maxPinned).toList(),
       recentTurns: _recent(path, recentUserTurns),
       connections: connections.take(limits.maxConnections).toList(),
       artifacts: artifacts.take(limits.maxArtifacts).toList(),
       notes: notes,
     );
-    return bundle.mapText((s) => clipText(scrub(s), limits.maxStringChars));
+    final out = bundle.mapText((s) => clipText(_scrub(s), limits.maxStringChars)).sanitized(limits: limits);
+    try {
+      HandoffBundle.parse(out.encode(), limits: limits);
+    } on HandoffBundleException catch (e) {
+      throw StateError('HandoffBuilder produced a bundle its own parser rejects: ${e.message}');
+    }
+    return out;
   }
+
+  /// [scrub] on text without the characters bundles may not carry (a bidi
+  /// control inside a secret would otherwise hide it from the scrubber).
+  String _scrub(String s) => scrub(HandoffBundle.stripForbidden(s));
 
   List<HandoffTurn> _recent(List<Message> path, int userTurns) {
     if (userTurns <= 0) return const [];
@@ -157,7 +186,7 @@ final class HandoffBuilder {
         start = i;
       }
     }
-    final turns = [for (final m in path.skip(start)) ...turnsOf(m)];
+    final turns = [for (final m in path.skip(start)) ...turnsOf(m, scrub: _scrub)];
     return turns.length <= limits.maxRecentTurns ? turns : turns.sublist(turns.length - limits.maxRecentTurns);
   }
 
@@ -170,9 +199,11 @@ final class HandoffBuilder {
         ];
 
   /// A message as provider-neutral text turns: reasoning and signatures are
-  /// dropped, tool calls become a line of text, each tool result its own
-  /// (untrusted) turn.
-  static List<HandoffTurn> turnsOf(Message m) {
+  /// dropped, tool calls become a line of text (arguments under
+  /// secret-looking keys masked), each tool result its own (untrusted) turn.
+  /// [scrub] runs on each text before it is clipped.
+  static List<HandoffTurn> turnsOf(Message m, {SecretScrubber? scrub}) {
+    String s(String text) => scrub == null ? text : scrub(text);
     switch (m.role) {
       case Role.tool:
         return [
@@ -180,18 +211,19 @@ final class HandoffBuilder {
             HandoffTurn(
               role: Role.tool,
               toolName: r.toolName,
-              text: clipText('${r.isError ? '(error) ' : ''}${r.text}', 4000),
+              text: clipText(s('${r.isError ? '(error) ' : ''}${r.text}'), 4000),
             ),
         ];
       case Role.assistant:
         final calls = [
-          for (final c in m.toolCalls) '[called ${c.name} ${clipText(Digest.canonicalJson(c.arguments), 300)}]',
+          for (final c in m.toolCalls)
+            '[called ${c.name} ${clipText(s(Digest.canonicalJson(maskSecretValues(c.arguments))), 300)}]',
         ];
-        final text = [if (m.text.trim().isNotEmpty) m.text.trim(), ...calls].join('\n');
+        final text = [if (m.text.trim().isNotEmpty) s(m.text.trim()), ...calls].join('\n');
         return text.isEmpty ? const [] : [HandoffTurn(role: Role.assistant, text: clipText(text, 4000))];
       case Role.user || Role.system:
         final text = m.text.trim();
-        return text.isEmpty ? const [] : [HandoffTurn(role: Role.user, text: clipText(text, 4000))];
+        return text.isEmpty ? const [] : [HandoffTurn(role: Role.user, text: clipText(s(text), 4000))];
     }
   }
 }

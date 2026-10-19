@@ -76,7 +76,22 @@ void main() {
   });
 
   test('an always grant still applies when tainted; destructive tools cannot be always-allowed', () {
-    final policy = ApprovalPolicy(clock: clock);
+    // "Always" needs trusted annotations: an untrusted server's
+    // destructiveHint:false is only a claim (R11 §9.7), so its tools count
+    // as destructive and an "always" answer is kept for the session only.
+    final untrusted = ApprovalPolicy(clock: clock);
+    const claimsHarmless = ToolDefinition(
+      name: 'mail__send',
+      description: '',
+      inputSchema: {},
+      annotations: sendEmail,
+      source: ToolSource(ToolSourceKind.mcp, serverId: 'mail'),
+    );
+    untrusted.recordFor(claimsHarmless, 's', const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.always));
+    expect(untrusted.grants.single.scope, ApprovalScope.session);
+    expect(untrusted.evaluate(claimsHarmless, 's', tainted: true), isA<NeedsConfirmation>());
+
+    final policy = ApprovalPolicy(clock: clock, trustedServers: {'mail'});
     const tool = ToolDefinition(
       name: 'mail__send',
       description: '',

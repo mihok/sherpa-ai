@@ -22,6 +22,31 @@ abstract final class PartRewrite {
 
   static String? callIdOf(ContentPart part) => part is ToolResultPart ? part.callId : null;
 
+  /// A tool result's payload as providers render it as text: text parts,
+  /// embedded resource text as `[resource <uri>]` plus its text, resource
+  /// links as one line. Elision excerpts and truncation work on this, so
+  /// they act on what the model actually reads (for text-only results it
+  /// equals [ToolResultPart.text]).
+  static String resultText(ToolResultPart r) {
+    final lines = <String>[];
+    for (final c in r.content) {
+      switch (c) {
+        case TextPart(:final text):
+          lines.add(text);
+        case EmbeddedResourcePart(:final uri, :final text?):
+          lines.add('[resource $uri]\n$text');
+        case EmbeddedResourcePart(:final uri, :final mimeType, blob: _?):
+          lines.add('[resource $uri (${mimeType ?? 'binary'})]');
+        case ResourceLinkPart(:final uri, :final name, :final title, :final description):
+          final label = title ?? name;
+          lines.add('[resource link${label == null ? '' : ' "$label"'}: $uri]${description == null ? '' : ' $description'}');
+        default:
+          break;
+      }
+    }
+    return lines.join('\n');
+  }
+
   static JsonMap _argumentsFrom(String replacement) {
     try {
       final decoded = jsonDecode(replacement);

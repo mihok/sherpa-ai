@@ -77,7 +77,8 @@ abstract final class SummaryComposer {
       notes: model.notes,
       task: input.taskStatement ?? prev?.task,
       userMessages: h.userMessages,
-      nextStepQuote: h.nextStepQuote ?? prev?.nextStepQuote,
+      // A user turn kept after the summary supersedes any older quote.
+      nextStepQuote: h.nextStepQuote ?? (_userTurnFollows(input) ? null : prev?.nextStepQuote),
       artifacts: _newestFirst(h.artifacts, prev?.artifacts ?? const [], (a) => a, CompactionSummary.maxArtifacts),
       stateHandles: _newestFirst(
         h.stateHandles,
@@ -170,7 +171,7 @@ abstract final class SummaryComposer {
     }
     return SummaryHarvest(
       userMessages: _userMessages(input, counter),
-      nextStepQuote: _nextStepQuote([...input.messages, ...input.keptMessages]),
+      nextStepQuote: _userTurnFollows(input) ? null : _nextStepQuote(input.messages),
       artifacts: _dedupe(artifacts.reversed).toList(),
       stateHandles: _dedupeBy(handles.reversed, (h) => h.dedupeKey).toList(),
       sideEffects: effects,
@@ -223,6 +224,16 @@ abstract final class SummaryComposer {
     return cut;
   }
 
+  /// A real user turn is kept verbatim after the summary.
+  ///
+  /// Then the summary quotes nothing: the request the next step serves is
+  /// right after it, and the summary overlay applies to every branch that
+  /// shares the folded range. Quoting the kept tail would carry one
+  /// branch's latest request (possibly one the user edited away, or a
+  /// secret they removed) into its siblings as trusted user intent.
+  static bool _userTurnFollows(CompactionInput input) => lastRealUserTurn(input.keptMessages) >= 0;
+
+  /// The most recent user sentence of the folded range ([CompactionInput.messages] only).
   static String? _nextStepQuote(List<Message> messages) {
     final i = lastRealUserTurn(messages);
     if (i < 0) return null;
@@ -305,10 +316,6 @@ abstract final class SummaryComposer {
   static final RegExp _handleKey = RegExp(
     r'^(id|uuid|guid|handle|cursor|next_?cursor|ref)$|(_id|Id|ID|_uuid|Uuid|_handle|Handle|_ref|Ref)$',
   );
-  static final RegExp _secretKey = RegExp(
-    r'(token|secret|passw|signature|credential|api_?key|apikey|auth|cookie|private|otp|pin$)',
-    caseSensitive: false,
-  );
   static final RegExp _secretValue = RegExp(r'^(sk-|ghp_|gho_|ghs_|hf_|xox[abprs]-|eyJ|AKIA|AIza)');
   static final RegExp _handleText = RegExp(
     r'''\b([A-Za-z][\w-]{0,40}?(?:_id|Id|ID|_handle|Handle|_ref))\b["']?\s*[:=]\s*["']?([\w.:/#-]{1,120})''',
@@ -322,7 +329,7 @@ abstract final class SummaryComposer {
     final out = <StateHandle>[];
     void add(String key, Object? v) {
       if (out.length >= _handlesPerResult) return;
-      if (!_handleKey.hasMatch(key) || _secretKey.hasMatch(key)) return;
+      if (!_handleKey.hasMatch(key) || secretKey.hasMatch(key)) return;
       final value = switch (v) {
         String() => v.trim(),
         int() => '$v',
@@ -389,13 +396,18 @@ abstract final class SummaryComposer {
     // "done" costs a re-read, wrongly omitting a write can repeat it.
     if (def != null && def.annotations.isReadOnly) return null;
     if (result.isError && _notExecuted.any(result.text.trimLeft().startsWith)) return null;
+    // Summaries travel in handoff bundles: secret-named argument values are
+    // masked before the preview is encoded, and the digest is taken over the
+    // masked arguments too (a digest of a short password is a dictionary
+    // attack away from the password).
+    final masked = maskSecretValues(call.arguments)! as Map<String, Object?>;
     return SideEffectRecord(
       callId: call.id,
       tool: call.name,
       server: def?.source.serverId,
-      argsDigest: Digest.args(call.arguments),
+      argsDigest: Digest.args(masked),
       outcome: result.isError ? SideEffectOutcome.error : SideEffectOutcome.ok,
-      argsPreview: call.arguments.isEmpty ? null : clipText(Digest.canonicalJson(call.arguments), 120),
+      argsPreview: call.arguments.isEmpty ? null : clipText(Digest.canonicalJson(masked), 120),
     );
   }
 

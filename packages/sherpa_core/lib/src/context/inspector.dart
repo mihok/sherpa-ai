@@ -308,8 +308,8 @@ abstract final class ContextDiffs {
   static String payloadText(ContentPart part) => switch (part) {
     ToolResultPart() =>
       part.structured == null || part.structured!.isEmpty
-          ? part.text
-          : '${part.text}\n${jsonEncode(part.structured)}'.trim(),
+          ? PartRewrite.resultText(part)
+          : '${PartRewrite.resultText(part)}\n${jsonEncode(part.structured)}'.trim(),
     ToolCallPart(:final call) => jsonEncode(call.arguments),
     TextPart(:final text) => text,
     _ => jsonEncode(part.toJson()),

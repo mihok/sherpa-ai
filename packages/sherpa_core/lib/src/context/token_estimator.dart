@@ -35,6 +35,15 @@ const int _perMessageOverhead = 6;
 /// Image tokens are provider specific; this is a conservative flat cost.
 const int _perImageTokens = 1100;
 
+/// Audio clips: a flat cost (providers that take audio bill per second).
+const int _perAudioTokens = 600;
+
+/// Embedded PDFs go out as document blocks (Anthropic: about 1,500–3,000
+/// text tokens per page plus a page image). Estimated from the size at
+/// roughly 20 KB and 2,500 tokens per page, i.e. one token per 8 bytes,
+/// never below one image.
+const int _bytesPerDocumentToken = 8;
+
 /// Token counter used when no native tokenizer is available.
 ///
 /// Estimates are corrected by [calibrate] whenever a provider reports true
@@ -85,24 +94,46 @@ final class HeuristicTokenCounter implements TokenCounter {
     var n = _perMessageOverhead;
     for (final p in message.content) {
       n += switch (p) {
-        TextPart(:final text) => countText(text),
         ReasoningPart(:final text) => countText(text),
         ToolCallPart(:final call) => countText(call.name) + countText(jsonEncode(call.arguments)) + 4,
+        // Every nested part counts: providers send embedded resources
+        // (`[resource <uri>]` + text, PDFs as documents), links and media
+        // inside tool results, not just the text parts.
         ToolResultPart() => countText(p.text) +
             (p.structured == null ? 0 : countText(jsonEncode(p.structured))) +
-            p.content.whereType<ImagePart>().length * _perImageTokens +
+            p.content.where((c) => c is! TextPart).fold<int>(0, (n, c) => n + _countPart(c)) +
             4,
-        ImagePart() => _perImageTokens,
-        AudioPart() => 600,
-        ResourceLinkPart(:final uri, :final description) =>
-          countText(uri) + countText(description ?? ''),
-        EmbeddedResourcePart(:final text) => countText(text ?? ''),
-        UiResourcePart() => 0,
-        UnknownPart(:final raw) => countText(jsonEncode(raw)),
-        _ => 0,
+        _ => _countPart(p),
       };
     }
     return n;
+  }
+
+  int _countPart(ContentPart p) => switch (p) {
+        TextPart(:final text) => countText(text),
+        ImagePart() => _perImageTokens,
+        AudioPart() => _perAudioTokens,
+        ResourceLinkPart(:final uri, :final name, :final title, :final description) =>
+          countText(uri) + countText(title ?? name ?? '') + countText(description ?? '') + 4,
+        EmbeddedResourcePart(:final uri, :final mimeType, :final text, :final blob) =>
+          countText(uri) + 4 + (text != null ? countText(text) : _blobTokens(mimeType, blob)),
+        UiResourcePart() => 0,
+        UnknownPart(:final raw) => countText(jsonEncode(raw)),
+        // Nested messages-in-results do not exist; count anything else as JSON.
+        _ => countText(jsonEncode(p.toJson())),
+      };
+
+  static int _blobTokens(String? mimeType, List<int>? blob) {
+    if (blob == null) return 0;
+    final mime = (mimeType ?? '').toLowerCase();
+    if (mime.startsWith('image/')) return _perImageTokens;
+    if (mime.startsWith('audio/')) return _perAudioTokens;
+    if (mime == 'application/pdf') {
+      final n = (blob.length / _bytesPerDocumentToken).ceil();
+      return n < _perImageTokens ? _perImageTokens : n;
+    }
+    // Other binary content is replaced by a one-line note.
+    return 12;
   }
 
   @override

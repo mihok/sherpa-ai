@@ -3,7 +3,9 @@ import 'package:meta/meta.dart';
 import '../common/json.dart';
 
 /// MCP tool annotations. All are HINTS from possibly untrusted servers: the
-/// approval policy may relax confirmation for trusted servers only.
+/// approval policy acts on them only for built-in tools and trusted servers
+/// (`ApprovalPolicy.annotationsFor`); for anything else they are display
+/// material.
 @immutable
 final class ToolAnnotations {
   const ToolAnnotations({
@@ -42,6 +44,17 @@ final class ToolAnnotations {
         'idempotentHint': idempotentHint,
         'openWorldHint': openWorldHint,
       });
+
+  /// What the approval policy assumes for a tool whose server is not
+  /// trusted: the MCP worst case (not read-only, destructive, not
+  /// idempotent, open-world). [title] is kept for display.
+  ToolAnnotations get untrustedDefaults => ToolAnnotations(
+        title: title,
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      );
 }
 
 /// Where a tool comes from; drives namespacing, trust and the privacy view.
@@ -83,6 +96,8 @@ final class ToolDefinition {
     this.source = ToolSource.builtin,
     this.uiResourceUri,
     this.modelVisible = true,
+    this.requiresConfirmation = false,
+    this.definitionHash,
   });
 
   factory ToolDefinition.fromJson(JsonMap j) => ToolDefinition(
@@ -96,6 +111,8 @@ final class ToolDefinition {
         source: ToolSource.fromJson(j.optObj('source') ?? const {'kind': 'builtin'}),
         uiResourceUri: j.opt<String>('uiResourceUri'),
         modelVisible: j.opt<bool>('modelVisible') ?? true,
+        requiresConfirmation: j.opt<bool>('requiresConfirmation') ?? false,
+        definitionHash: j.opt<String>('definitionHash'),
       );
 
   final String name;
@@ -113,6 +130,17 @@ final class ToolDefinition {
   /// False for app-only tools (MCP Apps visibility ["app"]): callable by the
   /// view but never offered to the model.
   final bool modelVisible;
+
+  /// Hygiene verdict of the router (e.g. a description that trips the
+  /// injection scanner): every call needs the user's confirmation unless
+  /// they granted this exact definition ([definitionHash]).
+  final bool requiresConfirmation;
+
+  /// Fingerprint of the definition as the user reviewed it (name,
+  /// description, schemas, annotations). Grants are bound to it, so a
+  /// changed definition no longer matches an earlier "allow" (R11 §9.7:
+  /// "always" is per server + tool + hash).
+  final String? definitionHash;
 
   String get wireName => originalName ?? name;
   String get displayName => title ?? annotations.title ?? name;
@@ -133,6 +161,8 @@ final class ToolDefinition {
         source: source,
         uiResourceUri: uiResourceUri,
         modelVisible: modelVisible,
+        requiresConfirmation: requiresConfirmation,
+        definitionHash: definitionHash,
       );
 
   JsonMap toJson() => compact({
@@ -146,6 +176,8 @@ final class ToolDefinition {
         'source': source.toJson(),
         'uiResourceUri': uiResourceUri,
         'modelVisible': modelVisible ? null : false,
+        'requiresConfirmation': requiresConfirmation ? true : null,
+        'definitionHash': definitionHash,
       });
 }
 

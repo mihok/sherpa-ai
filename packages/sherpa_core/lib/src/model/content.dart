@@ -260,6 +260,7 @@ final class ToolResultPart extends ContentPart {
     this.isError = false,
     this.uiResourceUri,
     this.durationMs,
+    this.meta = const {},
   });
 
   factory ToolResultPart.fromJson(JsonMap j) => ToolResultPart(
@@ -270,7 +271,16 @@ final class ToolResultPart extends ContentPart {
         isError: j.opt<bool>('isError') ?? false,
         uiResourceUri: j.opt<String>('uiResourceUri'),
         durationMs: j.optInt('durationMs'),
+        meta: j.optObj('meta') ?? const {},
       );
+
+  /// [meta] key: id of the server whose tool produced the result (also for
+  /// calls that went through a proxy such as `call_tool`).
+  static const String metaServerId = 'ai.sherpa/serverId';
+
+  /// [meta] key: model-facing name of the tool that actually ran, when it
+  /// differs from [toolName] (the name the model called, e.g. `call_tool`).
+  static const String metaTool = 'ai.sherpa/tool';
 
   final String callId;
   final String toolName;
@@ -281,6 +291,10 @@ final class ToolResultPart extends ContentPart {
   /// Set when the tool declared an MCP Apps `ui://` resource for this result.
   final String? uiResourceUri;
   final int? durationMs;
+
+  /// App-side metadata (MCP `_meta` plus Sherpa's attribution keys such as
+  /// [metaServerId]). Never sent to a model.
+  final JsonMap meta;
 
   /// Concatenated text content, used for token estimates and plain fallbacks.
   String get text => content.whereType<TextPart>().map((p) => p.text).join('\n');
@@ -294,6 +308,7 @@ final class ToolResultPart extends ContentPart {
         isError: isError,
         uiResourceUri: uiResourceUri,
         durationMs: durationMs,
+        meta: meta,
       );
 
   @override
@@ -309,6 +324,7 @@ final class ToolResultPart extends ContentPart {
         'isError': isError ? true : null,
         'uiResourceUri': uiResourceUri,
         'durationMs': durationMs,
+        'meta': meta.isEmpty ? null : meta,
       });
 }
 

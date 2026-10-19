@@ -13,7 +13,10 @@ abstract final class Digest {
       h ^= b;
       h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF;
     }
-    return h.toUnsigned(64).toRadixString(16).padLeft(16, '0');
+    // Native ints are signed 64-bit: `toUnsigned(64)` leaves a value with
+    // the top bit set negative (and `toRadixString` would print a '-').
+    // Print the two 32-bit halves instead.
+    return '${(h >>> 32).toRadixString(16).padLeft(8, '0')}${(h & 0xFFFFFFFF).toRadixString(16).padLeft(8, '0')}';
   }
 
   /// JSON with object keys sorted recursively, so two argument maps that

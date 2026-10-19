@@ -218,7 +218,7 @@ final class LadderContextManager implements ContextManager {
           toolName: r.toolName,
           tokens: tokens,
           callId: r.callId,
-          text: r.text,
+          text: PartRewrite.resultText(r),
           keepLines: s.elideKeepLines,
         );
         final saved = tokens - ContextDiffs.partTokens(p.counter, m, PartRewrite.replacePayload(r, stub));
@@ -301,7 +301,7 @@ final class LadderContextManager implements ContextManager {
             toolName: part.toolName,
             callId: callId,
             tokens: tokens,
-            text: part.text,
+            text: PartRewrite.resultText(part),
             structured: part.structured,
             maxChars: (keep * charsPerToken).round(),
           ),
@@ -649,7 +649,7 @@ final class _Pass {
       if (b.length > 100000) break;
       for (final p in m.content) {
         if (p is TextPart) b.write(p.text);
-        if (p is ToolResultPart) b.write(p.text);
+        if (p is ToolResultPart) b.write(PartRewrite.resultText(p));
       }
     }
     return HeuristicTokenCounter.denseShare(b.toString());
