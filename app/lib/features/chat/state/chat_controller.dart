@@ -595,6 +595,7 @@ class ChatController extends Notifier<ChatViewState> {
       approvals: ref.read(approvalPolicyProvider),
       approvalHandler: _approvals,
       contextManager: ref.read(chatContextManagerProvider),
+      memory: ref.read(memoryMonitorProvider),
       clock: _clock,
       ids: ref.read(idGeneratorProvider),
       config: _config,

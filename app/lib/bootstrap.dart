@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cupertino_http/cupertino_http.dart';
@@ -11,6 +12,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_data/sherpa_data.dart';
+import 'package:sherpa_platform/sherpa_platform.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 import 'features/chat/state/chat_dependencies.dart';
@@ -63,6 +65,7 @@ Future<List<Override>> bootstrap({bool inMemory = false}) async {
     uiPreferencesStoreProvider.overrideWithValue(ui),
     chatScreenBuilderProvider.overrideWithValue(buildChatScreen),
     chatContextManagerProvider.overrideWith(_contextManager),
+    memoryMonitorProvider.overrideWithValue(PlatformMemoryMonitor()),
   ];
 }
 
@@ -87,7 +90,11 @@ Future<SherpaDatabase> _openDatabase(SecretStore secrets) async {
   final path = p.join(dir.path, databaseFileName);
   try {
     final key = await loadOrCreateDatabaseKey(secrets, databasePath: path);
-    return await openSherpaDatabase(path: path, key: key);
+    final db = await openSherpaDatabase(path: path, key: key);
+    // iOS backs up Application Support by default; the ciphertext is useless
+    // without the device-only key (Android: backup rules XML).
+    unawaited(BackupExclusion.exclude(path).catchError((Object _) => const <String>[]));
+    return db;
   } on DatabaseEncryptionException catch (e) {
     if (e.failure != EncryptionFailure.keyMissing && e.failure != EncryptionFailure.keyRejected) rethrow;
     final stamp = DateTime.now().toUtc().millisecondsSinceEpoch;

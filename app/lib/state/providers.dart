@@ -27,6 +27,10 @@ final preferencesProvider = Provider<PreferencesStore>(
   (ref) => throw UnimplementedError('preferencesProvider must be overridden'),
 );
 
+/// Device memory/thermal signals. Overridden in bootstrap with the platform
+/// plugin's monitor; the default never reports pressure (tests, previews).
+final memoryMonitorProvider = Provider<MemoryMonitor>((ref) => FakeMemoryMonitor());
+
 /// One policy for the whole app so "always allow" grants are shared.
 final approvalPolicyProvider = Provider<ApprovalPolicy>(
   (ref) => ApprovalPolicy(clock: ref.watch(clockProvider)),
