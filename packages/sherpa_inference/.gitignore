@@ -1,0 +1,8 @@
+# Prebuilt engine binaries are build outputs (native/llama/build_*.sh); never commit them.
+*.so
+*.dylib
+/ios/sherpa_inference/Frameworks/
+/android/.gradle/
+/android/build/
+.dart_tool/
+build/

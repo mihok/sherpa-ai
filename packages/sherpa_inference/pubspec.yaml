@@ -1,0 +1,46 @@
+name: sherpa_inference
+description: >-
+  On-device inference for Sherpa: Dart FFI bindings to the sherpa_engine C ABI
+  (llama.cpp), a background-isolate engine host, the LlamaCppProvider, model
+  lifecycle with admission control, an inference scheduler, autotune and a
+  persistent prefix (KV) cache.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  crypto: ^3.0.7
+  ffi: ^2.2.0
+  flutter:
+    sdk: flutter
+  meta: ^1.19.0
+  path: ^1.9.1
+  sherpa_core: any
+  sherpa_hub: any
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+# An FFI plugin without a pluginClass: the Dart code opens the prebuilt
+# engine itself (lib/src/ffi/library_loader.dart). The platform folders only
+# ship the binaries:
+# - Android: android/build.gradle.kts adds native/llama/out/android/jniLibs
+#   (built by native/llama/build_android.sh, never committed) as a jniLibs
+#   source directory, so libsherpa_engine.so lands in the APK next to the
+#   ggml CPU variants it dlopens by bare name.
+# - iOS: ios/sherpa_inference/Package.swift (SwiftPM) and
+#   ios/sherpa_inference.podspec (CocoaPods) vendor SherpaEngine.xcframework
+#   from native/llama/build_ios.sh when tool/link_ios_engine.sh has copied it
+#   into ios/sherpa_inference/Frameworks/.
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true

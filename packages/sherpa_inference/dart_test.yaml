@@ -1,0 +1,6 @@
+tags:
+  # Talks to the real host-built libsherpa_engine.so and a GGUF model; every
+  # test skips cleanly unless SHERPA_ENGINE_LIB (or the default host build)
+  # and the model file exist.
+  engine:
+    timeout: 10x
