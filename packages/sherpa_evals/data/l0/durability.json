@@ -1,0 +1,49 @@
+{
+  "schema": "sherpa.eval.l0-durability/1",
+  "note": "Crash/resume fault injection (R11 9.8, 9.9 L0). Each scenario is run once cleanly to enumerate its durable operations (store writes and tool calls reaching a server); then, for every k, a process that dies before operation k+1 is resumed by a fresh process on the same store and the same (external) servers. Tool kinds: read, idempotent_write (server dedupes by idempotency key), write/send/destructive (no dedupe).",
+  "scenarios": [
+    {
+      "id": "single_idempotent_write",
+      "task": "Record that the invoice was paid.",
+      "servers": [{"id": "ledger", "trusted": true, "tools": [{"name": "put_record", "kind": "idempotent_write"}]}],
+      "steps": [[{"tool": "ledger__put_record", "args": {"key": "invoice-7", "value": "paid"}}]]
+    },
+    {
+      "id": "single_send",
+      "task": "Email Ada that the build is green.",
+      "servers": [{"id": "mail", "trusted": true, "tools": [{"name": "send_email", "kind": "send"}]}],
+      "steps": [[{"tool": "mail__send_email", "args": {"to": "ada@example.com", "subject": "Build", "body": "green"}}]]
+    },
+    {
+      "id": "parallel_mixed",
+      "task": "Look up the record, update it and notify the team.",
+      "servers": [
+        {"id": "ledger", "trusted": true, "tools": [{"name": "get_record", "kind": "read"}, {"name": "put_record", "kind": "idempotent_write"}]},
+        {"id": "mail", "trusted": true, "tools": [{"name": "send_email", "kind": "send"}]}
+      ],
+      "steps": [[
+        {"tool": "ledger__get_record", "args": {"key": "invoice-7"}},
+        {"tool": "ledger__put_record", "args": {"key": "invoice-7", "value": "paid"}},
+        {"tool": "mail__send_email", "args": {"to": "team@example.com", "subject": "Invoice 7", "body": "paid"}}
+      ]]
+    },
+    {
+      "id": "two_steps_with_approval",
+      "task": "Archive the old report, then delete the draft.",
+      "servers": [
+        {"id": "files", "trusted": true, "tools": [{"name": "copy_file", "kind": "idempotent_write"}, {"name": "delete_file", "kind": "destructive"}]}
+      ],
+      "steps": [
+        [{"tool": "files__copy_file", "args": {"from": "/reports/q3.md", "to": "/archive/q3.md"}}],
+        [{"tool": "files__delete_file", "args": {"path": "/drafts/q3-draft.md"}}]
+      ]
+    },
+    {
+      "id": "untrusted_idempotent_hint",
+      "task": "Sync the contact list.",
+      "servers": [{"id": "crm", "trusted": false, "tools": [{"name": "sync_contacts", "kind": "idempotent_write"}]}],
+      "steps": [[{"tool": "crm__sync_contacts", "args": {"list": "customers"}}]],
+      "note": "An untrusted server's idempotentHint is not trusted: an interrupted call is not re-run, its outcome is reported unknown."
+    }
+  ]
+}

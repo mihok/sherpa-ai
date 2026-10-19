@@ -1,0 +1,21 @@
+{
+  "schema": "sherpa.eval.l0-carry-forward/1",
+  "note": "Constraints and preferences planted in user turns must survive repeated rolling compaction with the deterministic (extractive) summarizer, and the side-effect ledger must list each completed write once (R11 9.1 [H] fields, 9.9 L0).",
+  "turns": 24,
+  "compactBefore": [8, 16, 24],
+  "constraints": [
+    {"turn": 1, "text": "You must never modify legacy_core.py."},
+    {"turn": 6, "text": "Do not send email without asking me first."},
+    {"turn": 11, "text": "Always keep the changelog in sync."},
+    {"turn": 19, "text": "Never push to the main branch."}
+  ],
+  "preferences": [
+    {"turn": 2, "text": "I prefer tabs over spaces."},
+    {"turn": 14, "text": "I would like short commit messages."}
+  ],
+  "writes": [
+    {"turn": 4, "path": "/proj/out/report_a.md"},
+    {"turn": 12, "path": "/proj/out/report_b.md"},
+    {"turn": 21, "path": "/proj/out/report_c.md"}
+  ]
+}

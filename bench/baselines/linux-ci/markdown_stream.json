@@ -1,0 +1,43 @@
+{
+  "scenario": "markdown_stream",
+  "device_class": "linux-ci",
+  "description": "IncrementalMarkdownParser.update per streamed token over a ~4K-token reply",
+  "min_samples": 5,
+  "note": "linux-ci: measured on the Sherpa dev container (4 shared vCPUs). GitHub runners differ, so margins are generous: latency may grow 150% (tail 200%), throughput may drop 60%, before the gate fails; abs caps are 10x the baseline.",
+  "measured": {
+    "samples": 7,
+    "host": {
+      "os": "linux",
+      "cpus": 4,
+      "dart": "3.13.5"
+    },
+    "at": "2026-10-19"
+  },
+  "metrics": {
+    "tokens_per_s": {
+      "baseline": 23852.4,
+      "better": "higher",
+      "unit": "tokens/s",
+      "max_regression_pct": 60,
+      "abs_min": 2385.2
+    },
+    "p50_us_per_token": {
+      "baseline": 23.28,
+      "unit": "us",
+      "max_regression_pct": 150,
+      "abs_max": 232.8
+    },
+    "p90_us_per_token": {
+      "baseline": 106.4,
+      "unit": "us",
+      "max_regression_pct": 150,
+      "abs_max": 1064.3
+    },
+    "p99_us_per_token": {
+      "baseline": 222.4,
+      "unit": "us",
+      "max_regression_pct": 200,
+      "abs_max": 2223.8
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schema": "sherpa.eval.l4-known-issues/1",
+  "note": "L4 cases that fail today because of documented harness weaknesses (see the package README, Findings). They are reported but do not fail the gate; a listed case that passes is a warning (remove it). Any other failing case fails the gate.",
+  "issues": [
+    {
+      "id": "ledger_reads_evict_writes",
+      "knownIssue": "Direct tools with the app's wiring (LadderContextManager(toolLookup:) without annotationsFor, app/lib/bootstrap.dart): SummaryComposer judges MCP tools by their untrusted default annotations, so every trusted read-only call (read_file, search) is ledgered as a side effect; CompactionSummary.maxLedger keeps the newest 40 entries, the reads evict the oldest completed writes, and a faithful agent re-runs them (second notes, events, appends). Wiring annotationsFor (variant directPolicy) removes the duplicates.",
+      "cases": ["directApp.household_60.c4", "directApp.household_80.c2", "directApp.household_80.c4"]
+    },
+    {
+      "id": "deferred_ledger_proxy",
+      "knownIssue": "Deferred tools (on-device budget): the side-effect ledger records the call_tool proxy, not its target. The proxy is declared destructive, so every proxied read is ledgered (with or without annotationsFor) and evicts older writes past the 40-entry cap; and the entry renders as call_tool {\"arguments\":{...},\"name\":...} clipped at 120 characters, so the target tool and key argument are cut off whenever the arguments are long. A faithful agent re-runs the evicted writes.",
+      "cases": [
+        "deferred.household_60.c4", "deferred.household_80.c2", "deferred.household_80.c4",
+        "deferredPolicy.household_60.c4", "deferredPolicy.household_80.c2", "deferredPolicy.household_80.c4"
+      ]
+    }
+  ]
+}

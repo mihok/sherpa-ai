@@ -1,0 +1,654 @@
+{
+ "schema": "sherpa.eval.l4-sessions/1",
+ "note": "Scripted long sessions for L4 compaction fidelity (R11 9.9). Each turn is one user message the scripted model answers with the planned tool calls and a short reply; turns without a plant read a filler document. Plants: constraint/preference (said by the user), note/event (create a note or calendar event: a handle and a side effect), write/append (file side effects; the path is an artifact), read (an artifact). Contents are realistic lengths on purpose: summaries clip argument previews.",
+ "sessions": [
+  {
+   "id": "household_40",
+   "turns": 40,
+   "plants": [
+    {
+     "kind": "constraint",
+     "text": "Never delete anything under /home/ana/taxes.",
+     "turn": 1
+    },
+    {
+     "kind": "note",
+     "title": "Kitchen renovation",
+     "body": "Budget 14,000 EUR. Contractor: Bauer & Sons, start 2026-11-03, tiles still to choose with Marta; ask about the extractor fan.",
+     "turn": 2
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/reports/q3_household_budget.md",
+     "content": "# Q3 household budget\nGroceries 1,180 EUR, energy 410 EUR, renovation deposit 2,000 EUR, insurance 96 EUR; total 3,686 EUR, 4% under plan.",
+     "turn": 3
+    },
+    {
+     "kind": "preference",
+     "text": "I prefer meetings after 10:00.",
+     "turn": 5
+    },
+    {
+     "kind": "event",
+     "title": "Plumber visit",
+     "date": "2026-10-28",
+     "time": "10:30",
+     "turn": 6
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/contracts/lease_2026.txt",
+     "turn": 8
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/todo.md",
+     "text": "- call the bank about the renovation loan",
+     "turn": 9
+    },
+    {
+     "kind": "constraint",
+     "text": "Do not book anything on Sundays.",
+     "turn": 11
+    },
+    {
+     "kind": "note",
+     "title": "Car service",
+     "body": "Service due at 60,000 km. Garage Roth quoted 340 EUR including brake fluid; winter tyres are stored with them.",
+     "turn": 12
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/invoices/2026-10-bauer-deposit.txt",
+     "content": "Invoice 2026-118 from Bauer & Sons: renovation deposit 2,000.00 EUR, paid by transfer on 2026-10-14, reference KITCHEN-DEP.",
+     "turn": 13
+    },
+    {
+     "kind": "preference",
+     "text": "I like short, bullet-point summaries.",
+     "turn": 15
+    },
+    {
+     "kind": "event",
+     "title": "Parent-teacher meeting",
+     "date": "2026-11-04",
+     "time": "17:00",
+     "turn": 16
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/taxes/2025_return_notes.txt",
+     "turn": 18
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/todo.md",
+     "text": "- return the library books",
+     "turn": 19
+    },
+    {
+     "kind": "constraint",
+     "text": "Always copy Marta on emails about the renovation.",
+     "turn": 21
+    },
+    {
+     "kind": "note",
+     "title": "Birthday gifts",
+     "body": "Leo: climbing shoes size 42. Marta: the ceramics course voucher. Grandma: large-print crossword books.",
+     "turn": 22
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/letters/landlord_heating.txt",
+     "content": "Dear Mr Keller, the heating in the bedroom has not worked since 2026-10-10. Could your technician visit this week? Kind regards, Ana",
+     "turn": 24
+    },
+    {
+     "kind": "preference",
+     "text": "I prefer oat milk over dairy.",
+     "turn": 25
+    },
+    {
+     "kind": "event",
+     "title": "Dentist check-up",
+     "date": "2026-11-12",
+     "time": "11:15",
+     "turn": 26
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/recipes/lentil_soup.txt",
+     "turn": 28
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/shopping.md",
+     "text": "- light bulbs (E27, warm white)",
+     "turn": 29
+    },
+    {
+     "kind": "constraint",
+     "text": "Never share the lease document outside the family.",
+     "turn": 31
+    },
+    {
+     "kind": "note",
+     "title": "Insurance claim",
+     "body": "Water damage in the hallway on 2026-09-28; claim number pending, photos are in the phone album 'hallway'.",
+     "turn": 32
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/reports/car_costs_2026.md",
+     "content": "# Car costs 2026\nFuel 1,240 EUR, service 340 EUR, insurance 610 EUR, parking 180 EUR; total 2,370 EUR across 11,800 km driven.",
+     "turn": 34
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/manuals/heat_pump_quickstart.txt",
+     "turn": 35
+    }
+   ]
+  },
+  {
+   "id": "household_60",
+   "turns": 60,
+   "plants": [
+    {
+     "kind": "constraint",
+     "text": "Never delete anything under /home/ana/taxes.",
+     "turn": 1
+    },
+    {
+     "kind": "note",
+     "title": "Kitchen renovation",
+     "body": "Budget 14,000 EUR. Contractor: Bauer & Sons, start 2026-11-03, tiles still to choose with Marta; ask about the extractor fan.",
+     "turn": 2
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/reports/q3_household_budget.md",
+     "content": "# Q3 household budget\nGroceries 1,180 EUR, energy 410 EUR, renovation deposit 2,000 EUR, insurance 96 EUR; total 3,686 EUR, 4% under plan.",
+     "turn": 4
+    },
+    {
+     "kind": "preference",
+     "text": "I prefer meetings after 10:00.",
+     "turn": 5
+    },
+    {
+     "kind": "event",
+     "title": "Plumber visit",
+     "date": "2026-10-28",
+     "time": "10:30",
+     "turn": 7
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/contracts/lease_2026.txt",
+     "turn": 8
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/todo.md",
+     "text": "- call the bank about the renovation loan",
+     "turn": 10
+    },
+    {
+     "kind": "constraint",
+     "text": "Do not book anything on Sundays.",
+     "turn": 11
+    },
+    {
+     "kind": "note",
+     "title": "Car service",
+     "body": "Service due at 60,000 km. Garage Roth quoted 340 EUR including brake fluid; winter tyres are stored with them.",
+     "turn": 13
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/invoices/2026-10-bauer-deposit.txt",
+     "content": "Invoice 2026-118 from Bauer & Sons: renovation deposit 2,000.00 EUR, paid by transfer on 2026-10-14, reference KITCHEN-DEP.",
+     "turn": 14
+    },
+    {
+     "kind": "preference",
+     "text": "I like short, bullet-point summaries.",
+     "turn": 16
+    },
+    {
+     "kind": "event",
+     "title": "Parent-teacher meeting",
+     "date": "2026-11-04",
+     "time": "17:00",
+     "turn": 17
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/taxes/2025_return_notes.txt",
+     "turn": 19
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/todo.md",
+     "text": "- return the library books",
+     "turn": 20
+    },
+    {
+     "kind": "constraint",
+     "text": "Always copy Marta on emails about the renovation.",
+     "turn": 22
+    },
+    {
+     "kind": "note",
+     "title": "Birthday gifts",
+     "body": "Leo: climbing shoes size 42. Marta: the ceramics course voucher. Grandma: large-print crossword books.",
+     "turn": 23
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/letters/landlord_heating.txt",
+     "content": "Dear Mr Keller, the heating in the bedroom has not worked since 2026-10-10. Could your technician visit this week? Kind regards, Ana",
+     "turn": 25
+    },
+    {
+     "kind": "preference",
+     "text": "I prefer oat milk over dairy.",
+     "turn": 26
+    },
+    {
+     "kind": "event",
+     "title": "Dentist check-up",
+     "date": "2026-11-12",
+     "time": "11:15",
+     "turn": 28
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/recipes/lentil_soup.txt",
+     "turn": 29
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/shopping.md",
+     "text": "- light bulbs (E27, warm white)",
+     "turn": 31
+    },
+    {
+     "kind": "constraint",
+     "text": "Never share the lease document outside the family.",
+     "turn": 32
+    },
+    {
+     "kind": "note",
+     "title": "Insurance claim",
+     "body": "Water damage in the hallway on 2026-09-28; claim number pending, photos are in the phone album 'hallway'.",
+     "turn": 34
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/reports/car_costs_2026.md",
+     "content": "# Car costs 2026\nFuel 1,240 EUR, service 340 EUR, insurance 610 EUR, parking 180 EUR; total 2,370 EUR across 11,800 km driven.",
+     "turn": 35
+    },
+    {
+     "kind": "preference",
+     "text": "I would like reminders one day ahead.",
+     "turn": 37
+    },
+    {
+     "kind": "event",
+     "title": "Tile showroom with Marta",
+     "date": "2026-11-07",
+     "time": "10:00",
+     "turn": 38
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/manuals/heat_pump_quickstart.txt",
+     "turn": 40
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/todo.md",
+     "text": "- renew Leo's passport",
+     "turn": 41
+    },
+    {
+     "kind": "constraint",
+     "text": "Keep every invoice file in /home/ana/invoices only.",
+     "turn": 43
+    },
+    {
+     "kind": "note",
+     "title": "Garden plan",
+     "body": "Plant tulip bulbs before the first frost; move the rosemary to the south bed; order two bags of compost.",
+     "turn": 44
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/invoices/2026-10-vet.txt",
+     "content": "Invoice 77812 from Tierarzt Weber: annual check and vaccination for Pixel, 128.50 EUR, paid by card on 2026-10-16.",
+     "turn": 46
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/contracts/phone_plan.txt",
+     "turn": 47
+    },
+    {
+     "kind": "constraint",
+     "text": "Do not spend more than 200 EUR without asking me.",
+     "turn": 49
+    },
+    {
+     "kind": "note",
+     "title": "Vet appointments",
+     "body": "Pixel needs the rabies booster in November and the dental check in spring; bring the vaccination booklet.",
+     "turn": 50
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/letters/school_trip_consent.txt",
+     "content": "We consent to Leo joining the class trip to the science museum on 2026-11-06 and will pay the 18 EUR fee in cash on the day.",
+     "turn": 52
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/school/leo_timetable.txt",
+     "turn": 53
+    }
+   ]
+  },
+  {
+   "id": "household_80",
+   "turns": 80,
+   "plants": [
+    {
+     "kind": "constraint",
+     "text": "Never delete anything under /home/ana/taxes.",
+     "turn": 1
+    },
+    {
+     "kind": "note",
+     "title": "Kitchen renovation",
+     "body": "Budget 14,000 EUR. Contractor: Bauer & Sons, start 2026-11-03, tiles still to choose with Marta; ask about the extractor fan.",
+     "turn": 2
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/reports/q3_household_budget.md",
+     "content": "# Q3 household budget\nGroceries 1,180 EUR, energy 410 EUR, renovation deposit 2,000 EUR, insurance 96 EUR; total 3,686 EUR, 4% under plan.",
+     "turn": 3
+    },
+    {
+     "kind": "preference",
+     "text": "I prefer meetings after 10:00.",
+     "turn": 5
+    },
+    {
+     "kind": "event",
+     "title": "Plumber visit",
+     "date": "2026-10-28",
+     "time": "10:30",
+     "turn": 6
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/contracts/lease_2026.txt",
+     "turn": 8
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/todo.md",
+     "text": "- call the bank about the renovation loan",
+     "turn": 9
+    },
+    {
+     "kind": "constraint",
+     "text": "Do not book anything on Sundays.",
+     "turn": 11
+    },
+    {
+     "kind": "note",
+     "title": "Car service",
+     "body": "Service due at 60,000 km. Garage Roth quoted 340 EUR including brake fluid; winter tyres are stored with them.",
+     "turn": 12
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/invoices/2026-10-bauer-deposit.txt",
+     "content": "Invoice 2026-118 from Bauer & Sons: renovation deposit 2,000.00 EUR, paid by transfer on 2026-10-14, reference KITCHEN-DEP.",
+     "turn": 13
+    },
+    {
+     "kind": "preference",
+     "text": "I like short, bullet-point summaries.",
+     "turn": 15
+    },
+    {
+     "kind": "event",
+     "title": "Parent-teacher meeting",
+     "date": "2026-11-04",
+     "time": "17:00",
+     "turn": 16
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/taxes/2025_return_notes.txt",
+     "turn": 18
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/todo.md",
+     "text": "- return the library books",
+     "turn": 19
+    },
+    {
+     "kind": "constraint",
+     "text": "Always copy Marta on emails about the renovation.",
+     "turn": 21
+    },
+    {
+     "kind": "note",
+     "title": "Birthday gifts",
+     "body": "Leo: climbing shoes size 42. Marta: the ceramics course voucher. Grandma: large-print crossword books.",
+     "turn": 22
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/letters/landlord_heating.txt",
+     "content": "Dear Mr Keller, the heating in the bedroom has not worked since 2026-10-10. Could your technician visit this week? Kind regards, Ana",
+     "turn": 24
+    },
+    {
+     "kind": "preference",
+     "text": "I prefer oat milk over dairy.",
+     "turn": 25
+    },
+    {
+     "kind": "event",
+     "title": "Dentist check-up",
+     "date": "2026-11-12",
+     "time": "11:15",
+     "turn": 26
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/recipes/lentil_soup.txt",
+     "turn": 28
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/shopping.md",
+     "text": "- light bulbs (E27, warm white)",
+     "turn": 29
+    },
+    {
+     "kind": "constraint",
+     "text": "Never share the lease document outside the family.",
+     "turn": 31
+    },
+    {
+     "kind": "note",
+     "title": "Insurance claim",
+     "body": "Water damage in the hallway on 2026-09-28; claim number pending, photos are in the phone album 'hallway'.",
+     "turn": 32
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/reports/car_costs_2026.md",
+     "content": "# Car costs 2026\nFuel 1,240 EUR, service 340 EUR, insurance 610 EUR, parking 180 EUR; total 2,370 EUR across 11,800 km driven.",
+     "turn": 34
+    },
+    {
+     "kind": "preference",
+     "text": "I would like reminders one day ahead.",
+     "turn": 35
+    },
+    {
+     "kind": "event",
+     "title": "Tile showroom with Marta",
+     "date": "2026-11-07",
+     "time": "10:00",
+     "turn": 37
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/manuals/heat_pump_quickstart.txt",
+     "turn": 38
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/todo.md",
+     "text": "- renew Leo's passport",
+     "turn": 39
+    },
+    {
+     "kind": "constraint",
+     "text": "Keep every invoice file in /home/ana/invoices only.",
+     "turn": 41
+    },
+    {
+     "kind": "note",
+     "title": "Garden plan",
+     "body": "Plant tulip bulbs before the first frost; move the rosemary to the south bed; order two bags of compost.",
+     "turn": 42
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/invoices/2026-10-vet.txt",
+     "content": "Invoice 77812 from Tierarzt Weber: annual check and vaccination for Pixel, 128.50 EUR, paid by card on 2026-10-16.",
+     "turn": 44
+    },
+    {
+     "kind": "preference",
+     "text": "I prefer plain text files over Word documents.",
+     "turn": 45
+    },
+    {
+     "kind": "event",
+     "title": "Garage: winter tyres",
+     "date": "2026-11-02",
+     "time": "08:30",
+     "turn": 47
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/contracts/phone_plan.txt",
+     "turn": 48
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/shopping.md",
+     "text": "- dishwasher salt",
+     "turn": 49
+    },
+    {
+     "kind": "constraint",
+     "text": "Do not spend more than 200 EUR without asking me.",
+     "turn": 51
+    },
+    {
+     "kind": "note",
+     "title": "Vet appointments",
+     "body": "Pixel needs the rabies booster in November and the dental check in spring; bring the vaccination booklet.",
+     "turn": 52
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/letters/school_trip_consent.txt",
+     "content": "We consent to Leo joining the class trip to the science museum on 2026-11-06 and will pay the 18 EUR fee in cash on the day.",
+     "turn": 54
+    },
+    {
+     "kind": "preference",
+     "text": "I like the week to start on Monday.",
+     "turn": 55
+    },
+    {
+     "kind": "event",
+     "title": "Grandma's birthday lunch",
+     "date": "2026-11-21",
+     "time": "12:30",
+     "turn": 57
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/school/leo_timetable.txt",
+     "turn": 58
+    },
+    {
+     "kind": "append",
+     "path": "/home/ana/todo.md",
+     "text": "- send the meter reading",
+     "turn": 60
+    },
+    {
+     "kind": "constraint",
+     "text": "Always use the 24-hour clock in my calendar.",
+     "turn": 61
+    },
+    {
+     "kind": "note",
+     "title": "School forms",
+     "body": "Leo's trip form needs both signatures by Friday; the lunch account is topped up until December.",
+     "turn": 62
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/reports/garden_shopping.md",
+     "content": "# Garden shopping\n40 tulip bulbs, 2 bags of compost, frost fleece 4 m, a new trowel; estimated 64 EUR at the garden centre.",
+     "turn": 64
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/manuals/dishwasher_errors.txt",
+     "turn": 65
+    },
+    {
+     "kind": "constraint",
+     "text": "Never schedule anything before 08:00.",
+     "turn": 67
+    },
+    {
+     "kind": "note",
+     "title": "Holiday ideas",
+     "body": "Lisbon in March or the Dolomites in July; check train connections and whether Pixel can come along.",
+     "turn": 68
+    },
+    {
+     "kind": "write",
+     "path": "/home/ana/letters/insurance_followup.txt",
+     "content": "Dear claims team, I am following up on the water damage reported on 2026-09-28 and attach the photos you asked for. Ana Silva",
+     "turn": 70
+    },
+    {
+     "kind": "read",
+     "path": "/home/ana/contracts/car_insurance.txt",
+     "turn": 71
+    }
+   ]
+  }
+ ]
+}

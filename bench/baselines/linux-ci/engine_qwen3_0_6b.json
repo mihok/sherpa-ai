@@ -1,0 +1,39 @@
+{
+  "scenario": "engine_qwen3_0_6b",
+  "device_class": "linux-ci",
+  "description": "LlamaCppProvider on the host engine: TTFT, prefill and decode (Qwen3-0.6B Q4_K_M)",
+  "min_samples": 5,
+  "optional": true,
+  "note": "Needs the host engine library and the Qwen3-0.6B Q4_K_M GGUF (skipped on GitHub runners: optional). Measured with 2 engine threads on 4 shared vCPUs; TTFT may grow 150%, prefill/decode may drop 60%.",
+  "measured": {
+    "samples": 7,
+    "host": {
+      "os": "linux",
+      "cpus": 4,
+      "dart": "3.13.5"
+    },
+    "at": "2026-10-19"
+  },
+  "metrics": {
+    "ttft_ms": {
+      "baseline": 1855.3,
+      "unit": "ms",
+      "max_regression_pct": 150,
+      "abs_max": 18553.0
+    },
+    "prefill_tps": {
+      "baseline": 140.7,
+      "better": "higher",
+      "unit": "t/s",
+      "max_regression_pct": 60,
+      "abs_min": 14.07
+    },
+    "decode_tps": {
+      "baseline": 17.04,
+      "better": "higher",
+      "unit": "t/s",
+      "max_regression_pct": 60,
+      "abs_min": 1.704
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "suite": "L3",
+  "model": "scripted",
+  "metrics": {
+    "pass_at_1": 1,
+    "pass_hat_k": 1,
+    "mean_tool_calls": 3.8,
+    "mean_model_steps": 3.9,
+    "approval_prompts_per_task": 2.3,
+    "tool_error_rate": 0,
+    "runs_not_completed": 0,
+    "unhandled_errors": 0,
+    "local/pass_at_1": 1,
+    "local/pass_hat_k": 1,
+    "tiny/pass_at_1": 1,
+    "tiny/pass_hat_k": 1
+  },
+  "cases": {
+    "local.calendar.ask_which_then_cancel": true,
+    "local.calendar.create_meeting": true,
+    "local.calendar.reschedule": true,
+    "local.cross.groceries_note_to_order": true,
+    "local.cross.offsite_note_to_events": true,
+    "local.files.rename_and_index": true,
+    "local.notes.create_then_append": true,
+    "local.notes.edit_existing": true,
+    "local.shop.adjust_open_basket": true,
+    "local.shop.new_basket_checkout": true,
+    "tiny.calendar.ask_which_then_cancel": true,
+    "tiny.calendar.create_meeting": true,
+    "tiny.calendar.reschedule": true,
+    "tiny.cross.groceries_note_to_order": true,
+    "tiny.cross.offsite_note_to_events": true,
+    "tiny.files.rename_and_index": true,
+    "tiny.notes.create_then_append": true,
+    "tiny.notes.edit_existing": true,
+    "tiny.shop.adjust_open_basket": true,
+    "tiny.shop.new_basket_checkout": true
+  }
+}

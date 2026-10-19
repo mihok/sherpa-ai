@@ -89,3 +89,90 @@ jobs:
       - name: Build iOS
         working-directory: app
         run: flutter build ios --debug --no-codesign
+
+  evals:
+    name: Evals (L0, L1, L3, L4 scripted) + gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      # Fails on any gate: absolute bounds, failing cases outside the
+      # documented known issues, and regressions against
+      # packages/sherpa_evals/baselines/*.scripted.json.
+      - name: Run suites and gate
+        working-directory: packages/sherpa_evals
+        run: dart run sherpa_evals:eval --suite L0,L1,L3,L4 --model scripted --out build/evals
+      - name: Job summary
+        if: always()
+        run: cat packages/sherpa_evals/build/evals/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-reports
+          path: packages/sherpa_evals/build/evals/
+
+  perf:
+    name: Host benchmarks + perf gate (linux-ci)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      # Median of 5 samples per scenario; the engine scenario skips here
+      # (no engine library or model on runners; its baseline is optional).
+      - name: Host benchmarks
+        working-directory: packages/sherpa_evals
+        run: dart run sherpa_evals:bench --samples 5 --out ../../build/bench
+      - name: Perf gate
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'perf-rebaseline') }}
+        run: >-
+          dart run tools/perf_gate.dart --results build/bench --baselines bench/baselines/linux-ci
+          --summary "$GITHUB_STEP_SUMMARY" --json build/perf-gate.json
+      # With the perf-rebaseline label the gate only reports, and the new
+      # baselines are uploaded for review; a human commits them. (Adding
+      # the label does not start a run: re-run this job or push.)
+      - name: Rebaseline (perf-rebaseline label)
+        if: ${{ contains(github.event.pull_request.labels.*.name, 'perf-rebaseline') }}
+        run: |
+          dart run tools/perf_gate.dart --results build/bench --baselines bench/baselines/linux-ci --summary "$GITHUB_STEP_SUMMARY" || true
+          dart run tools/perf_gate.dart --rebaseline --results build/bench --baselines bench/baselines/linux-ci --out build/new-baselines/linux-ci
+          echo "New linux-ci baselines are in the perf-baselines artifact: review them, copy to bench/baselines/linux-ci/ and commit." >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-results
+          path: |
+            build/bench/
+            build/perf-gate.json
+      - if: ${{ contains(github.event.pull_request.labels.*.name, 'perf-rebaseline') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-baselines
+          path: build/new-baselines/
+
+  webview-security:
+    name: MCP Apps shell security suite (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      # Same Playwright as the suite was written against; its Chromium
+      # goes to the default cache, not /opt/pw-browsers.
+      - run: npm install -g playwright@1.56.1
+      - run: npx playwright install --with-deps chromium
+      - name: Sandbox, CSP and bridge checks
+        run: PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" packages/sherpa_webview/test/web/run.sh

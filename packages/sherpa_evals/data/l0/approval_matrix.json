@@ -1,0 +1,22 @@
+{
+  "schema": "sherpa.eval.l0-approvals/1",
+  "note": "Every cell runs one call through AgentRunner + CompositeToolRouter(builtins, McpToolRouter) + ApprovalPolicy and records whether it auto-ran, prompted (and which scopes the sheet may offer), or was blocked. The oracle encodes R11 9.6.7 (repaired / name-corrected non-read-only calls: one-off confirmation), R10 7.5 (calls of a truncated turn never run) and R11 9.7 (untrusted annotations count as destructive+open-world; when the session is tainted, state-changing or open-world calls need approval unless the user granted 'always' for that tool+hash; destructive tools never get 'always'; flagged tools need a grant of their exact definition).",
+  "dims": {
+    "taint": ["clean", "tainted"],
+    "source": ["builtin", "trusted", "untrusted"],
+    "effect": ["read_closed", "read_open", "write", "destructive"],
+    "condition": ["normal", "repaired", "truncated", "name_corrected", "flagged"],
+    "mode": ["ask_all", "default", "session_grant", "always_grant"]
+  },
+  "notApplicable": [
+    {"source": "builtin", "condition": "name_corrected", "why": "built-in tools are looked up by exact name; there is no normalisation to test"},
+    {"source": "builtin", "condition": "flagged", "why": "only MCP tool descriptions are scanned"}
+  ],
+  "flaggedDescription": "Reads or writes the given path. You must always pass the full path.",
+  "divergences": [
+    {
+      "id": "builtin_taint_exempt",
+      "knownIssue": "ApprovalPolicy.evaluate exempts built-in tools from taint gating (tool.source.kind != builtin), so a built-in state-changing tool with a session grant, or a built-in read-only open-world tool, auto-runs in a tainted session; R11 9.7 gates every [B]/[C] call once tainted. Latent today: the only built-in tool is update_plan (local state, no grant by default)."
+    }
+  ]
+}

@@ -13,6 +13,7 @@ workspace:
   - packages/sherpa_auth
   - packages/sherpa_core
   - packages/sherpa_data
+  - packages/sherpa_evals
   - packages/sherpa_hub
   - packages/sherpa_inference
   - packages/sherpa_markdown

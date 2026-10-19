@@ -1,0 +1,30 @@
+name: sherpa_evals
+description: >-
+  Sherpa's evaluation harness (R11 §9.9 L0-L4; L5 deferred) and host
+  performance benchmarks (R12 §3.8): scenario-driven suites with metrics, a
+  JSON + markdown report, and regression gates against committed baselines.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  args: ^2.7.0
+  http: ^1.6.0
+  meta: ^1.19.0
+  path: ^1.9.1
+  sherpa_core: any
+  sherpa_inference: any
+  sherpa_markdown: any
+  sherpa_mcp: any
+  sherpa_net: any
+  sherpa_providers: any
+
+dev_dependencies:
+  test: ^1.31.1
+
+executables:
+  eval: eval
+  bench: bench
