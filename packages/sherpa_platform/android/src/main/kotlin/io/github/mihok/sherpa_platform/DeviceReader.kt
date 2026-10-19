@@ -99,15 +99,20 @@ internal class DeviceReader(private val context: Context, private val memory: Me
   }
 
   /**
-   * Most recent previous-process exit (API 30+). "Most recent" includes every
-   * process of the app; the summary bytes are whatever that process last
-   * passed to setProcessStateSummary (R07 §2.4). Dart compares timestamps to
-   * avoid acting on the same record twice.
+   * Most recent previous exit of the main process (API 30+); the engine's
+   * ":inference" process is reported by sherpa_inference instead. The
+   * summary bytes are whatever the process last passed to
+   * setProcessStateSummary (R07 §2.4). Dart compares timestamps to avoid
+   * acting on the same record twice.
    */
   private fun lastExit(): ExitRecord? {
     if (Build.VERSION.SDK_INT < 30) return null
     return try {
-      val info = activityManager.getHistoricalProcessExitReasons(context.packageName, 0, 1).firstOrNull()
+      // The app's other processes (sherpa_inference's ":inference" engine
+      // service) report their own exits; this is the main process's.
+      val mainProcess = context.applicationInfo.processName ?: context.packageName
+      val info = activityManager.getHistoricalProcessExitReasons(context.packageName, 0, 16)
+        .firstOrNull { it.processName == mainProcess }
         ?: return null
       val lmk = ActivityManager.isLowMemoryKillReportSupported()
       ExitRecord(
