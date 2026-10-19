@@ -109,10 +109,29 @@ final class ApprovalPolicy {
     return RiskLevel.moderate;
   }
 
-  ApprovalRequirement evaluate(ToolDefinition tool, String sessionId) {
+  /// [tainted] is true once untrusted content (output of a non-built-in
+  /// tool, an MCP resource…) is in the session's context. Then the "Rule of
+  /// Two" applies (docs/research/11 §9.7): untrusted input must not drive a
+  /// state-changing or open-world action without a human in the loop, so
+  /// only an explicit "always allow" grant can skip the prompt, and read-only
+  /// auto-approval no longer covers open-world tools (a read-only fetch can
+  /// still exfiltrate through its arguments).
+  ApprovalRequirement evaluate(ToolDefinition tool, String sessionId, {bool tainted = false}) {
     final now = _clock.now();
     final risk = riskOf(tool);
-    if (_grants.any((g) => g.covers(tool.name, sessionId, now))) {
+    final sensitive = !tool.annotations.isReadOnly || tool.annotations.isOpenWorld;
+    final grants = _grants.where((g) => g.covers(tool.name, sessionId, now));
+    if (tainted && sensitive && tool.source.kind != ToolSourceKind.builtin) {
+      if (grants.any((g) => g.scope == ApprovalScope.always)) {
+        return const AutoApprove('always allowed');
+      }
+      return NeedsConfirmation(
+        risk == RiskLevel.safe ? RiskLevel.moderate : risk,
+        'Untrusted content is in this conversation, so actions that change data or reach the internet '
+        'need your approval.',
+      );
+    }
+    if (grants.isNotEmpty) {
       return const AutoApprove('previously allowed');
     }
     final isBuiltin = tool.source.kind == ToolSourceKind.builtin;
@@ -144,6 +163,17 @@ final class ApprovalPolicy {
       sessionId: response.scope == ApprovalScope.session ? sessionId : null,
       expiresAt: response.expiresIn == null ? null : now.add(response.expiresIn!),
     ));
+  }
+
+  /// Like [record], but never stores an "always" grant for a destructive
+  /// tool: those are downgraded to the session (docs/research/11 §9.7).
+  void recordFor(ToolDefinition tool, String sessionId, ApprovalResponse response) {
+    final downgrade = response.scope == ApprovalScope.always && riskOf(tool) == RiskLevel.destructive;
+    record(
+      tool.name,
+      sessionId,
+      downgrade ? ApprovalResponse(response.decision, scope: ApprovalScope.session) : response,
+    );
   }
 
   void revoke(String toolName) => _grants.removeWhere((g) => g.toolName == toolName);

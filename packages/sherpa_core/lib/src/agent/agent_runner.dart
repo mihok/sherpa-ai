@@ -474,6 +474,12 @@ final class AgentRunner {
 
     try {
       await saveStatus(RunPhase.awaitingApproval);
+      final tainted = await _isTainted(sid, assistant.id);
+      if (tainted && !run.taintNoticed) {
+        run.taintNoticed = true;
+        run.emit(const RunNotice('untrusted_content',
+            'Untrusted tool output is in this conversation; actions now need your approval.'));
+      }
       final toRun = <ToolCall>[];
       for (final c in calls) {
         if (status[c.id] == PendingCallStatus.done) continue;
@@ -507,7 +513,7 @@ final class AgentRunner {
           toRun.add(c);
           continue;
         }
-        final approved = await _gate(run, c, tool);
+        final approved = await _gate(run, c, tool, tainted: tainted);
         if (approved) {
           status[c.id] = PendingCallStatus.approved;
           toRun.add(c);
@@ -549,6 +555,22 @@ final class AgentRunner {
     return toolMsgId;
   }
 
+  /// True when the context holds output of a non-built-in tool (MCP or
+  /// on-device server) or an MCP resource: content an attacker may control.
+  Future<bool> _isTainted(String sessionId, String leafId) async {
+    for (final m in await _store.path(sessionId, leafId)) {
+      if (m.content.any((p) => p is EmbeddedResourcePart || p is ResourceLinkPart || p is UiResourcePart)) {
+        return true;
+      }
+      for (final r in m.toolResults) {
+        final source = _tools.lookup(r.toolName)?.source.kind;
+        // Unknown tools (e.g. from a removed server) count as untrusted.
+        if (source != ToolSourceKind.builtin) return true;
+      }
+    }
+    return false;
+  }
+
   /// Answers tool calls of a reply that was stopped before they could run.
   Future<void> _closeDanglingCalls(_Run run, Message assistant) async {
     final id = _ids.next('msg');
@@ -574,8 +596,8 @@ final class AgentRunner {
     run.leafId = id;
   }
 
-  Future<bool> _gate(_Run run, ToolCall c, ToolDefinition tool) async {
-    final req = _approvals.evaluate(tool, run.sessionId);
+  Future<bool> _gate(_Run run, ToolCall c, ToolDefinition tool, {bool tainted = false}) async {
+    final req = _approvals.evaluate(tool, run.sessionId, tainted: tainted);
     switch (req) {
       case AutoApprove(:final reason):
         await _audit(run, AuditKind.approval, 'auto-approved ${c.name}: $reason', {'callId': c.id});
@@ -595,7 +617,7 @@ final class AgentRunner {
         );
         run.token.throwIfCancelled();
         final ok = response.decision == UserDecision.approve;
-        _approvals.record(c.name, run.sessionId, response);
+        _approvals.recordFor(tool, run.sessionId, response);
         run.emit(ToolApprovalResolved(callId: c.id, approved: ok, reason: ok ? 'approved by user' : 'declined by user'));
         await _audit(run, AuditKind.approval, '${ok ? 'user approved' : 'user declined'} ${c.name}',
             {'callId': c.id, 'scope': response.scope.name, 'risk': req.risk.name});
@@ -733,6 +755,7 @@ final class _Run {
   String? leafId;
   bool finished = false;
   bool handoffNoticed = false;
+  bool taintNoticed = false;
   Future<void> _tail = Future.value();
 
   void emit(AgentEvent e) {
