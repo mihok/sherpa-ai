@@ -76,12 +76,14 @@ class _ProviderModels extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final t = SherpaTokens.of(context);
     final models = ref.watch(providerModelsProvider(config.id));
+    ref.watch(localHostVerdictsProvider);
+    ensureLocalHostVerified(config, ref.read(hostResolverProvider));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SectionHeader(
           config.displayName,
-          trailing: PrivacyBadge(location: locationOf(config), host: hostLabel(config.baseUrl)),
+          trailing: PrivacyBadge(location: locationOf(config), host: privacyHostLabel(config)),
         ),
         ...switch (models) {
           AsyncData(:final value) when value.isEmpty => [

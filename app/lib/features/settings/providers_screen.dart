@@ -132,8 +132,10 @@ class _ProviderRow extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final status = ref.watch(providerStatusProvider(config.id));
     final isDefault = ref.watch(defaultModelProvider).value?.providerId == config.id;
+    ref.watch(localHostVerdictsProvider);
+    ensureLocalHostVerified(config, ref.read(hostResolverProvider));
     final location = locationOf(config);
-    final host = hostLabel(config.baseUrl);
+    final host = privacyHostLabel(config);
     void edit() => context.go(Routes.provider(config.id));
     Future<void> removeWithConfirm() async {
       if (await _confirmRemove(context)) await _remove(ref);

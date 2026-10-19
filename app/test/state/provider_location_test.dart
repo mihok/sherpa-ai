@@ -87,6 +87,27 @@ void main() {
     expect(locationOf(box, verdicts: verdicts), ExecutionLocation.remote);
   });
 
+  test('badges verify an opt-in host name in the background, once at a time', () async {
+    final verdicts = LocalHostVerdicts();
+    final nas = at('http://nas.example.org:8080/v1', lan: true);
+    var lookups = 0;
+    Future<List<InternetAddress>> resolver(String host) async {
+      lookups++;
+      return [InternetAddress('192.168.1.40')];
+    }
+
+    ensureLocalHostVerified(nas, resolver, verdicts: verdicts);
+    ensureLocalHostVerified(nas, resolver, verdicts: verdicts);
+    await pumpEventQueue();
+    expect(lookups, 1);
+    expect(locationOf(nas, verdicts: verdicts), ExecutionLocation.localNetwork);
+    expect(privacyHostLabel(nas, verdicts: verdicts), 'nas.example.org:8080');
+    // Verified: nothing more to look up.
+    ensureLocalHostVerified(nas, resolver, verdicts: verdicts);
+    await pumpEventQueue();
+    expect(lookups, 1);
+  });
+
   test('host labels keep non-default ports', () {
     expect(hostLabel(Uri.parse('https://api.openai.com/v1')), 'api.openai.com');
     expect(hostLabel(Uri.parse('https://api.openai.com:443/v1')), 'api.openai.com');

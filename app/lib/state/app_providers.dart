@@ -55,5 +55,7 @@ typedef ProviderPrivacy = ({ExecutionLocation location, String host});
 final providerPrivacyProvider = Provider.family<ProviderPrivacy?, String>((ref, id) {
   final config = ref.watch(providerConfigProvider(id));
   if (config == null) return null;
-  return (location: locationOf(config), host: hostLabel(config.baseUrl));
+  ref.watch(localHostVerdictsProvider);
+  ensureLocalHostVerified(config, ref.read(hostResolverProvider));
+  return (location: locationOf(config), host: privacyHostLabel(config));
 });

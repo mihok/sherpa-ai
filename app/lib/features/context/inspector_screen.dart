@@ -571,8 +571,10 @@ class _FixedTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Semantics(
+      container: true,
       button: true,
       label: '$title, ${groupDigits(tokens)} tokens, $subtitle',
+      onTap: onTap,
       excludeSemantics: true,
       child: ListTile(
         leading: Icon(icon),

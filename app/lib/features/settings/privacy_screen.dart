@@ -26,6 +26,10 @@ class PrivacyScreen extends ConsumerWidget {
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
     final configs = ref.watch(providerConfigsProvider).value ?? const <ProviderConfig>[];
+    ref.watch(localHostVerdictsProvider);
+    for (final c in configs) {
+      ensureLocalHostVerified(c, ref.read(hostResolverProvider));
+    }
     final byLocation = <ExecutionLocation, List<ProviderConfig>>{
       for (final l in ExecutionLocation.values) l: [for (final c in configs) if (locationOf(c) == l) c],
     };
@@ -190,7 +194,7 @@ class _LocationGroup extends StatelessWidget {
               padding: EdgeInsets.only(top: t.space.xs),
               child: Align(
                 alignment: AlignmentDirectional.centerStart,
-                child: PrivacyBadge(location: locationOf(c), host: hostLabel(c.baseUrl)),
+                child: PrivacyBadge(location: locationOf(c), host: privacyHostLabel(c)),
               ),
             ),
             trailing: const Icon(Icons.chevron_right),

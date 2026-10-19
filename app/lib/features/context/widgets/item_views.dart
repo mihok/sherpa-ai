@@ -96,9 +96,11 @@ class ContextItemTile extends StatelessWidget {
     final theme = Theme.of(context);
     final tags = itemTags(context, facts);
     return Semantics(
+      container: true,
       button: true,
       label: facts.semanticLabel,
       hint: 'Show what is sent',
+      onTap: onTap,
       excludeSemantics: true,
       child: InkWell(
         onTap: onTap,

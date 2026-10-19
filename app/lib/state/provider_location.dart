@@ -93,6 +93,21 @@ Future<ExecutionLocation> verifyLocalHost(
   return locationOf(config, verdicts: cache);
 }
 
+/// For widgets that show [config]'s badge: starts [verifyLocalHost] in the
+/// background when its host is an unverified opt-in name (once per host at
+/// a time). Widgets watch [localHostVerdictsProvider] to rebuild when the
+/// verdict lands.
+void ensureLocalHostVerified(ProviderConfig config, HostResolver resolver, {LocalHostVerdicts? verdicts}) {
+  if (!isUnverifiedLocal(config, verdicts: verdicts)) return;
+  final host = config.baseUrl.host.toLowerCase();
+  if (!_verifying.add(host)) return;
+  unawaited(
+    verifyLocalHost(config, resolver: resolver, verdicts: verdicts).whenComplete(() => _verifying.remove(host)),
+  );
+}
+
+final Set<String> _verifying = {};
+
 /// DNS verdicts for host names behind the "my own network" opt-in, keyed by
 /// lowercase host. A verdict expires after [ttl] (DNS answers change), and a
 /// listener hears about every new one so badges can rebuild.
