@@ -67,9 +67,12 @@ final class FmProviderConfig {
 ///   not answer the suspended calls cancels that turn and rebuilds.
 /// * Guided generation: `GenerationParams.jsonSchema` →
 ///   `streamResponse(to:schema:)`; the final JSON arrives as one delta.
-/// * Context overflow (`exceededContextWindowSize`, iOS 27
-///   `contextSizeExceeded`) is [ProviderErrorKind.contextOverflow]; refusals
-///   and guardrail violations end with `Finish(refusal / contentFilter)`.
+/// * Context overflow (`GenerationError.exceededContextWindowSize`) is
+///   [ProviderErrorKind.contextOverflow]; refusals and guardrail violations
+///   end with `Finish(refusal / contentFilter)`. The iOS 27 error types
+///   (`LanguageModelError`, …) are not in the iOS 26 SDK the app builds with.
+/// * Usage is not reported (no [UsageUpdate]): `LanguageModelSession.usage`
+///   is iOS 27 SDK API.
 /// * Background: the system model runs out of process, so generation is NOT
 ///   paused on resign-active; background requests may be rate limited
 ///   ([ProviderErrorKind.rateLimited], retryable) and prewarm is skipped.
@@ -214,6 +217,11 @@ final class AppleFoundationModelsProvider implements ModelProvider {
 
   /// `LanguageModelSession.prewarm` for a likely next request ("only when
   /// you have a window of at least 1 second"; skipped in the background).
+  ///
+  /// Swift keeps the warmed session for the next request that starts a new
+  /// native session with the same [instructions], no history and no tools
+  /// (once); a request with tools builds its own session, so for it this
+  /// can at most leave the model assets loaded.
   Future<void> prewarm({String? instructions}) async {
     if (backend.isSupported) await backend.fmPrewarm(instructions);
   }

@@ -7,7 +7,8 @@
 # `@available(iOS …)`, so availability gating is not checked.
 #
 # Usage: SWIFTC=/path/to/swiftc tool/typecheck_swift.sh [extra swiftc flags]
-# (a Swift 6.x Linux toolchain from swift.org; 6.2.1 was used).
+# (a Swift 6.x Linux toolchain from swift.org; 6.2.1 and 6.3.2 were used —
+# Xcode 26.6, CI's default, ships Swift 6.3).
 #
 # Configurations:
 #   spm      Flutter.framework + UIKit + MLX* + Tokenizers + FoundationModels

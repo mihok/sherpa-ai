@@ -176,10 +176,16 @@ final class McpAppPlatformView: NSObject, FlutterPlatformView, WKNavigationDeleg
   }
 
   // MARK: Navigation
+  //
+  // Handler types match the iOS 26 SDK exactly (`@MainActor @Sendable`). In
+  // Swift 5 mode the compiler would also accept the unannotated form as a
+  // preconcurrency witness, but in Swift 6 mode that form stops matching and
+  // WebKit silently stops calling these methods (only a near-miss warning),
+  // which would drop the navigation lockdown and the permission denials.
 
   func webView(
     _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-    decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
   ) {
     let url = navigationAction.request.url?.absoluteString ?? ""
     guard let target = navigationAction.targetFrame else {
@@ -204,7 +210,7 @@ final class McpAppPlatformView: NSObject, FlutterPlatformView, WKNavigationDeleg
 
   func webView(
     _ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
-    decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
   ) {
     // Anything WebKit would download instead of display is refused.
     decisionHandler(navigationResponse.canShowMIMEType ? .allow : .cancel)
@@ -212,7 +218,7 @@ final class McpAppPlatformView: NSObject, FlutterPlatformView, WKNavigationDeleg
 
   func webView(
     _ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
-    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    completionHandler: @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
   ) {
     if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust {
       completionHandler(.performDefaultHandling, nil)
@@ -245,7 +251,7 @@ final class McpAppPlatformView: NSObject, FlutterPlatformView, WKNavigationDeleg
   @available(iOS 15.0, *)
   func webView(
     _ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
-    type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void
+    type: WKMediaCaptureType, decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
   ) {
     // No permission is granted to Views in this version.
     decisionHandler(.deny)
@@ -255,7 +261,7 @@ final class McpAppPlatformView: NSObject, FlutterPlatformView, WKNavigationDeleg
   @available(iOS 15.0, *)
   func webView(
     _ webView: WKWebView, requestDeviceOrientationAndMotionPermissionFor origin: WKSecurityOrigin,
-    initiatedByFrame frame: WKFrameInfo, decisionHandler: @escaping (WKPermissionDecision) -> Void
+    initiatedByFrame frame: WKFrameInfo, decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
   ) {
     decisionHandler(.deny)
     onEvent(.permissionDenied, "motion")
@@ -263,21 +269,21 @@ final class McpAppPlatformView: NSObject, FlutterPlatformView, WKNavigationDeleg
 
   func webView(
     _ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo,
-    completionHandler: @escaping () -> Void
+    completionHandler: @escaping @MainActor @Sendable () -> Void
   ) {
     completionHandler()
   }
 
   func webView(
     _ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo,
-    completionHandler: @escaping (Bool) -> Void
+    completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
   ) {
     completionHandler(false)
   }
 
   func webView(
     _ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?,
-    initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void
+    initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor @Sendable (String?) -> Void
   ) {
     completionHandler(nil)
   }

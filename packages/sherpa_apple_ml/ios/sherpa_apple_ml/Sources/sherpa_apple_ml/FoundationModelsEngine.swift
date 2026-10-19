@@ -9,14 +9,21 @@
   /// iOS 17 deployment target, so the framework is weak-linked and the app
   /// still launches on iOS 17–25 (podspec: explicit `weak_frameworks`).
   ///
-  /// UNVERIFIED against the real SDK: type-checked against a stand-in module
-  /// that mirrors the DocC declarations fetched on 2026-10-19.
+  /// Uses iOS 26 SDK API only: CI builds with Xcode 26.6 (iOS 26.5 SDK), where
+  /// iOS 27 symbols do not exist even behind `#available`. UNVERIFIED beyond
+  /// CI's first compile: type-checked against a stand-in module that mirrors
+  /// the DocC declarations of the iOS 26 SDK (fetched 2026-10-19).
   @available(iOS 26.0, macOS 26.0, *)
   actor FoundationModelsEngine: FmEngineAPI {
     private let hub: EventHub
     private let broker = ToolBroker()
     private var sessions: [String: LanguageModelSession] = [:]
     private var active: [String: (task: Task<Void, Never>, sessionKey: String)] = [:]
+    /// The session [prewarm] warmed, kept for the next new tool-less session
+    /// with the same instructions. The KV cache prewarm computes belongs to
+    /// that session object ("Loads the resources required for this session",
+    /// DocC prewarm(promptPrefix:)); a new session starts without one.
+    private var prewarmed: (instructions: String?, session: LanguageModelSession)?
 
     init(hub: EventHub) {
       self.hub = hub
@@ -41,9 +48,30 @@
       }
     }
 
+    /// Warms a tool-less session with [instructions] and keeps it for the
+    /// next matching request (see [takePrewarmed]). A request with tools
+    /// cannot use it: a session's tools are fixed at init.
     func prewarm(instructions: String?) async {
       let session = makeFreshSession(instructions: instructions, tools: [])
       session.prewarm(promptPrefix: nil)
+      prewarmed = (Self.normalized(instructions), session)
+    }
+
+    /// The prewarmed session, once, when a new session with no history and
+    /// no tools has the same instructions (nil and "" are the same, as in
+    /// [makeFreshSession]).
+    private func takePrewarmed(instructions: String?, tools: [any Tool], history: [AmWireMessage])
+      -> LanguageModelSession?
+    {
+      guard history.isEmpty, tools.isEmpty, let p = prewarmed, p.instructions == Self.normalized(instructions)
+      else { return nil }
+      prewarmed = nil
+      return p.session
+    }
+
+    private static func normalized(_ s: String?) -> String? {
+      guard let s = s, !s.isEmpty else { return nil }
+      return s
     }
 
     func dropSession(_ sessionKey: String) async {
@@ -76,12 +104,15 @@
         }
         session = s
       default:
-        session =
-          request.history.isEmpty
-          ? makeFreshSession(instructions: request.instructions, tools: tools)
-          : LanguageModelSession(
+        if let warm = takePrewarmed(instructions: request.instructions, tools: tools, history: request.history) {
+          session = warm
+        } else if request.history.isEmpty {
+          session = makeFreshSession(instructions: request.instructions, tools: tools)
+        } else {
+          session = LanguageModelSession(
             model: SystemLanguageModel.default, tools: tools,
             transcript: try FmTranscript.build(instructions: request.instructions, tools: tools, history: request.history))
+        }
         sessions[request.sessionKey] = session
       }
       let pump = hub.pump(for: request.generationId)

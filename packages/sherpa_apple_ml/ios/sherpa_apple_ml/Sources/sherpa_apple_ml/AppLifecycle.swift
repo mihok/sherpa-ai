@@ -41,18 +41,27 @@ final class GpuGate: @unchecked Sendable {
   }
 
   /// Returns at once when open; otherwise waits for [open]. Throws
-  /// `CancellationError` when the calling task is cancelled meanwhile.
+  /// `CancellationError` when the calling task is cancelled meanwhile,
+  /// including before the waiter is registered.
   func waitUntilOpen() async throws {
     if isOpen { return }
     let id = UUID()
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-        let resumeNow: Bool = lock.withLock {
-          if isOpenValue { return true }
+        // In an already-cancelled task `onCancel` runs BEFORE this body and
+        // finds no waiter ("the cancellation handler will be executed
+        // immediately before the operation closure", Swift docs for
+        // withTaskCancellationHandler), so check the flag here too. The
+        // runtime sets it before running handlers and `onCancel` takes the
+        // same lock: either this check sees it, or `onCancel` finds the
+        // registered waiter.
+        let outcome: Result<Void, Error>? = lock.withLock {
+          if isOpenValue { return .success(()) }
+          if Task.isCancelled { return .failure(CancellationError()) }
           waiters[id] = c
-          return false
+          return nil
         }
-        if resumeNow { c.resume() }
+        if let outcome { c.resume(with: outcome) }
       }
     } onCancel: {
       let c: CheckedContinuation<Void, Error>? = lock.withLock { waiters.removeValue(forKey: id) }

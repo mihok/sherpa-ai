@@ -12,11 +12,13 @@ Swift owns tensors, sessions and OS lifecycles only; every decision that can
 be made in Dart is made in Dart and unit-tested on the host against a fake of
 the Pigeon layer (`package:sherpa_apple_ml/testing.dart`).
 
-> **Status: nothing here has run on iOS or been compiled against the real
-> SDKs.** The Swift code was written from Apple's DocC, the mlx-swift(-lm)
+> **Status: nothing here has run on iOS, and no Xcode build has finished
+> yet.** The Swift code was written from Apple's DocC, the mlx-swift(-lm)
 > and swift-transformers sources at the pinned tags, and type-checked on
 > Linux against hand-written stand-in modules (see "Verification"). The
-> first real compile is macOS CI.
+> first real compile (macOS CI, Xcode 26.6 / iOS 26.5 SDK) failed in
+> `FoundationModelsEngine.swift` on three iOS 27 SDK symbols; those are
+> fixed, and Xcode stopped there, so later files are still unchecked.
 
 Versions (checked 2026-10-19 with `git ls-remote --tags`): mlx-swift-lm
 3.32.3 (`3b339ad`, 2026-09-30) and mlx-swift 0.32.3 (`1960120`,
@@ -51,7 +53,7 @@ mlx.register(spec) / mlx.unregister(id);        // library changes
 await mlx.forgetConversation(sessionId);         // chat deleted (also fm.forgetConversation)
 await mlx.interrupt('thermal_critical');         // optional policy hook → Finish(pause)
 await mlx.unload();                              // free the weights (e.g. switching to llama.cpp)
-await fm.prewarm(instructions: systemPrompt);    // composer focused, ≥ 1 s before a request
+await fm.prewarm(instructions: systemPrompt);    // composer focused, ≥ 1 s before a request (helps a NEW, tool-less chat)
 mlx.nativeEvents                                 // memoryWarning / lifecycle (diagnostics)
 ```
 
@@ -149,9 +151,16 @@ the engine checks that relay after every token, fails the generation, drops
 the model and tells Dart (`modelUnloaded`). Swift classifies errors into
 codes (`lib/src/common/errors.dart`): out of memory (MLX "Insufficient
 Memory"), engine error, unsupported/model-not-found (`ModelFactoryError`),
-context overflow (FM `exceededContextWindowSize`, iOS 27
-`contextSizeExceeded`), rate limited, busy, timeout, …; FM refusals and
-guardrail violations end with `Finish(refusal / contentFilter)`.
+context overflow (FM `GenerationError.exceededContextWindowSize`), rate
+limited, busy, …; FM refusals and guardrail violations end with
+`Finish(refusal / contentFilter)`. The iOS 27 error types
+(`LanguageModelError`, `LanguageModelSession.Error`,
+`SystemLanguageModel.Error`, `GeneratedContent.ParsingError`) are not
+handled: the app builds with the iOS 26 SDK, which does not declare them, and
+apps built with Xcode 26 keep receiving `GenerationError` (DocC
+deprecation note on `GenerationError`). When moving to Xcode 27, map them
+behind a compile-time SDK check, including `concurrentRequests` → busy,
+`assetsUnavailable` → assetsUnavailable and `ParsingError` → server.
 
 ### Background, memory, thermal
 * **No background GPU on iPhone** (PLAN finding 11). A `GpuGate` closes on
@@ -166,6 +175,17 @@ guardrail violations end with `Finish(refusal / contentFilter)`.
 * **Foundation Models is not paused**: the system model runs out of process
   and is usable in the background, rate-limited (`rateLimited`, retryable);
   prewarm is skipped in the background.
+* **Prewarm** warms a tool-less `LanguageModelSession` with the given
+  instructions and keeps it: the next request that starts a new native
+  session with the same instructions, no history and no tools uses it
+  (once). The KV prefix `prewarm(promptPrefix:)` computes belongs to that
+  session object; a request with tools builds its own session (tools are
+  fixed at init and bound to the Sherpa session id), so for it prewarm can
+  at most leave the model assets loaded.
+* **Waiting on the gate is cancellable at any point**: a generation
+  cancelled (or paused) before its waiter is registered throws at once
+  instead of waiting for the next `didBecomeActive`, so `pauseAll` /
+  `unloadAll` and the background assertion are not held up.
 * **Memory:** Dart admission (`MlxAdmission`, R06 §5 rule: weights + KV +
   overhead ≤ 0.6 × `os_proc_available_memory()`) picks `maxKVSize` (shrunk in
   256-token steps, refused below the minimum context) before loading; that
@@ -220,9 +240,11 @@ and checking the prompt tail); Dart's `ThinkSplitter` routes text into
   `MlxProvider.availability` reports `unsupported / notCompiled`.
 * **Foundation Models** is imported under `#if canImport(FoundationModels)`,
   created only under `if #available(iOS 26.0, *)` and used only from
-  `@available(iOS 26.0, *)` types (iOS 27 APIs — `usage`,
-  `LanguageModelError` — behind `#available(iOS 27.0, *)`), so it is
-  weak-linked and the app runs on iOS 17 (podspec: `weak_frameworks`).
+  `@available(iOS 26.0, *)` types, so it is weak-linked and the app runs on
+  iOS 17 (podspec: `weak_frameworks`). Only iOS 26 SDK API is used: CI's
+  Xcode 26.6 ships the iOS 26.5 SDK, and an iOS 27 symbol (`usage`,
+  `LanguageModelError`, `GenerationOptions(samplingMode:)`) does not exist
+  at compile time even behind `#available(iOS 27.0, *)`.
 * Android/desktop: no native code; every class compiles and reports
   unsupported (`UnsupportedAppleMlBackend`).
 
@@ -247,17 +269,26 @@ and type-checks the plugin in three configurations: SwiftPM (everything),
 CocoaPods (no MLX modules) and an old SDK (no FoundationModels). The MLX and
 Tokenizers stand-ins copy the public declarations the plugin uses from the
 pinned tags' sources (signatures, labels, defaults, `Sendable`); the
-FoundationModels stand-in copies the DocC declarations fetched on
-2026-10-19; Flutter/UIKit mirror the ObjC headers and iOS 26 isolation. They
-cannot prove: real SDK shapes beyond what was transcribed, overloads not
-looked at (e.g. `GenerationGuide` Int/Double variants, the String
-`PromptBuilder`/`InstructionsBuilder` expressions), `@available` gating
-(Linux ignores iOS availability), linking, or runtime behaviour.
+FoundationModels stand-in copies the DocC declarations re-fetched on
+2026-10-19 (each cites its DocC JSON page) and models the **iOS 26.5 SDK**
+of CI's Xcode 26.6: symbols DocC lists as iOS 27.0 or
+`@backDeployed(before: iOS 27.0)` are left out, because Linux ignores
+`@available` and would otherwise accept them (that is how
+`GenerationOptions(samplingMode:)`, `LanguageModelSession.usage` and
+`LanguageModelError` passed here and failed in CI; with the current
+stand-in the CI build's code fails with the same three errors).
+Flutter/UIKit mirror the ObjC headers and iOS 26 isolation. They cannot
+prove: real SDK shapes beyond what was transcribed (e.g. the String
+`PromptBuilder`/`InstructionsBuilder` expressions; whether the iOS 26 SDK
+gives `GenerationOptions(sampling:)` a default, inferred, the plugin always
+passes it), iOS 26.x availability (Linux ignores it), linking, or runtime
+behaviour.
 
 ## Known gaps
 
-* Never compiled with Xcode, never run on a device, simulator or the real
-  frameworks.
+* No Xcode build has finished yet (the first CI build stopped at the
+  three iOS 27 symbols in `FoundationModelsEngine.swift`, now fixed); never
+  run on a device, simulator or the real frameworks.
 * MLX: no vision/audio (MLXVLM), no MLXGuidedGeneration for `jsonSchema`,
   no stop strings, no thinking budgets, no speculative decoding, no forced
   tool choice; tokens are counted natively only via `countTokens` (no
@@ -270,6 +301,10 @@ looked at (e.g. `GenerationGuide` Int/Double variants, the String
   sent is reported with a notice, not retracted. Guided-generation output is
   sent once at the end. Whether a transcript-initialized session also
   re-adds tool definitions itself is unverified. No PCC, no
-  `ToolCallingMode`, no reasoning levels (iOS 27). Usage is reported on iOS
-  27 only.
+  `ToolCallingMode`, no reasoning levels (iOS 27). **Usage is not
+  reported** (Swift sends no `info` event, so the provider emits no
+  `UsageUpdate`): `LanguageModelSession.usage` is iOS 27 SDK API and the app
+  builds with the iOS 26 SDK. Prewarm only helps new tool-less sessions
+  (above); warming a session with tools would need `fmPrewarm` to take the
+  session id and tool definitions.
 * Prompt-cache restore is experimental and off by default (above).
