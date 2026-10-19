@@ -129,7 +129,7 @@ class ApprovalCard extends ConsumerWidget {
       child: Semantics(
         container: true,
         explicitChildNodes: true,
-        label: 'Approval needed. $title ${risk.label}.',
+        label: 'Approval needed. $title ${risk.label}.${approval.isFromApp ? ' Requested by an app, not by the model.' : ''}',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -152,10 +152,29 @@ class ApprovalCard extends ConsumerWidget {
                         '${approval.call.name} · ${approval.sourceLabel}',
                         style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                       ),
+                      if (approval.requesterLabel case final requester?)
+                        Padding(
+                          padding: EdgeInsets.only(top: tokens.space.xxs),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.widgets_outlined, size: ChatIconSize.small, color: warning),
+                              SizedBox(width: tokens.space.xs),
+                              Flexible(
+                                child: Text(
+                                  '$requester, not by the model',
+                                  key: const ValueKey('approval-requester'),
+                                  style: theme.textTheme.labelMedium?.copyWith(color: warning),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                     ],
                   ),
                 ),
-                if (inSheet)
+                // Stop ends the run; an app's request is not part of it.
+                if (inSheet && !approval.isFromApp)
                   TextButton.icon(
                     onPressed: () {
                       ref.read(chatControllerProvider(sessionId).notifier).stop();
@@ -421,7 +440,9 @@ class ApprovalReminderBar extends StatelessWidget {
               SizedBox(width: tokens.space.md),
               Expanded(
                 child: Text(
-                  'Approval needed: ${approval.toolDisplayName}',
+                  approval.isFromApp
+                      ? 'An app asks to use ${approval.toolDisplayName}'
+                      : 'Approval needed: ${approval.toolDisplayName}',
                   style: theme.textTheme.bodyMedium,
                 ),
               ),

@@ -281,6 +281,10 @@ final class HandoffBundle {
   ///   connections and artifacts the parser would reject are dropped, and
   ///   connection URLs lose user info, query and fragment;
   /// * side-effect digests that are not `Digest.args`-shaped are re-hashed;
+  /// * state-handle labels (clipped to
+  ///   [CompactionSummary.maxHandleLabelChars]) and the aggregate fields of
+  ///   side-effect entries (count, call ids, key arguments, declared
+  ///   read-only) are kept, cleaned like every other string;
   /// * while the encoding is larger than `maxBytes`, the oldest recent
   ///   turns, then pinned turns, then earlier user messages are left out,
   ///   and as a last resort every free-text field is clipped shorter; what
@@ -307,6 +311,9 @@ final class HandoffBundle {
       summary: summary
           .copyWith(
             plan: summary.plan == null ? null : _cleanPlan(summary.plan!, clean, max: limits.maxPlanItems),
+            // Every field of a handle and a ledger entry is kept (they are
+            // the summary's memory of what exists and what was done); the
+            // text ones were cleaned by mapText above, ids are cleaned here.
             stateHandles: [
               for (final h in summary.stateHandles)
                 StateHandle(
@@ -314,6 +321,7 @@ final class HandoffBundle {
                   value: h.value,
                   tool: h.tool,
                   callId: h.callId == null ? null : clean(h.callId!),
+                  label: h.label == null ? null : clipText(h.label!, CompactionSummary.maxHandleLabelChars),
                 ),
             ],
             sideEffectLedger: [
@@ -325,6 +333,11 @@ final class HandoffBundle {
                   argsDigest: argsDigestShape.hasMatch(e.argsDigest) ? e.argsDigest : Digest.fnv64(e.argsDigest),
                   outcome: e.outcome,
                   argsPreview: e.argsPreview,
+                  // As SideEffectRecord.fromJson reads it back.
+                  count: e.count.clamp(1, 1 << 30),
+                  callIds: [for (final id in e.callIds) clean(id)],
+                  keyArgs: [for (final k in e.keyArgs.take(SideEffectRecord.maxKeyArgs)) short(k)],
+                  declaredReadOnly: e.declaredReadOnly,
                 ),
             ],
             taint: [

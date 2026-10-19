@@ -1,0 +1,42 @@
+{
+  "scenario": "stream_4k_tokens_markdown",
+  "device_class": "android-mid-adreno650-gles",
+  "description": "StreamingMarkdown alone (no chat chrome): a ~1.5K-token reply with headings, lists, code and tables revealed 4 characters per 16 ms frame",
+  "optional": true,
+  "placeholder": true,
+  "placeholder_note": "PLACEHOLDER, not measured: no device was available when this was written. The baselines are 60 Hz frame budgets, not measurements, so do not gate against them. bench/app/run_frame_bench.sh sees this flag and writes measured medians instead (keeping margins, min_samples, optional and the note); review and commit those with the perf-rebaseline label.",
+  "min_samples": 5,
+  "note": "Reference phone class (R12 §3.10 device matrix): Adreno <= 650, Impeller on the GLES path. Physical device, median of 5 launches; relative margin +15% with absolute caps of two frames (p90) and four frames (p99) at 60 Hz (R12 §3.8). min_frames is set to 90% of the measured frame count by the first rebaseline.",
+  "metrics": {
+    "average_frame_build_time_millis": {
+      "baseline": 4.0,
+      "unit": "ms",
+      "max_regression_pct": 15,
+      "abs_max": 16.0
+    },
+    "90th_percentile_frame_build_time_millis": {
+      "baseline": 8.0,
+      "unit": "ms",
+      "max_regression_pct": 15,
+      "abs_max": 33.0
+    },
+    "99th_percentile_frame_build_time_millis": {
+      "baseline": 16.0,
+      "unit": "ms",
+      "max_regression_pct": 15,
+      "abs_max": 66.0
+    },
+    "90th_percentile_frame_rasterizer_time_millis": {
+      "baseline": 8.0,
+      "unit": "ms",
+      "max_regression_pct": 15,
+      "abs_max": 33.0
+    },
+    "99th_percentile_frame_rasterizer_time_millis": {
+      "baseline": 16.0,
+      "unit": "ms",
+      "max_regression_pct": 15,
+      "abs_max": 66.0
+    }
+  }
+}

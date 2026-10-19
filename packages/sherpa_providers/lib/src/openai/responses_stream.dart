@@ -3,6 +3,7 @@ import 'package:sherpa_net/sherpa_net.dart';
 
 import '../common/error_mapping.dart';
 import '../common/json_read.dart';
+import '../common/json_repair.dart';
 import '../common/tool_call_accumulator.dart';
 import '../common/tool_names.dart';
 import 'usage.dart';
@@ -55,16 +56,20 @@ final class ResponsesStreamParser {
     final json = tryDecodeObject(data);
     if (json == null) return const [];
     final type = json.str('type') ?? event.event;
-    return addPayload(type, json);
+    return addPayload(type, json, rawText: data);
   }
 
-  List<ModelEvent> addPayload(String type, JsonMap e) {
+  /// Handles one decoded event. [rawText] is the JSON text [e] was decoded
+  /// from: function-call `arguments` a non-compliant server sends as an
+  /// object (not a string) are read from it, so their duplicate keys are
+  /// refused as in string arguments. Without it they are re-encoded.
+  List<ModelEvent> addPayload(String type, JsonMap e, {String? rawText}) {
     final out = <ModelEvent>[];
     switch (type) {
       case 'response.output_item.added':
-        _itemAdded(e, out);
+        _itemAdded(e, out, rawText);
       case 'response.output_item.done':
-        _itemDone(e, out);
+        _itemDone(e, out, rawText);
       case 'response.output_text.delta':
         final delta = e.text('delta');
         if (delta != null) {
@@ -83,13 +88,13 @@ final class ResponsesStreamParser {
       case 'response.reasoning_summary_text.delta' || 'response.reasoning_text.delta':
         _reasoningDelta(e, out);
       case 'response.function_call_arguments.delta':
-        final delta = e.str('delta');
+        final delta = _arguments(e, 'delta', rawText, const ['delta']);
         if (delta != null && delta.isNotEmpty) {
           _hasOutput = true;
           out.addAll(_calls.append(_indexOf(e), delta));
         }
       case 'response.function_call_arguments.done':
-        final args = e.str('arguments');
+        final args = _arguments(e, 'arguments', rawText, const ['arguments']);
         if (args != null) _calls.setArguments(_indexOf(e), args);
       case 'response.completed' || 'response.incomplete':
         _terminal(e.child('response') ?? const {}, type == 'response.incomplete');
@@ -115,18 +120,29 @@ final class ResponsesStreamParser {
     return itemId == null ? -1 : (_indexByItemId[itemId] ?? -1);
   }
 
-  void _itemAdded(JsonMap e, List<ModelEvent> out) {
+  /// Argument text in [e]'s [key]: a string as sent, or an object or array
+  /// (non-compliant servers) as its raw text at [path] in [rawText].
+  static String? _arguments(JsonMap e, String key, String? rawText, List<Object> path) => switch (e[key]) {
+        final String s => s,
+        final v when v is Map || v is List => ToolArgumentsRepair.objectArgumentsText(v, rawText, path),
+        _ => null,
+      };
+
+  void _itemAdded(JsonMap e, List<ModelEvent> out, String? rawText) {
     final item = e.child('item');
     if (item == null) return;
     final index = e.integer('output_index') ?? _indexByItemId.length;
     if (item.str('id') case final id?) _indexByItemId[id] = index;
     if (item.str('type') == 'function_call') {
       _hasOutput = true;
-      out.addAll(_calls.open(index, id: item.text('call_id'), name: item.text('name'), arguments: item.str('arguments')));
+      out.addAll(_calls.open(index,
+          id: item.text('call_id'),
+          name: item.text('name'),
+          arguments: _arguments(item, 'arguments', rawText, const ['item', 'arguments'])));
     }
   }
 
-  void _itemDone(JsonMap e, List<ModelEvent> out) {
+  void _itemDone(JsonMap e, List<ModelEvent> out, String? rawText) {
     final item = e.child('item');
     if (item == null) return;
     final index = e.integer('output_index') ?? _indexOf({'item_id': item['id']});
@@ -135,7 +151,9 @@ final class ResponsesStreamParser {
         _hasOutput = true;
         // Opening is idempotent; it covers a missed `output_item.added`.
         out.addAll(_calls.open(index, id: item.text('call_id'), name: item.text('name')));
-        if (item.str('arguments') case final args?) _calls.setArguments(index, args);
+        if (_arguments(item, 'arguments', rawText, const ['item', 'arguments']) case final args?) {
+          _calls.setArguments(index, args);
+        }
         out.addAll(_calls.complete(index));
       case 'reasoning':
         if (!_reasoningStreamed.contains(index)) {

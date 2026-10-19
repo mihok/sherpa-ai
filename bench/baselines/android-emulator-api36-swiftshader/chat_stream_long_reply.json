@@ -1,0 +1,42 @@
+{
+  "scenario": "chat_stream_long_reply",
+  "device_class": "android-emulator-api36-swiftshader",
+  "description": "The chat screen streaming a long reply (8 sections of prose, lists, fenced code and tables) from the scripted model, one 4-character delta every 8 ms, until the run ends",
+  "optional": true,
+  "placeholder": true,
+  "placeholder_note": "PLACEHOLDER, not measured: the emulator job has not run yet. The baselines are nominal budgets, not measurements, so do not gate against them. bench/app/run_frame_bench.sh (and the frame-bench CI job) see this flag and write measured medians instead (keeping margins, min_samples, optional and the note); review and commit those with the perf-rebaseline label.",
+  "min_samples": 3,
+  "note": "GitHub Actions Android emulator (reactivecircus/android-emulator-runner@v2, API 36 google_apis x86_64, -gpu swiftshader_indirect, animations on). CPU rendering: relative gates only (+50%), for catastrophic regressions; never absolute budgets (R12 §3.4, §3.8). Median of 3 repetitions in one launch. min_frames is set to 90% of the measured frame count by the first rebaseline.",
+  "metrics": {
+    "average_frame_build_time_millis": {
+      "baseline": 4.0,
+      "unit": "ms",
+      "max_regression_pct": 50,
+      "abs_max": 50.0
+    },
+    "90th_percentile_frame_build_time_millis": {
+      "baseline": 8.0,
+      "unit": "ms",
+      "max_regression_pct": 50,
+      "abs_max": 100.0
+    },
+    "99th_percentile_frame_build_time_millis": {
+      "baseline": 16.0,
+      "unit": "ms",
+      "max_regression_pct": 50,
+      "abs_max": 200.0
+    },
+    "90th_percentile_frame_rasterizer_time_millis": {
+      "baseline": 8.0,
+      "unit": "ms",
+      "max_regression_pct": 50,
+      "abs_max": 100.0
+    },
+    "99th_percentile_frame_rasterizer_time_millis": {
+      "baseline": 16.0,
+      "unit": "ms",
+      "max_regression_pct": 50,
+      "abs_max": 200.0
+    }
+  }
+}

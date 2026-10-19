@@ -16,10 +16,11 @@ import 'state/model_selection.dart';
 import 'widgets/chat_style.dart';
 
 /// Lists the models on this device (when on-device inference is wired:
-/// [LocalModelPickerSection], each with its fit) and every configured
-/// provider's models, each section labelled with where messages go (on
-/// device, local network, or which remote host), and returns the picked
-/// [ModelChoice].
+/// [LocalModelPickerSection] — library models on llama.cpp, MLX or LiteRT-LM
+/// with their fit and engine availability, and the system models) and every
+/// configured provider's models, each section labelled with where messages
+/// go (on device, local network, or which remote host), and returns the
+/// picked [ModelChoice].
 ///
 /// ```dart
 /// final choice = await ModelPickerSheet.show(context, current: selection);

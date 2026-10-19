@@ -38,6 +38,7 @@ final lm = LiteRtLmProvider(
   options: const LiteRtLmOptions(releaseAtTrimLevel: 40, maxLiveConversations: 1),
 );
 lm.register(spec); lm.unregister(id);
+await lm.forgetConversation(sessionId);                         // chat deleted: close its native conversation
 final ProviderAvailability a = await lm.availability(absPath); // available | unsupported(+reason, code)
 final LiteRtModelInfo info = await lm.inspect(absPath);          // ModelInfo.from, no weights loaded
 await lm.release();                                             // free the engine now
@@ -116,7 +117,9 @@ Both providers share one Pigeon backend (`SherpaLitert.backend`) and one stream-
 - **Prompted fallback.** Otherwise, and always for Gemini Nano, the prompted JSON envelope is used: `{"tool_calls":[{"name":…,"arguments":{…}}]}`.
   - The instructions go in the system prompt, and results come back wrapped as untrusted data.
   - A streaming parser in Dart holds back only what may be an envelope.
-  - Almost-JSON is repaired and the call is marked `repaired`, which forces approval for tools that are not read-only.
+  - Arguments, prompted and native alike, go through the strict shared parser (`package:sherpa_providers/tool_arguments.dart`, `ToolArgumentsRepair`), like every other tool-call path in Sherpa:
+    - almost-JSON is repaired and the call is marked `repaired`, which forces approval for tools that are not read-only;
+    - a key sent twice (in the arguments or in the call itself), leaked chat-template tokens (`<|"|>`) and ambiguous unquoted values in broken JSON make the call invalid (`argumentsError`): it is never run, and the agent loop tells the model.
 - **Ids and indexes.** Each call gets a fresh `call_…` id. Parallel calls get distinct indexes, and the turn ends with `Finish(toolCalls)`.
 
 ### Background, memory and errors
@@ -173,7 +176,7 @@ Both providers share one Pigeon backend (`SherpaLitert.backend`) and one stream-
 | of which `lib/x86_64/liblitertlm_jni.so` (excludable) | 26.4 MB stored | ~10.7 MB | |
 | of which `lib/arm64-v8a/liblitertlm_jni.so` | 22.2 MB stored (uncompressed, mmapped in place) | ~9.7 MB | |
 
-With x86_64 excluded, expect about **+24.7 MB installed and +11 MB download** (an estimate: the subtraction, not a separate build). R8 (release) shrinks ML Kit, coroutines, gson and kotlin-reflect. `consumer-rules.pro` keeps `com.google.ai.edge.litertlm.**`, about 78 KB of dex, because its JNI calls back into Kotlin classes.
+With x86_64 excluded, expect about **+24.7 MB installed and +11 MB download** (an estimate: the subtraction, not a separate build). The Sherpa app's own debug arm64 APK (`flutter build apk --debug --target-platform android-arm64`, 2026-10-19) measured 233,526,238 bytes without the exclude and 207,156,922 bytes with it (−26.4 MB, the stored x86_64 library); `zipalign -c -P 16 -v 4` passes on both. R8 (release) shrinks ML Kit, coroutines, gson and kotlin-reflect. `consumer-rules.pro` keeps `com.google.ai.edge.litertlm.**`, about 78 KB of dex, because its JNI calls back into Kotlin classes.
 
 ### Storage
 
@@ -187,9 +190,10 @@ With x86_64 excluded, expect about **+24.7 MB installed and +11 MB download** (a
 
 ## Verification
 
-- **Dart:** `flutter test --no-pub --concurrency=2` (95 tests). The tests run against `FakeLiteRtBackend` (`package:sherpa_litert/testing.dart`) and cover:
+- **Dart:** `flutter test --no-pub --concurrency=2` (104 tests). The tests run against `FakeLiteRtBackend` (`package:sherpa_litert/testing.dart`) and cover:
   - request and event mapping;
-  - native and prompted tool calls, and the template probe;
+  - native and prompted tool calls, the template probe, and the strict parser's refusals (duplicate keys, template tokens, ambiguous values) on both paths;
+  - `forgetConversation` closing a deleted chat's conversation;
   - cancel (by token, by subscription, and by grace timeout);
   - errors and the branch/rebuild policy;
   - memory-pressure pause and reload;

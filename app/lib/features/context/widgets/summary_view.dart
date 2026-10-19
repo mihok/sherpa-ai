@@ -47,7 +47,7 @@ class SummaryView extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 for (final a in s.artifacts) _bullet(context, a),
-                for (final h in s.stateHandles) _bullet(context, '${h.key} = ${h.value}${h.tool == null ? '' : ' (${h.tool})'}'),
+                for (final h in s.stateHandles) _bullet(context, handleLine(h)),
               ],
             ),
           ),
@@ -78,6 +78,15 @@ class SummaryView extends StatelessWidget {
         ),
     ];
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+  }
+
+  /// "“Grocery list” · note_id = n-42 (notes.create)": the handle's label
+  /// (what it identifies) first, so several ids of one kind can be told
+  /// apart.
+  static String handleLine(StateHandle h) {
+    final label = h.label?.trim();
+    final id = '${h.key} = ${h.value}${h.tool == null ? '' : ' (${h.tool})'}';
+    return label == null || label.isEmpty ? id : '“$label” · $id';
   }
 
   Widget _section(BuildContext context, String title, Widget body) {

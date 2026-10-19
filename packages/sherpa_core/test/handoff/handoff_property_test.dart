@@ -32,6 +32,12 @@ final class _Session {
   final List<String> secrets = [];
   final Conv c = Conv();
 
+  /// Every tool call made (all are side effects: no definitions are known).
+  final Set<String> callIds = {};
+
+  /// Whether some result returned a titled object (a labelled handle).
+  bool titled = false;
+
   String secret() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
     final s = 'Zq9${[for (var i = 0; i < 12; i++) chars[r.nextInt(chars.length)]].join()}';
@@ -58,19 +64,44 @@ final class _Session {
         _ => '"refresh_token" = "${secret()} and more words"',
       };
 
-  void build({required int turns, int hugeArgs = 0}) {
+  /// A tool result: plain text with a secret, or (one in three) a created
+  /// object with an id and a noisy title, which the summary keeps as a
+  /// labelled handle.
+  String result(String id) {
+    if (r.nextInt(3) != 0) return 'result ${noise()} ${secretText()}';
+    titled = true;
+    return jsonEncode({'id': 'obj_$id', 'title': 'Title ${noise(6)}', 'size': r.nextInt(100)});
+  }
+
+  /// [bulk] > 0 adds an early turn of that many writes, which outgrows the
+  /// summary's ledger cap so older entries are folded into aggregates.
+  void build({required int turns, int hugeArgs = 0, int bulk = 0}) {
     if (r.nextBool()) c.user('Pinned rule ${noise(10)} ${secretText()}', pinned: true);
+    if (bulk > 0) {
+      c.user('Write all the files ${noise(5)}');
+      for (var i = 0; i < bulk; i++) {
+        final id = 'b$i';
+        callIds.add(id);
+        c.toolTurn(id, 'write_file', {
+          'path': '/bulk/$i${noise(3)}.txt',
+          'title': 'File $i ${noise(4)}',
+          if (r.nextBool()) 'password': secret(),
+        }, result(id));
+      }
+      c.assistant('Wrote them ${noise()}');
+    }
     for (var t = 0; t < turns; t++) {
       c.user('Request $t ${noise()} ${r.nextInt(3) == 0 ? secretText() : ''}');
       for (var k = r.nextInt(3); k > 0; k--) {
         final id = 'c${t}_$k';
+        callIds.add(id);
         final args = <String, Object?>{
           'path': '/w/${noise(5)}.txt',
           if (r.nextBool()) 'password': secret(),
           if (r.nextBool()) 'auth': {'api_key': secret(), 'user': 'u'},
           if (hugeArgs > 0 && r.nextBool()) 'content': '${noise(20)}${'x' * hugeArgs}',
         };
-        c.toolTurn(id, r.nextBool() ? 'write_file' : 'mcp__fetch', args, 'result ${noise()} ${secretText()}');
+        c.toolTurn(id, r.nextBool() ? 'write_file' : 'mcp__fetch', args, result(id));
       }
       c.assistant('Answer $t ${noise()}');
     }
@@ -113,7 +144,8 @@ void main() {
     for (var seed = 0; seed < 24; seed++) {
       test('seed $seed: parse accepts it, it fits, no secret survives, it renders', () async {
         final r = Random(seed);
-        final s = _Session(r)..build(turns: 2 + r.nextInt(8), hugeArgs: seed.isEven ? 30000 : 0);
+        final bulk = seed % 3 == 2 ? 45 + r.nextInt(20) : 0;
+        final s = _Session(r)..build(turns: 2 + r.nextInt(8), hugeArgs: seed.isEven ? 30000 : 0, bulk: bulk);
         final plan = Plan(
           task: 'Task ${s.noise(8)}',
           updatedAt: DateTime.utc(2026),
@@ -151,9 +183,76 @@ void main() {
         }
         expect(back.connections.map((c) => c.url), ['https://mcp.example.com/sse', 'https://ok.example.com/mcp']);
         expect(back.artifacts.map((a) => a.path), ['files/dump.sql']);
+        // The summary's memory of what was done and what exists survives
+        // export: every call is still counted (aggregates keep their count
+        // and ids), and labelled handles keep their labels.
+        final ledger = back.summary.sideEffectLedger;
+        expect(ledger.fold(0, (n, e) => n + e.count), s.callIds.length, reason: 'every call is still counted');
+        expect({for (final e in ledger) ...e.allCallIds}, s.callIds);
+        if (bulk > 0) expect(ledger.where((e) => e.isAggregate), isNotEmpty);
+        for (final e in ledger.where((e) => e.isAggregate)) {
+          expect(e.callIds, hasLength(e.count));
+          expect(e.keyArgs, isNotEmpty, reason: 'an aggregate still says what was done');
+          expect(e.keyArgs.length, lessThanOrEqualTo(SideEffectRecord.maxKeyArgs));
+        }
+        if (s.titled) expect(back.summary.stateHandles.where((h) => h.label != null), isNotEmpty);
+        for (final h in back.summary.stateHandles) {
+          if (h.label != null) expect(h.label!.length, lessThanOrEqualTo(CompactionSummary.maxHandleLabelChars));
+        }
+        expect(back.summary.render(), isNot(contains('×1 ')), reason: 'no aggregate was flattened');
         await _usable(back);
       });
     }
+
+    test('sanitized() keeps handle labels and aggregate ledger fields, cleaned and clipped', () {
+      final bundle = HandoffBundle(
+        createdAt: DateTime.utc(2026),
+        source: _source,
+        task: 't',
+        summary: CompactionSummary(
+          goal: 'g',
+          stateHandles: [
+            StateHandle(key: 'note_id', value: 'n1', tool: 'notes', callId: 'c\u202E1', label: 'Groceries \u202Egnp\x00'),
+            StateHandle(key: 'event_id', value: 'e1', label: 'L' * 500),
+            const StateHandle(key: 'basket_id', value: 'b1'),
+          ],
+          sideEffectLedger: [
+            SideEffectRecord(
+              callId: 'c1',
+              tool: 'write_file',
+              server: 'fs',
+              argsDigest: 'ab',
+              outcome: SideEffectOutcome.ok,
+              argsPreview: '×3: path="/a"; path="/b"; path="/c"',
+              count: 3,
+              callIds: const ['c1', 'c2\u2066', 'c3'],
+              keyArgs: ['path="/a"', 'path="/b\u202D"', 'k' * 300, for (var i = 0; i < 80; i++) 'x$i'],
+              declaredReadOnly: true,
+            ),
+            const SideEffectRecord(callId: 'c9', tool: 'send', argsDigest: '0123456789abcdef', outcome: SideEffectOutcome.error, count: 0),
+          ],
+        ),
+      );
+      final back = HandoffBundle.parse(bundle.sanitized().encode());
+      expect(jsonEncode(back.toJson()), bundle.sanitized().encode(), reason: 'a fixed point');
+      final [h1, h2, h3] = back.summary.stateHandles;
+      expect(h1.label, 'Groceries gnp');
+      expect(h1.callId, 'c1');
+      expect(h2.label, hasLength(CompactionSummary.maxHandleLabelChars));
+      expect(h3.label, isNull);
+      final [agg, single] = back.summary.sideEffectLedger;
+      expect(agg.count, 3);
+      expect(agg.callIds, ['c1', 'c2', 'c3']);
+      expect(agg.keyArgs, hasLength(SideEffectRecord.maxKeyArgs));
+      expect(agg.keyArgs.take(2), ['path="/a"', 'path="/b"']);
+      expect(agg.keyArgs[2], hasLength(200));
+      expect(agg.declaredReadOnly, isTrue);
+      expect(agg.argsDigest, hasLength(16));
+      expect(single.count, 1, reason: 'clamped as fromJson reads it');
+      expect(single.isAggregate, isFalse);
+      expect(back.summary.render(), contains('write_file ×3 on fs → done (declared read-only)'));
+      expect(back.summary.render(), contains('for "Groceries gnp"'));
+    });
 
     test('a first message with bidi isolates (BidiFormatter output) round-trips with default arguments', () async {
       final c = Conv()

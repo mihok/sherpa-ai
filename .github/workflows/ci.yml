@@ -161,6 +161,62 @@ jobs:
           name: perf-baselines
           path: build/new-baselines/
 
+  # Opt-in: runs on pull requests labelled `frame-bench` (re-run the job
+  # after adding the label). Emulator frames are CPU-rendered (SwiftShader),
+  # so this is a relative, catastrophic-regression check only (R12 §3.4,
+  # §3.8), and it never blocks a merge. Budget: a cold profile build for
+  # x86_64, one emulator boot and one launch with 3 repetitions of the five
+  # scenarios; about 15 minutes (estimated, not yet run on GitHub).
+  # bench/app/README.md has the details and the device instructions.
+  frame-bench:
+    name: Frame timing on the Android emulator (optional, frame-bench label)
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'frame-bench') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # Gates against bench/baselines/android-emulator-api36-swiftshader/;
+      # while that class holds placeholders it writes measured baselines to
+      # build/new-baselines/ instead (uploaded below for review).
+      - name: Frame bench (emulator, 3 repetitions)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          cores: 2
+          ram-size: 4096M
+          disk-size: 6000M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          # Perf runs need real animation durations (R12 §3.4).
+          disable-animations: false
+          script: bash bench/app/run_frame_bench.sh -d emulator-5554 -c android-emulator-api36-swiftshader -n 1 -r 3 -o build/bench-emulator -b build/new-baselines/android-emulator-api36-swiftshader
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: frame-bench
+          path: |
+            build/bench-emulator/*.json
+            build/bench-emulator/runs/
+            build/new-baselines/
+
   webview-security:
     name: MCP Apps shell security suite (Chromium)
     runs-on: ubuntu-latest

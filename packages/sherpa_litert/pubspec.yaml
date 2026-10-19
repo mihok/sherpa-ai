@@ -18,6 +18,10 @@ dependencies:
   meta: ^1.19.0
   sherpa_core: any
   sherpa_hub: any
+  # Only `package:sherpa_providers/tool_arguments.dart`: prompted and native
+  # tool-call arguments are parsed by the same strict parser as every other
+  # path (duplicate keys, leaked template tokens and ambiguous values refused).
+  sherpa_providers: any
 
 dev_dependencies:
   flutter_test:

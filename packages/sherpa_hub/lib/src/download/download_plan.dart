@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:meta/meta.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../fit/device_fit.dart' show liteRtWeightCacheBytes;
 import '../hub/hub_models.dart';
 import '../naming/model_name.dart';
 import '../naming/name_types.dart';
@@ -368,6 +369,7 @@ final class DownloadPlan extends PlanOutcome {
     required this.files,
     required this.totalBytes,
     required this.tempBytes,
+    this.runtimeCacheBytes = 0,
     this.mmproj,
     this.draft,
     this.warnings = const [],
@@ -383,9 +385,17 @@ final class DownloadPlan extends PlanOutcome {
   /// Bytes to download (the storage check input).
   final int totalBytes;
 
-  /// Extra transient bytes: joining byte-split parts appends each verified
-  /// part to the target and deletes it, so the peak is the largest part.
+  /// Extra bytes the download needs on top of [totalBytes] (the storage
+  /// check counts them): the byte-split join peak (joining appends each
+  /// verified part to the target and deletes it, so the peak is the
+  /// largest part) plus [runtimeCacheBytes].
   final int tempBytes;
+
+  /// Disk the runtime writes on the model's first load and keeps: LiteRT-LM's
+  /// CPU weight cache in the app's cache directory, about the model's size
+  /// ([liteRtWeightCacheBytes]). 0 for other runtimes. Included in
+  /// [tempBytes], so a storage check that counts [tempBytes] counts it too.
+  final int runtimeCacheBytes;
   final PlannedFile? mmproj;
   final PlannedFile? draft;
   final List<String> warnings;
@@ -528,14 +538,18 @@ PlanOutcome planDownload({
   if (reasons.isNotEmpty) return PlanRefused(List.unmodifiable(reasons), variant: v);
 
   final total = planned.fold<int>(0, (a, f) => a + f.sizeBytes);
-  final temp = v.isByteSplit ? planned.where((f) => f.joinInto != null).fold<int>(0, (a, f) => math.max(a, f.sizeBytes)) : 0;
+  final join = v.isByteSplit ? planned.where((f) => f.joinInto != null).fold<int>(0, (a, f) => math.max(a, f.sizeBytes)) : 0;
+  final cache = v.runtime == SherpaRuntime.litert
+      ? liteRtWeightCacheBytes(planned.where((f) => f.role == FileRole.model).fold<int>(0, (a, f) => a + f.sizeBytes))
+      : 0;
   return DownloadPlan(
     repo: repo,
     commit: commit,
     variant: v,
     files: List.unmodifiable(planned),
     totalBytes: total,
-    tempBytes: temp,
+    tempBytes: join + cache,
+    runtimeCacheBytes: cache,
     mmproj: mmproj,
     draft: draftFile,
     warnings: List.unmodifiable(warnings),

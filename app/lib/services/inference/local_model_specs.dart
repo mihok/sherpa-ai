@@ -69,6 +69,9 @@ LocalModelSpec localModelSpec(
     trainContext: m.contextLength,
     toolCalling: m.toolUse,
     mmprojPath: m.mmprojPath == null ? null : layout.libraryPath(m.mmprojPath!),
+    // A paired draft model for speculative decoding, used when the
+    // session (or a perf-lab override) asks for draft speculation.
+    draftModelPath: m.draftPath == null ? null : layout.libraryPath(m.draftPath!),
     sessionDefaults: sessionDefaults,
   );
 }

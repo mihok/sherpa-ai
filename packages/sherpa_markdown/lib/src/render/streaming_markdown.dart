@@ -20,8 +20,9 @@ const kDefaultLinkSchemes = <String>{'http', 'https', 'mailto'};
 /// styled but not tappable, an ambiguous partial line (`-`, `1`, `|--`) is
 /// held back for a token — so the text never flips between readings.
 ///
-/// Safety: links are never opened here ([onLinkTap] decides), raw HTML is
-/// shown as text, and network images are placeholders until tapped.
+/// Safety: links are never opened here ([onLinkTap] decides, and
+/// [onLinkLongPress] gets a held press, e.g. to copy), raw HTML is shown
+/// as text, and network images are placeholders until tapped.
 ///
 /// Accessibility: nothing here is a live region (a growing live region
 /// makes screen readers re-read the whole message on every token). While
@@ -35,6 +36,7 @@ class StreamingMarkdown extends StatefulWidget {
     this.streaming = false,
     this.style = const SherpaMarkdownStyle(),
     this.onLinkTap,
+    this.onLinkLongPress,
     this.onCopyCode,
     this.selectable = true,
     this.linkSchemes = kDefaultLinkSchemes,
@@ -47,6 +49,11 @@ class StreamingMarkdown extends StatefulWidget {
 
   /// Links are never opened directly; the host decides (and may confirm).
   final void Function(Uri uri)? onLinkTap;
+
+  /// A press held on a link (e.g. "copy link"). Null: a long press selects
+  /// text as it does elsewhere. Only consulted when the link is built, so
+  /// set it from the first build.
+  final void Function(Uri uri)? onLinkLongPress;
 
   /// Called after a code block's copy button put [code] on the clipboard.
   final void Function(String code)? onCopyCode;
@@ -100,6 +107,7 @@ class _StreamingMarkdownState extends State<StreamingMarkdown> {
   void _syncCallbacks() {
     _callbacks
       ..onLinkTap = widget.onLinkTap
+      ..onLinkLongPress = widget.onLinkLongPress
       ..onCopyCode = widget.onCopyCode;
   }
 

@@ -111,7 +111,7 @@ final class ModelLoadOptions {
   final String? mmprojPath;
   final String? draftModelPath;
 
-  ModelLoadOptions copyWith({bool? vocabOnly, int? nGpuLayers}) => ModelLoadOptions(
+  ModelLoadOptions copyWith({bool? vocabOnly, int? nGpuLayers, String? draftModelPath}) => ModelLoadOptions(
         path: path,
         modelId: modelId,
         nGpuLayers: nGpuLayers ?? this.nGpuLayers,
@@ -121,7 +121,7 @@ final class ModelLoadOptions {
         loadMtp: loadMtp,
         chatTemplateOverride: chatTemplateOverride,
         mmprojPath: mmprojPath,
-        draftModelPath: draftModelPath,
+        draftModelPath: draftModelPath ?? this.draftModelPath,
       );
 }
 

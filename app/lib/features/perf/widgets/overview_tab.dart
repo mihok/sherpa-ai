@@ -289,11 +289,11 @@ class _ProfileCard extends ConsumerWidget {
             runSpacing: t.space.xs,
             children: [
               InfoPill(label: sourceLabel, tone: sourceTone, explanation: sourceWhy, semanticPrefix: 'Profile'),
-              if (o.hasOverrides && profile == null)
+              if (o.unmeasured)
                 const InfoPill(
-                  label: 'Override waiting',
-                  tone: PillTone.warning,
-                  explanation: 'Your settings apply on top of a tuned profile. Run autotune once to use them.',
+                  label: 'Not measured yet',
+                  tone: PillTone.neutral,
+                  explanation: 'Your settings apply now, on top of safe defaults. Run autotune to measure the rest.',
                 ),
             ],
           ),
@@ -311,7 +311,15 @@ class _ProfileCard extends ConsumerWidget {
             explanation: 'How the conversation memory is stored. q8_0 takes about half the space of f16.',
           ),
           FactRow('Flash attention', mark(ov.flashAttention != null, _fa(c.flashAttention))),
-          FactRow('Speculative decoding', mark(o.speculative != null, c.speculative.label)),
+          FactRow(
+            'Speculative decoding',
+            mark(
+              o.speculative != null,
+              c.speculative == SpeculativeChoice.draft && o.tunedDraft != null
+                  ? '${c.speculative.label} (${o.tunedDraft!.label})'
+                  : c.speculative.label,
+            ),
+          ),
           if (profile?.measuredAt != null) FactRow('Tuned', formatDateTime(profile!.measuredAt!)),
           if ((profile?.genTokensPerSec ?? 0) > 0)
             FactRow('Measured speed', '${formatTps(profile!.promptTokensPerSec)} prefill, ${formatTps(profile.genTokensPerSec)} decode'),

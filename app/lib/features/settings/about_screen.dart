@@ -5,6 +5,7 @@ import '../../design/tokens.dart';
 import '../../design/typography.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/sherpa_mark.dart';
+import '../diagnostics/diagnostics_screen.dart';
 import 'settings_page.dart';
 
 class AboutScreen extends StatelessWidget {
@@ -36,6 +37,16 @@ class AboutScreen extends StatelessWidget {
         ListTile(title: const Text('App version'), trailing: Text(AppInfo.version, style: metric)),
         ListTile(title: const Text('Flutter'), trailing: Text(AppInfo.flutterVersion, style: metric)),
         ListTile(title: const Text('Dart'), trailing: Text(AppInfo.dartVersion, style: metric)),
+        const SectionHeader('Support'),
+        ListTile(
+          leading: const Icon(Icons.bug_report_outlined),
+          title: const Text(DiagnosticsScreen.title),
+          subtitle: const Text('A redacted report for bug reports: versions, device and settings, never your chats'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(builder: (_) => const DiagnosticsScreen(), settings: const RouteSettings(name: 'diagnostics')),
+          ),
+        ),
         const SectionHeader('Legal'),
         ListTile(
           leading: const Icon(Icons.description_outlined),

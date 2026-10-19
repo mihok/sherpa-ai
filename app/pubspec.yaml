@@ -26,26 +26,35 @@ dependencies:
   flutter_web_auth_2: ^5.1.0
   go_router: ^18.1.0
   http: ^1.6.0
+  image: ^4.11.0
+  image_picker: ^1.2.4
   material_ui: ^1.7.0
   mobile_scanner: ^7.4.2
   path: ^1.9.1
   path_provider: ^2.1.6
   qr_flutter: ^4.1.0
   share_plus: ^13.3.1
+  sherpa_apple_ml: any
   sherpa_auth: any
   sherpa_core: any
   sherpa_data: any
   sherpa_hub: any
   sherpa_inference: any
+  sherpa_litert: any
   sherpa_markdown: any
   sherpa_mcp: any
   sherpa_net: any
   sherpa_platform: any
   sherpa_providers: any
   sherpa_webview: any
+  speech_to_text: ^7.5.0
   url_launcher: ^6.3.2
 
 dev_dependencies:
+  # The frame bench's host run fakes connectivity (Linux has no D-Bus here).
+  connectivity_plus_platform_interface: ^2.1.0
+  flutter_driver:
+    sdk: flutter
   flutter_test:
     sdk: flutter
   integration_test:

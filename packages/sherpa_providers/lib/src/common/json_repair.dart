@@ -124,6 +124,44 @@ abstract final class ToolArgumentsRepair {
     return null;
   }
 
+  /// The text of the value at [path] in [json], which must be strict JSON
+  /// text (`jsonDecode` accepted it). Path segments are object keys
+  /// ([String]) and array indexes ([int]); a key that occurs twice on the
+  /// path resolves to its last occurrence, as in `jsonDecode`'s result.
+  /// Null when there is no such value. Never throws.
+  ///
+  /// For arguments a non-compliant server sends as a JSON object instead of
+  /// a string: decoding the event already collapsed that object's duplicate
+  /// keys, so the adapters hand its raw text to [parseArguments] (see
+  /// [objectArgumentsText]), which refuses them as for string arguments.
+  static String? rawValueAt(String json, List<Object> path) {
+    try {
+      final s = _Spans(json);
+      var start = s.ws(0);
+      for (final segment in path) {
+        if (start >= json.length) return null;
+        final found = switch ((json.codeUnitAt(start), segment)) {
+          (0x7B, final String key) => s.member(start, key),
+          (0x5B, final int index) => s.element(start, index),
+          _ => null,
+        };
+        if (found == null) return null;
+        start = found;
+      }
+      return json.substring(start, s.valueEnd(start));
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Argument text for [value], an object or array decoded from the event
+  /// text [rawEvent] at [path] where a JSON string was expected: its raw text
+  /// when it can be found (so [parseArguments] sees any duplicate key),
+  /// else its re-encoding. Callers check `value is Map || value is List`
+  /// first, so string arguments (the common path) never scan the event.
+  static String objectArgumentsText(Object? value, String? rawEvent, List<Object> path) =>
+      (rawEvent == null ? null : rawValueAt(rawEvent, path)) ?? jsonEncode(value);
+
   /// The [ToolCall.argumentsError] for arguments in which [key] occurs
   /// twice in one object.
   static String duplicateKeyError(String key) =>
@@ -270,6 +308,99 @@ abstract final class ToolArgumentsRepair {
 /// Thrown internally when input ends where a value must start.
 final class _Truncated implements Exception {
   const _Truncated();
+}
+
+/// Value spans in strict JSON text, for [ToolArgumentsRepair.rawValueAt].
+/// Linear, allocation-free apart from escaped keys; assumes valid JSON and
+/// throws [FormatException] (or [RangeError]) where it is not.
+final class _Spans {
+  _Spans(this.s);
+
+  final String s;
+
+  int ws(int i) {
+    while (i < s.length) {
+      final c = s.codeUnitAt(i);
+      if (c != 0x20 && c != 0x0A && c != 0x0D && c != 0x09) break;
+      i++;
+    }
+    return i;
+  }
+
+  /// [i] is at an opening quote; returns the index after the closing one.
+  int stringEnd(int i) {
+    i++;
+    while (true) {
+      final c = s.codeUnitAt(i);
+      if (c == 0x5C) {
+        i += 2;
+      } else if (c == 0x22) {
+        return i + 1;
+      } else {
+        i++;
+      }
+    }
+  }
+
+  /// The index after the value that starts at [i].
+  int valueEnd(int i) {
+    final c = s.codeUnitAt(i);
+    if (c == 0x22) return stringEnd(i);
+    if (c == 0x7B || c == 0x5B) {
+      var depth = 0;
+      while (true) {
+        final d = s.codeUnitAt(i);
+        if (d == 0x22) {
+          i = stringEnd(i);
+          continue;
+        }
+        if (d == 0x7B || d == 0x5B) {
+          depth++;
+        } else if (d == 0x7D || d == 0x5D) {
+          if (--depth == 0) return i + 1;
+        }
+        i++;
+      }
+    }
+    // A number, true, false or null.
+    while (i < s.length) {
+      final d = s.codeUnitAt(i);
+      if (d == 0x2C || d == 0x7D || d == 0x5D || d == 0x20 || d == 0x0A || d == 0x0D || d == 0x09) break;
+      i++;
+    }
+    return i;
+  }
+
+  /// The start of the value of the last member [key] of the object at [i].
+  int? member(int i, String key) {
+    int? found;
+    var j = ws(i + 1);
+    if (s.codeUnitAt(j) == 0x7D) return null;
+    while (true) {
+      final keyEnd = stringEnd(j);
+      final raw = s.substring(j + 1, keyEnd - 1);
+      final name = raw.contains(r'\') ? jsonDecode(s.substring(j, keyEnd)) as String : raw;
+      j = ws(keyEnd);
+      if (s.codeUnitAt(j) != 0x3A) throw const FormatException('expected ":"');
+      j = ws(j + 1);
+      if (name == key) found = j;
+      j = ws(valueEnd(j));
+      if (s.codeUnitAt(j) != 0x2C) return found;
+      j = ws(j + 1);
+    }
+  }
+
+  /// The start of element [index] of the array at [i].
+  int? element(int i, int index) {
+    var j = ws(i + 1);
+    if (s.codeUnitAt(j) == 0x5D) return null;
+    for (var k = 0;; k++) {
+      if (k == index) return j;
+      j = ws(valueEnd(j));
+      if (s.codeUnitAt(j) != 0x2C) return null;
+      j = ws(j + 1);
+    }
+  }
 }
 
 final class _LenientParser {

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +20,7 @@ import '../../state/ui_preferences.dart';
 import 'state/directory_controller.dart' show DirectoryError, DirectoryOffline, DirectoryRateLimited, failureOf;
 import 'state/model_fit.dart';
 import 'state/models_providers.dart';
+import 'state/variant_download.dart';
 import 'widgets/fit_explain.dart';
 import 'widgets/format.dart';
 import 'widgets/pills.dart';
@@ -157,24 +157,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
     setState(() => _starting = true);
     try {
       final manager = ref.read(downloadManagerProvider);
-      final arch = shape?.architecture;
-      final o = await manager.enqueue(
-        plan as DownloadPlan,
-        meta: DownloadMeta(
-          displayName: d.name.displayName,
-          quant: row.variant.quant?.label ?? row.label,
-          format: row.variant.format,
-          contextLength: arch?.trainContextLength,
-          // Nothing fits with headroom on a Tight variant, so it opens small.
-          recommendedContext: row.fit?.recommendedMaxContext ??
-              (row.kind == FitBadgeKind.tight ? math.min(2048, arch?.trainContextLength ?? 2048) : null),
-          architecture: arch?.architecture,
-          parameterCount: shape?.parameterCount ?? d.parameterCount,
-          license: d.license,
-          toolUse: d.toolUseHint,
-          reasoning: d.reasoningHint,
-        ),
-      );
+      final o = await manager.enqueue(plan as DownloadPlan, meta: downloadMetaFor(d, row, shape));
       if (!mounted) return;
       switch (o) {
         case Enqueued(:final warnings):
@@ -432,8 +415,8 @@ class _FitSummary extends StatelessWidget {
       text = shapeError is HubGatedRepoException
           ? "Fit can't be checked until you have access: the header is behind the gate."
           : "Couldn't read the model's header to check fit. Sizes below are still real.";
-    } else if (noPeek) {
-      text = 'Fit is checked for GGUF files only; sizes below are real.';
+    } else if (noPeek && (assessment?.rows.every((r) => r.fit == null) ?? true)) {
+      text = 'Fit is checked for GGUF, MLX and LiteRT files only; sizes below are real.';
     } else {
       text = assessment?.summary ?? 'Checking this device…';
     }
@@ -563,7 +546,10 @@ class _VariantTile extends StatelessWidget {
               if (shapeLoading && !blocked)
                 const Skeleton(width: 64, height: 20, radius: 999)
               else
-                FitBadge(kind: row.kind, explanation: fit == null ? row.reason : '${row.reason}\n\n${fitBreakdown(fit)}'),
+                FitBadge(
+                  kind: row.kind,
+                  explanation: fit == null ? row.reason : '${row.reason}\n\n${fitBreakdown(fit, runtime: row.variant.runtime)}',
+                ),
               if (bpw != null)
                 Metric(
                   icon: Icons.grain_rounded,
@@ -597,6 +583,21 @@ class _VariantTile extends StatelessWidget {
             SizedBox(height: t.space.xs),
             for (final r in row.blockedReasons)
               Text(r, style: theme.textTheme.bodySmall?.copyWith(color: SherpaTokens.of(context).semantic.danger)),
+          ],
+          if (row.runtimeCacheBytes > 0 && !blocked) ...[
+            SizedBox(height: t.space.xs),
+            Tooltip(
+              message: 'On its first load LiteRT-LM writes packed weights for the CPU into Sherpa\'s cache, about '
+                  'the size of the model, so later loads are faster. The storage check counts it.',
+              child: Row(children: [
+                Icon(Icons.sd_storage_outlined, size: 14, color: muted),
+                SizedBox(width: t.space.xs),
+                Flexible(
+                  child: Text('+ about ${formatBytes(row.runtimeCacheBytes)} weight cache on first load',
+                      style: theme.textTheme.bodySmall?.copyWith(color: muted), overflow: TextOverflow.ellipsis),
+                ),
+              ]),
+            ),
           ],
           if (mm != null && !blocked) ...[
             SizedBox(height: t.space.xs),

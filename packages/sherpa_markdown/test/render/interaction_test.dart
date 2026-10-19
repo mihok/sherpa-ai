@@ -108,6 +108,63 @@ void main() {
       expect(taps, isEmpty);
     });
 
+    testWidgets('a long press calls onLinkLongPress, not onLinkTap', (
+      tester,
+    ) async {
+      final taps = <Uri>[];
+      final holds = <Uri>[];
+      await pumpMarkdown(
+        tester,
+        'Read [the docs](https://example.com/docs) now',
+        onLinkTap: taps.add,
+        onLinkLongPress: holds.add,
+      );
+      await tester.longPressAt(_centerOf(tester, 'the docs'));
+      await tester.pumpAndSettle();
+      expect(holds, [Uri.parse('https://example.com/docs')]);
+      expect(
+        taps,
+        isEmpty,
+        reason: 'the release after a long press is not a tap',
+      );
+
+      await tester.tapOnText(find.textRange.ofSubstring('the docs'));
+      expect(taps, hasLength(1), reason: 'a short tap still taps');
+      expect(holds, hasLength(1));
+    });
+
+    testWidgets('without onLinkLongPress a long press does not tap the link', (
+      tester,
+    ) async {
+      final taps = <Uri>[];
+      await pumpMarkdown(
+        tester,
+        'Read [the docs](https://example.com/docs) now',
+        onLinkTap: taps.add,
+      );
+      await tester.longPressAt(_centerOf(tester, 'the docs'));
+      await tester.pumpAndSettle();
+      expect(taps, isEmpty);
+    });
+
+    testWidgets('links are exposed to screen readers as tappable links', (
+      tester,
+    ) async {
+      final semantics = tester.ensureSemantics();
+      final taps = <Uri>[];
+      await pumpMarkdown(
+        tester,
+        'Read [the docs](https://example.com/docs) now',
+        onLinkTap: taps.add,
+        onLinkLongPress: (_) {},
+      );
+      final link = find.semantics.byLabel('the docs');
+      expect(link.evaluate().single.flagsCollection.isLink, isTrue);
+      tester.semantics.tap(link);
+      expect(taps, hasLength(1));
+      semantics.dispose();
+    });
+
     testWidgets('the newest callback is used even for frozen blocks', (
       tester,
     ) async {
@@ -235,4 +292,19 @@ class _RecordingHttpClient implements HttpClient {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+/// The global center of the first line box of [text] (for long presses;
+/// `tapOnText` has no long-press counterpart).
+Offset _centerOf(WidgetTester tester, String text) {
+  final range = find.textRange.ofSubstring(text).evaluate().single;
+  final box = range.renderObject
+      .getBoxesForSelection(
+        TextSelection(
+          baseOffset: range.textRange.start,
+          extentOffset: range.textRange.end,
+        ),
+      )
+      .first;
+  return range.renderObject.localToGlobal(box.toRect().center);
 }

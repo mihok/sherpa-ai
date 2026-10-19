@@ -2,7 +2,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sherpa/features/perf/state/perf_lab.dart';
 import 'package:sherpa/features/perf/state/perf_models.dart';
 import 'package:sherpa/features/perf/state/perf_stats.dart';
+import 'package:sherpa/services/downloads/downloads.dart';
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_hub/sherpa_hub.dart' show FileRole, ModelFormat;
 import 'package:sherpa_inference/sherpa_inference.dart';
 import 'package:sherpa_inference/testing.dart';
 
@@ -316,47 +318,125 @@ void main() {
   });
 
   group('overrides and autotune', () {
-    test('apply pins the winner as the override; reset returns to auto', () async {
+    test('apply pins the winner as the override, before and after autotune; reset returns to auto', () async {
       final rig = await PerfRig.create(host: FakeEngineHost(bench: scriptedBench(_byThreads)));
       addTearDown(rig.dispose);
       await rig.addModelAndStart();
       final tuner = rig.local.lifecycle!.autotuner!;
       const pick = LabConfig(nThreads: 2, nBatch: 256, nUbatch: 256, kv: KvType.q8_0, flashAttention: FlashAttention.on);
 
-      // Not tuned yet: saved, but the lifecycle applies overrides on top of
-      // a measured profile only.
-      expect(await rig.lab.apply('m1', pick), isFalse);
+      // Not tuned yet: the override applies at once, on top of the defaults.
+      await rig.lab.apply('m1', pick);
       expect((await tuner.overrides('m1')).toJson(), pick.overrides.toJson());
+      expect(await tuner.isTuned('m1'), isFalse);
+      var plan = await rig.local.lifecycle!.plan('m1');
+      expect((plan.config!.nThreads, plan.config!.nBatch, plan.config!.typeK), (2, 256, KvType.q8_0));
+      var o = await rig.lab.overview('m1');
+      expect(o.profile!.source, AutotuneSource.override);
+      expect(o.unmeasured, isTrue);
+      expect(o.tuned, pick);
 
       final progress = <AutotuneProgress>[];
       final tuned = await rig.lab.retune('m1', onProgress: progress.add);
       expect(progress.first.done, 0);
       expect(progress.last.fraction, 1);
-      expect(progress.where((p) => p.last != null), hasLength(10), reason: '4 thread counts, 3 batch sizes, 3 KV variants');
+      expect(progress.where((p) => p.candidate != null), hasLength(10), reason: '4 thread counts, 3 batch sizes, 3 KV variants');
+      expect(progress.where((p) => p.step == AutotuneStep.measured), hasLength(rig.fake.benches.length));
       expect(tuned.source, AutotuneSource.override);
-      expect(tuned.candidate, pick.candidate);
+      expect(tuned.candidate, pick.candidate.copyWith(speculative: SpeculativeMode.none));
+      expect(await tuner.isTuned('m1'), isTrue);
+      o = await rig.lab.overview('m1');
+      expect(o.unmeasured, isFalse);
 
-      expect(await rig.lab.apply('m1', pick), isTrue);
+      await rig.lab.apply('m1', pick);
       await until(() => rig.local.lifecycle!.loaded == null);
-      final plan = await rig.local.lifecycle!.plan('m1');
+      plan = await rig.local.lifecycle!.plan('m1');
       expect(plan.config!.nThreads, 2);
       expect(plan.config!.nBatch, 256);
       expect(plan.config!.typeK, KvType.q8_0);
 
+      // Speculative decoding goes through the lifecycle too.
       await rig.lab.apply('m1', pick.copyWith(speculative: SpeculativeChoice.ngram));
-      expect(rig.local.speculativeFor('m1'), SpeculativeMode.ngram);
+      expect((await tuner.overrides('m1')).speculative, SpeculativeMode.ngram);
+      expect(rig.local.speculativeFor('m1'), isNull, reason: 'nothing is kept app-side');
       expect((await rig.local.lifecycle!.plan('m1')).config!.speculative, SpeculativeMode.ngram);
+      expect((await rig.lab.overview('m1')).speculative, SpeculativeMode.ngram);
 
       await rig.lab.resetToAuto('m1');
       expect((await tuner.overrides('m1')).isEmpty, isTrue);
-      expect(rig.local.speculativeFor('m1'), isNull);
-      expect(rig.local.lifecycle!.spec('m1')!.sessionDefaults.speculative, SpeculativeMode.none);
+      expect((await rig.local.lifecycle!.plan('m1')).config!.speculative, SpeculativeMode.none);
       expect((await tuner.cached('m1'))!.source, AutotuneSource.measured);
+      expect((await rig.lab.overview('m1')).hasOverrides, isFalse);
+    });
 
+    test('a draft-model winner is applied: the lifecycle loads the draft with the model', () async {
+      final rig = await PerfRig.create(memory: FakeMemoryMonitor(memoryState(availableMib: 4096)));
+      addTearDown(rig.dispose);
+      await rig.library.add(_draftModel('tiny'));
+      await rig.addModelAndStart();
+      final draft = rig.lab.drafts('m1').single;
+      expect(draft.modelId, 'tiny');
+      final pick = const LabConfig(nThreads: 4, kv: KvType.q8_0).copyWith(speculative: SpeculativeChoice.draft, draftModelId: 'tiny');
+
+      final fit = await rig.lab.checkFit('m1', pick);
+      expect(fit.fits, isTrue);
+      expect(rig.fake.estimateLoads.last.draftModelPath, draft.path, reason: 'the draft is counted in the estimate');
+
+      await rig.lab.apply('m1', pick);
+      final o = await rig.local.lifecycle!.autotuner!.overrides('m1');
+      expect((o.speculative, o.draftModelId), (SpeculativeMode.draft, 'tiny'));
+      final plan = await rig.local.lifecycle!.plan('m1');
+      expect(plan.config!.speculative, SpeculativeMode.draft);
+      final reply = await replyText(rig.local.provider, 'm1', 'hello');
+      expect(reply, isNotEmpty);
+      expect(rig.fake.loads.last.path, rig.local.lifecycle!.spec('m1')!.path);
+      expect(rig.fake.loads.last.draftModelPath, draft.path);
+      expect(rig.fake.sessionConfigs.last.speculative, SpeculativeMode.draft);
+
+      final overview = await rig.lab.overview('m1');
+      expect(overview.current.loaded, isTrue);
+      expect(overview.current.config.speculative, SpeculativeChoice.draft);
+      expect(overview.current.config.draftModelId, 'tiny');
+      expect(overview.tuned.draftModelId, 'tiny');
+      expect(overview.tunedDraft!.label, 'Tiny draft');
+    });
+
+    test('a paired draft the lifecycle can\'t load is refused, and nothing is saved', () async {
+      final rig = await PerfRig.create();
+      addTearDown(rig.dispose);
+      await rig.addModelAndStart();
+      final pick = const LabConfig(nThreads: 4, kv: KvType.q8_0)
+          .copyWith(speculative: SpeculativeChoice.draft, draftModelId: PerfLab.pairedDraftId('m1'));
+      expect(pick.overrides.draftModelId, isNull, reason: 'a paired draft is the model\'s own draft');
+      await expectLater(rig.lab.apply('m1', pick), throwsA(isA<PerfLabException>()));
       await expectLater(
-        rig.lab.apply('m1', pick.copyWith(speculative: SpeculativeChoice.draft, draftModelId: 'd')),
+        rig.lab.apply('m1', pick.copyWith(draftModelId: 'gone')),
         throwsA(isA<PerfLabException>().having((e) => e.message, 'message', contains('draft model'))),
       );
+      expect((await rig.local.lifecycle!.autotuner!.overrides('m1')).isEmpty, isTrue);
+    });
+
+    test('a speculative mode stored app-side is migrated into the lifecycle overrides', () async {
+      final rig = await PerfRig.create();
+      addTearDown(rig.dispose);
+      await rig.addModelAndStart();
+      await rig.local.setSpeculative('m1', SpeculativeMode.ngram);
+      expect(await rig.local.store.read('sherpa.app.speculative.m1'), isNotNull);
+
+      final o = await rig.lab.overview('m1');
+      expect(o.speculative, SpeculativeMode.ngram);
+      expect(o.overrides.speculative, SpeculativeMode.ngram);
+      expect(rig.local.speculativeFor('m1'), isNull);
+      expect(await rig.local.store.read('sherpa.app.speculative.m1'), isNull);
+      expect(rig.local.lifecycle!.spec('m1')!.sessionDefaults.speculative, SpeculativeMode.none);
+      expect((await rig.local.lifecycle!.plan('m1')).config!.speculative, SpeculativeMode.ngram, reason: 'still applies');
+
+      // An override the user pinned wins over the old value.
+      await rig.local.setSpeculative('m1', SpeculativeMode.ngram);
+      await rig.local.lifecycle!.autotuner!.setOverrides('m1', const AutotuneOverrides(speculative: SpeculativeMode.none));
+      await rig.lab.overview('m1');
+      expect((await rig.local.lifecycle!.autotuner!.overrides('m1')).speculative, SpeculativeMode.none);
+      expect(rig.local.speculativeFor('m1'), isNull);
     });
 
     test('autotune can be cancelled and keeps the previous profile', () async {
@@ -373,3 +453,19 @@ void main() {
     });
   });
 }
+
+/// A smaller library model of the same architecture: a draft candidate.
+LibraryModel _draftModel(String id) => LibraryModel(
+      id: id,
+      source: LibrarySource.imported,
+      displayName: 'Tiny draft',
+      format: ModelFormat.gguf,
+      files: [LibraryFile(path: 'imported/$id/model.gguf', role: FileRole.model, sizeBytes: 100 << 20, sha256: 'cd' * 32)],
+      loadPath: 'imported/$id/model.gguf',
+      installedAt: DateTime.utc(2026, 10, 1),
+      quant: 'Q4_K_M',
+      contextLength: 40960,
+      architecture: 'qwen3',
+      parameterCount: 150000000,
+      toolUse: true,
+    );

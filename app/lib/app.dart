@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 
 import 'design/motion.dart';
 import 'design/theme.dart';
+import 'features/mcp/input/input_host.dart';
 import 'routing/router.dart';
 import 'shell/offline_banner.dart';
 import 'state/ui_preferences.dart';
@@ -55,7 +56,14 @@ class _SherpaAppState extends ConsumerState<SherpaApp> {
           child: MaterialUiCompatibilityBridge(
             // Legacy `package:flutter/material.dart` widgets from third-party
             // packages resolve Theme/MaterialLocalizations through this.
-            child: OfflineBannerHost(child: child ?? const SizedBox.shrink()),
+            child: OfflineBannerHost(
+              // MCP input requests (forms, URL consent, sampling) app-wide:
+              // a banner while any waits; sheets open on the root navigator.
+              child: McpInputHost(
+                navigatorKey: router.routerDelegate.navigatorKey,
+                child: child ?? const SizedBox.shrink(),
+              ),
+            ),
           ),
         ),
       ),

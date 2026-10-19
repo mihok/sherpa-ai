@@ -121,6 +121,45 @@ class PromptSourceLabel extends StatelessWidget {
   }
 }
 
+/// "Sent by Weather Dashboard (from Weather)" above a message an MCP App
+/// view sent after the user confirmed it, so an app's words never read
+/// as the user's own typing.
+class AppSourceLabel extends StatelessWidget {
+  const AppSourceLabel({super.key, required this.source});
+
+  final AppMessageSource source;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    final color = theme.colorScheme.onSurfaceVariant;
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: kChromeMaxTextScale,
+      child: Semantics(
+        container: true,
+        label: source.semanticLabel,
+        excludeSemantics: true,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.widgets_outlined, size: ChatIconSize.small, color: color),
+            SizedBox(width: t.space.xs),
+            Flexible(
+              child: Text(
+                source.text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(color: color, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// "42 tok/s · TTFT 0.4 s" under a reply whose provider reported timing
 /// (the on-device engine, llama.cpp-compatible servers). Quiet: small,
 /// muted, details in the tooltip and the spoken label.

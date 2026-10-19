@@ -39,8 +39,8 @@ class WelcomeStep extends StatelessWidget {
         const _Promise(
           icon: Icons.alt_route_rounded,
           title: 'You choose where it runs',
-          body: 'A cloud model with your own key, or a server on your own network. '
-              'Fully on-device models are coming next.',
+          body: 'A model that runs fully on this phone, a cloud model with your own key, or a server on your '
+              'own network.',
         ),
         _Promise(
           icon: Icons.lock_outline,

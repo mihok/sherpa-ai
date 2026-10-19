@@ -106,9 +106,14 @@ final class VariantRow {
     this.recommended = false,
     this.blockedReasons = const [],
     this.warnings = const [],
+    this.runtimeCacheBytes = 0,
   });
 
   final RepoVariant variant;
+
+  /// Disk the runtime adds on first load (LiteRT-LM's CPU weight cache,
+  /// about the model's size); the storage check counts it.
+  final int runtimeCacheBytes;
 
   /// Every byte the plan would fetch: shards + paired projector.
   final int downloadBytes;
@@ -173,15 +178,19 @@ HubRepoFile? peekTarget(CatalogModelDetails d) {
   return v.weights.first;
 }
 
-/// Builds the rows. [shape] null = header unknown (rows get
-/// [FitBadgeKind.unknown]); [platform] gates MLX (iOS) and LiteRT
-/// (Android).
+/// Builds the rows. [shape] null = header unknown (GGUF rows get
+/// [FitBadgeKind.unknown]); the device's platform gates MLX (iOS) and
+/// LiteRT (Android). MLX and LiteRT variants are sized from their files
+/// ([assessRuntimeFit]: MLX weights, plus KV when [mlxConfig] — the repo's
+/// `config.json` — is known; LiteRT the file plus its CPU weight cache).
 ModelAssessment assessVariants(
   CatalogModelDetails details,
   DeviceProfile device, {
   ModelShape? shape,
   FitOptions options = const FitOptions(),
+  Map<String, Object?>? mlxConfig,
 }) {
+  final mlxArch = mlxConfig == null ? null : ModelArchitecture.fromMlxConfig(mlxConfig);
   final files = [for (final f in details.files) f.file];
   final rows = <VariantRow>[];
   final candidates = <QuantCandidate>[];
@@ -227,6 +236,14 @@ ModelAssessment assessVariants(
         ),
         options: options,
       );
+    } else if (blocked.isEmpty && (v.runtime == SherpaRuntime.mlx || v.runtime == SherpaRuntime.litert)) {
+      fit = assessRuntimeFit(
+        device,
+        v.runtime == SherpaRuntime.mlx
+            ? RuntimeFootprintInput.mlx(weightBytes: v.weightBytes, architecture: mlxArch, label: v.label)
+            : RuntimeFootprintInput.liteRt(fileBytes: v.weightBytes, label: v.label),
+        options: options,
+      );
     }
     final kind = blocked.isNotEmpty
         ? FitBadgeKind.blocked
@@ -245,6 +262,7 @@ ModelAssessment assessVariants(
       recommended: rec?.best?.candidate.id == v.id,
       blockedReasons: List.unmodifiable(blocked),
       warnings: v.warnings,
+      runtimeCacheBytes: v.runtime == SherpaRuntime.litert ? liteRtWeightCacheBytes(v.weightBytes) : 0,
     ));
   }
 
@@ -276,7 +294,16 @@ ModelAssessment assessVariants(
   String labelOf(RankedQuant? r) =>
       rows.where((x) => x.variant.id == r?.candidate.id).firstOrNull?.label ?? r?.candidate.id ?? '';
   final String summary;
-  if (arch == null) {
+  final runtimeRows = [for (final r in rows) if (r.fit != null && r.variant.runtime != SherpaRuntime.llamaCpp) r];
+  if (candidates.isEmpty && runtimeRows.isNotEmpty) {
+    final fitting = runtimeRows.where((r) => r.kind == FitBadgeKind.fits).firstOrNull;
+    final tight = runtimeRows.where((r) => r.kind == FitBadgeKind.tight).firstOrNull;
+    summary = fitting != null
+        ? '${fitting.label} fits this device (estimated from its file sizes).'
+        : tight != null
+            ? 'Nothing fits with headroom; ${tight.label} might load, but memory is tight.'
+            : 'No variant of this model fits this device.';
+  } else if (arch == null) {
     summary = rows.any((r) => r.kind != FitBadgeKind.blocked)
         ? "Fit couldn't be checked; sizes are real, the memory estimate is missing."
         : 'Nothing in this repository can run in Sherpa.';

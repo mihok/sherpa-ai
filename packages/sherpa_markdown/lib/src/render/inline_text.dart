@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../parse/md_ast.dart';
 import 'image_view.dart';
+import 'link_recognizer.dart';
 import 'markdown_scope.dart';
 import 'math_view.dart';
 
@@ -159,7 +160,13 @@ final class InlineSpanBuilder {
     TapGestureRecognizer? recognizer;
     if (tappable) {
       final callbacks = scope.callbacks;
-      recognizer = TapGestureRecognizer()..onTap = () => callbacks.linkTap(uri);
+      // Long press goes to the host only when it handles it; otherwise a
+      // long press selects text as anywhere else.
+      recognizer = LinkGestureRecognizer()
+        ..onTap = (() => callbacks.linkTap(uri))
+        ..onLongPress = callbacks.onLinkLongPress == null
+            ? null
+            : () => callbacks.linkLongPress(uri);
       onRecognizer(recognizer);
     }
     return _spans(node.children, linkStyle, recognizer);

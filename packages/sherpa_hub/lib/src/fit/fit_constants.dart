@@ -112,6 +112,32 @@ abstract final class FitConstants {
   /// reading of `tools/mtmd` (R04 §16 says mtmd is UNVERIFIED by probe).
   static const bool mmprojIsAnonymous = true;
 
+  // ---- other runtimes (MLX, LiteRT-LM) --------------------------------------
+
+  /// MLX on top of weights and KV: activations, tokenizer and buffer cache
+  /// (`MlxProviderConfig.overheadBytes`, 384 MB) plus the MLX buffer-cache
+  /// limit (`cacheLimitBytes`, 32 MB), the same figures sherpa_apple_ml's
+  /// load-time admission uses. POLICY, UNVERIFIED on devices.
+  static const int mlxRuntimeOverheadBytes = (384 + 32) * _mib;
+
+  /// MLX caches are 8-bit by default (`MlxKvSettings(kvBits: 8)`, group
+  /// 64): 1 byte per value plus an fp16 scale and bias per 64 values, i.e.
+  /// 1.0625 bytes per value — exactly llama.cpp's q8_0 row size, so the KV
+  /// formula is shared.
+  static const int mlxKvBits = 8;
+
+  /// LiteRT-LM beyond the model file: engine, tokenizer, activations and
+  /// the sampler. POLICY, UNVERIFIED (R07 §1.1 measured 676 MB in total for
+  /// Gemma 4 E2B on the GPU backend).
+  static const int liteRtRuntimeOverheadBytes = 192 * _mib;
+
+  /// On the CPU backend LiteRT-LM writes an XNNPACK weight cache of about
+  /// the model's size into `EngineConfig.cacheDir` and maps it at load
+  /// (sherpa_litert README "Storage": 131 MB for a 143 MB file on the host;
+  /// the litert author says "about the model size"). Counted in full, for
+  /// storage and for memory (packed weights). POLICY.
+  static const double liteRtWeightCacheFraction = 1.0;
+
   // ---- storage --------------------------------------------------------------
 
   /// Keep at least this much free after a download so the OS, the encrypted

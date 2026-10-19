@@ -41,11 +41,42 @@ void main() {
     expect(android.rows.single.canDownload, isFalse);
     const ios = DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib);
     final onIos = assessVariants(d, ios);
-    expect(onIos.rows.single.kind, FitBadgeKind.unknown, reason: 'no GGUF header to size it');
-    expect(onIos.rows.single.needsConfirm, isTrue);
+    expect(onIos.rows.single.kind, FitBadgeKind.fits, reason: 'sized from its files');
+    expect(onIos.rows.single.needsConfirm, isFalse);
+    expect(onIos.rows.single.fit!.breakdown.weightsBytes, 335000000);
+    expect(onIos.rows.single.reason, isNot(contains('header')));
+    expect(onIos.summary, contains('estimated from its file sizes'));
+    expect(fitBreakdown(onIos.rows.single.fit!, runtime: SherpaRuntime.mlx), contains('KV cache (not known yet)'));
+    // With the repo's config.json the KV cache is counted too.
+    final withConfig = assessVariants(d, ios, mlxConfig: const {
+      'model_type': 'qwen3',
+      'num_hidden_layers': 28,
+      'num_attention_heads': 16,
+      'num_key_value_heads': 8,
+      'head_dim': 128,
+      'max_position_embeddings': 40960,
+    });
+    final fit = withConfig.rows.single.fit!;
+    expect(fit.breakdown.kvBytes, greaterThan(0));
+    expect(fit.recommendedMaxContext, isNotNull);
+    expect(fitBreakdown(fit, runtime: SherpaRuntime.mlx), contains('8-bit'));
 
     final gguf = assessVariants(fixtureDetails(llama1b, llama1bFiles), phone12, shape: llama1bShape);
     expect(gguf.summary, startsWith('Q8_0 is the best quality'));
+  });
+
+  test('LiteRT on Android: the file plus its CPU weight cache, for memory and storage', () {
+    const repo = 'litert-community/Gemma3-1B-IT';
+    final d = fixtureDetails(repo, [f('gemma3-1b-it-int4.litertlm', 584 << 20)]);
+    final row = assessVariants(d, phone12).rows.single;
+    expect(row.variant.runtime, SherpaRuntime.litert);
+    expect(row.kind, FitBadgeKind.fits);
+    expect(row.fit!.breakdown.repackBytes, 584 << 20);
+    expect(row.runtimeCacheBytes, 584 << 20);
+    expect(fitBreakdown(row.fit!, runtime: SherpaRuntime.litert), contains('CPU weight cache'));
+    final onIos = assessVariants(d, const DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib)).rows.single;
+    expect(onIos.kind, FitBadgeKind.blocked, reason: 'LiteRT on iOS stays blocked');
+    expect(onIos.reason, 'LiteRT-LM models run on Android only.');
   });
 
   test('breakdown and formatting explain the numbers', () {

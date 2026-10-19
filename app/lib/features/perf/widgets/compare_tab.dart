@@ -291,7 +291,6 @@ class AbResultView extends ConsumerWidget {
     final h = r.headline;
     final w = r.winningConfig;
     final name = r.winner == Winner.a ? 'A' : 'B';
-    final draftWinner = w?.speculative == SpeculativeChoice.draft;
     final colors = (theme.colorScheme.primary, theme.colorScheme.tertiary);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -345,7 +344,7 @@ class AbResultView extends ConsumerWidget {
                   runSpacing: t.space.sm,
                   children: [
                     FilledButton.icon(
-                      onPressed: w == null || draftWinner || busy ? null : () => unawaited(_apply(context, ref, w)),
+                      onPressed: w == null || busy ? null : () => unawaited(_apply(context, ref, w)),
                       icon: const Icon(Icons.check_rounded),
                       label: Text(w == null ? 'Apply winner' : 'Apply $name'),
                     ),
@@ -353,9 +352,9 @@ class AbResultView extends ConsumerWidget {
                       TextButton(onPressed: busy ? null : () => unawaited(c.resetToAuto()), child: const Text('Reset to auto')),
                   ],
                 ),
-                if (draftWinner) ...[
+                if (w?.speculative == SpeculativeChoice.draft) ...[
                   SizedBox(height: t.space.xs),
-                  const LabNote('Chats can’t use a draft model yet, so this winner can’t be applied.'),
+                  const LabNote('Applying it loads the draft model next to this one for every chat.'),
                 ],
               ],
             ),

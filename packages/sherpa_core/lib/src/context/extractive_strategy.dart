@@ -122,10 +122,13 @@ final class ExtractiveContextStrategy implements ContextStrategy {
         if (p is! ToolResultPart || p.isError != errors) continue;
         final line = firstLine(p.text);
         if (line.isEmpty) continue;
-        final tag = Provenance.tool(p.toolName);
+        // A proxied call (`call_tool`) is attributed to the tool that ran,
+        // as the harvested [H] fields are.
+        final ran = SummaryComposer.toolThatRan(p);
+        final tag = Provenance.tool(ran);
         out.add(
           errors
-              ? '$tag ${calls[p.callId] ?? p.toolName} failed: ${clipText(line, 180)}'
+              ? '$tag ${ran != p.toolName ? ran : calls[p.callId] ?? p.toolName} failed: ${clipText(line, 180)}'
               : '$tag ${clipText(line, 220)}',
         );
       }

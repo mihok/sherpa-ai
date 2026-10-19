@@ -498,4 +498,18 @@ void main() {
     await collect(provider.stream(request([user('y')])));
     expect(backend.loads, hasLength(2));
   });
+
+  test('forgetConversation closes a deleted chat\'s native conversation, once', () async {
+    await collect(provider.stream(request([user('x')], session: 's1')));
+    expect(backend.opened, hasLength(1));
+    final conversation = backend.opened.single.conversationId;
+    await provider.forgetConversation('s1');
+    expect(backend.closed, [conversation]);
+    await provider.forgetConversation('s1');
+    await provider.forgetConversation('never-used');
+    expect(backend.closed, [conversation]);
+    // The chat (if it came back) rebuilds instead of reusing a closed one.
+    await collect(provider.stream(request([user('x')], session: 's1')));
+    expect(backend.opened, hasLength(2));
+  });
 }

@@ -168,8 +168,9 @@ final class ModelsRig {
     Map<String, CatalogModelDetails>? details,
     Map<String, ModelShape>? shapes,
     NetworkKind network = NetworkKind.wifi,
+    bool onboarded = true,
   }) async {
-    final app = Harness(ui: UiSettings(themeMode: mode));
+    final app = Harness(ui: UiSettings(themeMode: mode), onboarded: onboarded);
     late ModelsRig rig;
     await tester.runAsync(() async {
       final dir = await Directory.systemTemp.createTemp('sherpa_models_ui_');

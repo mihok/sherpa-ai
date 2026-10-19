@@ -25,6 +25,9 @@
         <exclude domain="file" path="backgroundDownloaderTaskRecords" />
         <exclude domain="file" path="backgroundDownloaderResumeData" />
         <exclude domain="file" path="backgroundDownloaderPausedTasks" />
+        <!-- Photos and PDFs attached in chats (features/chat/attachments):
+             private like the database, which is never backed up either. -->
+        <exclude domain="file" path="attachments" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="sherpa.db" />
@@ -42,5 +45,8 @@
         <exclude domain="file" path="backgroundDownloaderTaskRecords" />
         <exclude domain="file" path="backgroundDownloaderResumeData" />
         <exclude domain="file" path="backgroundDownloaderPausedTasks" />
+        <!-- Photos and PDFs attached in chats (features/chat/attachments):
+             private like the database, which is never backed up either. -->
+        <exclude domain="file" path="attachments" />
     </device-transfer>
 </data-extraction-rules>

@@ -77,22 +77,38 @@ final class ChatStreamParser {
           data: {'sample': Redactor.text(data.length > 200 ? data.substring(0, 200) : data)})];
     }
     if (event.event == 'error' && chunk['error'] == null) throw mapStreamError({'error': chunk}, providerId: providerId);
-    return addChunk(chunk);
+    return addChunk(chunk, rawText: data);
   }
 
-  List<ModelEvent> addChunk(JsonMap chunk) {
+  /// Handles one decoded chunk (or a whole non-streamed completion).
+  /// [rawText] is the JSON text [chunk] was decoded from: tool arguments a
+  /// non-compliant server sends as an object are read from it, so their
+  /// duplicate keys are refused as in string arguments (decoding keeps
+  /// only the last of them). Without it such arguments are re-encoded.
+  List<ModelEvent> addChunk(JsonMap chunk, {String? rawText}) {
     // Any data object with a top-level `error` is a mid-stream failure:
     // llama.cpp `{"error":{...}}` (no [DONE] follows), OpenRouter error
     // chunks (with finish_reason "error"), and the UNVERIFIED OpenAI shape.
     if (chunk['error'] != null) throw mapStreamError(chunk, providerId: providerId);
     final out = <ModelEvent>[];
-    final choices = chunk.maps('choices');
+    final choices = chunk.items('choices') ?? const <Object?>[];
     // n=1 is always requested; other choices are ignored.
-    final choice = choices.where((c) => (c.integer('index') ?? 0) == 0).firstOrNull;
+    JsonMap? choice;
+    var position = 0;
+    for (; position < choices.length; position++) {
+      final c = asJsonMap(choices[position]);
+      if (c != null && (c.integer('index') ?? 0) == 0) {
+        choice = c;
+        break;
+      }
+    }
     if (choice != null) {
       // Some servers put a whole `message` in the last chunk instead of deltas.
-      final delta = choice.child('delta') ?? choice.child('message');
-      if (delta != null) _addDelta(delta, out);
+      final inDelta = choice.child('delta');
+      final delta = inDelta ?? choice.child('message');
+      if (delta != null) {
+        _addDelta(delta, out, rawText: rawText, path: ['choices', position, if (inDelta != null) 'delta' else 'message']);
+      }
       final reason = choice.text('finish_reason');
       if (reason != null) _setFinish(reason);
     }
@@ -116,7 +132,7 @@ final class ChatStreamParser {
     _finish ??= reason;
   }
 
-  void _addDelta(JsonMap d, List<ModelEvent> out) {
+  void _addDelta(JsonMap d, List<ModelEvent> out, {String? rawText, List<Object> path = const []}) {
     // R10 §2: `reasoning_content` (DeepSeek, llama.cpp, LM Studio setting)
     // or `reasoning` (vLLM, Ollama, OpenRouter, LM Studio gpt-oss). Parse
     // both whatever the profile; silent empty reasoning is the failure mode.
@@ -150,7 +166,7 @@ final class ChatStreamParser {
       out.add(TextDelta(refusal));
     }
     if (toolCalls != null && toolCalls.isNotEmpty) {
-      final events = _calls.addChatDeltas(toolCalls);
+      final events = _calls.addChatDeltas(toolCalls, rawEvent: rawText, path: [...path, 'tool_calls']);
       if (events.isNotEmpty) _sawContent = true;
       out.addAll(events);
     }

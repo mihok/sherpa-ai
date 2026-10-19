@@ -9,7 +9,15 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Sherpa uses the camera only to scan a QR code you choose: a handoff to import or a tool server to add.</string>
+	<string>Sherpa uses the camera only when you choose to: to take a photo to attach to a message, or to scan a QR code (a handoff to import or a tool server to add).</string>
+	<!-- Required by image_picker's API even though the photo picker (PHPicker) needs no
+	     library access: Sherpa never reads the library, only the photos you pick. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sherpa listens only while you dictate a message, after you tap the microphone.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Sherpa turns what you dictate into text on this iPhone. Your voice is not sent to Sherpa or to a model.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Sherpa only sees the photos you pick to attach to a message. Location data is removed before anything is sent.</string>
 	<!-- "Add this tool server" links: sherpa://mcp/add?url=… (always confirmed in the app).
 	     The OAuth redirect scheme (io.github.mihok.sherpa) is not listed: ASWebAuthenticationSession
 	     receives it itself. -->

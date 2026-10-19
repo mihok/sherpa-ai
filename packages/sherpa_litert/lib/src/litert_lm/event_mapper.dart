@@ -1,6 +1,5 @@
-import 'dart:convert';
-
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_providers/tool_arguments.dart';
 
 import '../common/errors.dart';
 import '../common/fingerprint.dart';
@@ -14,8 +13,9 @@ import '../messages.pigeon.dart';
 ///   prompted tool format.
 /// * `thought`-channel deltas become [ReasoningDelta]s.
 /// * Native tool calls become start + one argument fragment + complete, with
-///   a fresh id each (LiteRT-LM calls have none) and parsed arguments (always
-///   valid JSON from the engine; repaired otherwise, which forces approval).
+///   a fresh id each (LiteRT-LM calls have none) and arguments parsed by the
+///   strict shared parser (repaired JSON forces approval; duplicate keys and
+///   leaked template tokens are refused).
 /// * `done` becomes [UsageUpdate] + [PerfSample] (BenchmarkInfo and the KV
 ///   token count: `cacheReadTokens` = tokens the conversation already held,
 ///   `inputTokens` = tokens prefilled this turn, so the full prompt is their
@@ -116,19 +116,21 @@ final class LiteRtEventMapper {
     ];
   }
 
+  /// The engine's argument JSON through the strict shared parser
+  /// ([ToolArgumentsRepair], like every other tool-call path): strict JSON
+  /// as is; repaired JSON flagged `repaired` (forces approval of
+  /// non-read-only tools); duplicate keys, leaked chat-template tokens and
+  /// ambiguous unquoted values make the call invalid (never run).
   static ToolCall _parseArguments(String id, String name, String raw) {
-    final t = raw.trim();
-    if (t.isEmpty) return ToolCall(id: id, name: name, arguments: const {}, rawArguments: raw);
-    try {
-      final v = jsonDecode(t);
-      if (v is Map) return ToolCall(id: id, name: name, arguments: v.cast<String, Object?>(), rawArguments: raw);
-      return ToolCall(
-          id: id, name: name, arguments: const {}, rawArguments: raw, argumentsError: 'arguments must be a JSON object');
-    } on FormatException catch (e) {
-      final repaired = JsonRepair.decodeObject(t);
-      if (repaired != null) return ToolCall(id: id, name: name, arguments: repaired, rawArguments: raw, repaired: true);
-      return ToolCall(id: id, name: name, arguments: const {}, rawArguments: raw, argumentsError: 'malformed JSON (${e.message})');
-    }
+    final parsed = ToolArgumentsRepair.parseArguments(raw);
+    return ToolCall(
+      id: id,
+      name: name,
+      arguments: parsed.value ?? const {},
+      rawArguments: raw,
+      argumentsError: parsed.error,
+      repaired: parsed.repaired,
+    );
   }
 
   List<ModelEvent> _track(List<ModelEvent> events) {

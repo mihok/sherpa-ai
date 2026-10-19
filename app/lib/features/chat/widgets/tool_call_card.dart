@@ -9,6 +9,7 @@ import '../state/chat_dependencies.dart';
 import '../state/transcript_model.dart';
 import 'chat_style.dart';
 import 'json_view.dart';
+import 'mcp_app_block.dart';
 
 /// Status pill for a tool call: icon + label, never color alone.
 class ToolStatusChip extends StatelessWidget {
@@ -293,6 +294,27 @@ class _ToolCallCardState extends ConsumerState<ToolCallCard> {
   }
 }
 
+/// A tool result as the card shows it (text, else structured JSON): the
+/// stand-in for an MCP App view that can't be shown.
+class ToolResultFallback extends ConsumerWidget {
+  const ToolResultFallback({super.key, required this.result});
+
+  final ToolResultPart result;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    Future<void> copy(String text) => ref.read(chatPlatformProvider).copyText(text);
+    final text = result.text;
+    if (text.trim().isNotEmpty) return _ResultText(text: text, onCopy: copy);
+    final structured = result.structured;
+    if (structured != null) return JsonPreview(value: structured, onCopy: copy, copyLabel: 'Copy result');
+    return Text(
+      'No text was returned with this content.',
+      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+    );
+  }
+}
+
 /// Arguments as they stream: the tail of the raw JSON, monospace.
 class _DraftArgs extends StatelessWidget {
   const _DraftArgs({required this.text});
@@ -414,12 +436,19 @@ class _ToolGroupViewState extends ConsumerState<ToolGroupView> {
     final calls = widget.calls;
     if (calls.length == 1) {
       final c = calls.single;
-      return ToolCallCard(
-        key: ValueKey('tool:${c.id}'),
-        sessionId: widget.sessionId,
-        callId: c.id,
-        toolName: c.name,
-        arguments: c.arguments,
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ToolCallCard(
+            key: ValueKey('tool:${c.id}'),
+            sessionId: widget.sessionId,
+            callId: c.id,
+            toolName: c.name,
+            arguments: c.arguments,
+          ),
+          ToolAppView(key: ValueKey('app:${c.id}'), sessionId: widget.sessionId, call: c),
+        ],
       );
     }
     final (active, failed, denied) = ref.watch(chatControllerProvider(widget.sessionId).select((s) {
@@ -510,6 +539,9 @@ class _ToolGroupViewState extends ConsumerState<ToolGroupView> {
                 )
               : const SizedBox(width: double.infinity),
         ),
+        // Views stay visible when the group is collapsed: they are part of
+        // the answer.
+        for (final c in calls) ToolAppView(key: ValueKey('app:${c.id}'), sessionId: widget.sessionId, call: c),
       ],
     );
   }

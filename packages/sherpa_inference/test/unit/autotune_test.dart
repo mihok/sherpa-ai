@@ -150,6 +150,117 @@ void main() {
     });
   });
 
+  group('overrides before a sweep, speculative mode and progress', () {
+    late FakeEngineHost host;
+    late InMemoryKeyValueStore store;
+    const model = ModelRef(1, 0);
+
+    setUp(() {
+      host = FakeEngineHost(bench: _deviceModel);
+      store = InMemoryKeyValueStore();
+    });
+
+    test('overrides apply on top of the defaults before anything is measured', () async {
+      final tuner = Autotuner(host: host, store: store, environment: _env);
+      expect(await tuner.cached('qwen'), isNull, reason: 'neither measured nor overridden');
+      await tuner.setOverrides('qwen', const AutotuneOverrides(nThreads: 2, speculative: SpeculativeMode.ngram));
+      final p = (await tuner.cached('qwen'))!;
+      expect(p.source, AutotuneSource.override);
+      expect(p.environmentKey, _env.key('qwen'));
+      expect(p.candidate, tuner.defaults.copyWith(nThreads: 2, speculative: SpeculativeMode.ngram));
+      expect(p.samples, isEmpty);
+      expect(p.measuredAt, isNull);
+      expect(await tuner.isTuned('qwen'), isFalse, reason: 'overrides do not replace the sweep');
+      expect(await tuner.measured('qwen'), isNull);
+
+      // The first-use sweep still runs, and the overrides win over it.
+      final tuned = await tuner.profileFor(model: model, modelKey: 'qwen');
+      expect(host.benches, isNotEmpty);
+      expect(tuned.source, AutotuneSource.override);
+      expect(tuned.candidate.nThreads, 2);
+      expect(tuned.candidate.nBatch, 256, reason: 'measured where not overridden');
+      expect(tuned.candidate.speculative, SpeculativeMode.ngram);
+      expect(await tuner.isTuned('qwen'), isTrue);
+      expect((await tuner.measured('qwen'))!.candidate.speculative, isNull, reason: 'the stored profile is the measurement');
+    });
+
+    test('speculative mode and draft model in candidates and overrides: JSON, apply, compatibility', () {
+      const draft = TuningCandidate(nThreads: 4, typeK: KvType.q8_0, typeV: KvType.q8_0, speculative: SpeculativeMode.draft, draftModelId: 'qwen-0.5b');
+      expect(TuningCandidate.fromJson(draft.toJson()), draft);
+      expect(draft.toString(), endsWith('spec:draft(qwen-0.5b)'));
+      const plain = TuningCandidate(nThreads: 4);
+      expect(plain.toJson().containsKey('speculative'), isFalse, reason: 'older readers see the old shape');
+      expect(TuningCandidate.fromJson(const {'nThreads': 4, 'nBatch': 512, 'nUbatch': 256}).speculative, isNull);
+      expect(TuningCandidate.fromJson(const {'nThreads': 4, 'speculative': 'from_the_future'}).speculative, isNull);
+      expect(plain == plain.copyWith(speculative: SpeculativeMode.none), isFalse);
+
+      // Null leaves the session's own mode; a set mode replaces it.
+      const ngramSession = SessionConfig(speculative: SpeculativeMode.ngram);
+      expect(plain.applyTo(ngramSession).speculative, SpeculativeMode.ngram);
+      expect(plain.copyWith(speculative: SpeculativeMode.none).applyTo(ngramSession).speculative, SpeculativeMode.none);
+      expect(draft.applyTo(const SessionConfig()).speculative, SpeculativeMode.draft);
+
+      const o = AutotuneOverrides(speculative: SpeculativeMode.draft, draftModelId: 'qwen-0.5b');
+      expect(o.isEmpty, isFalse);
+      expect(const AutotuneOverrides(draftModelId: 'x').isEmpty, isFalse);
+      expect(AutotuneOverrides.fromJson(o.toJson()).toJson(), o.toJson());
+      expect(o.apply(plain), plain.copyWith(speculative: SpeculativeMode.draft, draftModelId: 'qwen-0.5b'));
+      expect(o.copyWith(nThreads: 3).nThreads, 3);
+      expect(o.copyWith(clearDraftModelId: true).draftModelId, isNull);
+      expect(o.copyWith(speculative: SpeculativeMode.ngram).speculative, SpeculativeMode.ngram);
+      // Overrides stored by an older app still read.
+      expect(AutotuneOverrides.fromJson(const {'nThreads': 2}).speculative, isNull);
+    });
+
+    test('progress reports every candidate the sweep considers', () async {
+      final failing = FakeEngineHost(bench: (c) {
+        if (c.flashAttention == FlashAttention.off) throw const EngineException(-1, 'not with this V type');
+        return _deviceModel(c);
+      });
+      // (f16, auto) is the stage-2 winner itself: measured already.
+      final tuner = Autotuner(
+        host: failing,
+        store: store,
+        environment: _env,
+        sweep: AutotuneSweep(threads: const [1, 2, 3, 4, 5, 6], kvVariants: const [
+          (KvType.f16, FlashAttention.auto),
+          (KvType.f16, FlashAttention.off),
+          (KvType.q8_0, FlashAttention.on),
+        ]),
+      );
+      final progress = <AutotuneProgress>[];
+      final samples = <TuningCandidate>[];
+      await tuner.profileFor(
+        model: model,
+        modelKey: 'qwen',
+        fits: (c) async => c.nBatch != 128,
+        onSample: (c, _) => samples.add(c),
+        onProgress: progress.add,
+      );
+      expect(tuner.sweepSize, 6 + 3 + 3);
+      expect(progress.first.done, 0);
+      expect(progress.first.candidate, isNull);
+      expect([for (final p in progress) p.done], [for (var i = 0; i <= tuner.sweepSize; i++) i]);
+      expect(progress.last.isDone, isTrue);
+      expect(progress.last.fraction, 1);
+      final steps = [for (final p in progress.skip(1)) p.step];
+      expect(steps.where((s) => s == AutotuneStep.measured), hasLength(samples.length));
+      expect(steps, containsAll([AutotuneStep.repeated, AutotuneStep.doesNotFit, AutotuneStep.unsupported]));
+      for (final p in progress.skip(1)) {
+        expect(p.result != null, p.step == AutotuneStep.measured);
+        expect(p.total, tuner.sweepSize);
+      }
+    });
+
+    test('a stored profile reports no progress', () async {
+      final tuner = Autotuner(host: host, store: store, environment: _env);
+      await tuner.profileFor(model: model, modelKey: 'qwen');
+      final progress = <AutotuneProgress>[];
+      await tuner.profileFor(model: model, modelKey: 'qwen', onProgress: progress.add);
+      expect(progress, isEmpty);
+    });
+  });
+
   test('AutotuneSweep.forCores caps at 8 threads', () {
     expect(AutotuneSweep.forCores(12).threads, [1, 2, 3, 4, 5, 6, 7, 8]);
     expect(AutotuneSweep.forCores(0).threads, [1]);

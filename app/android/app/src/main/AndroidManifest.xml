@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Dictation in the composer (asked on first use; on-device recognition preferred). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <application
         android:label="Sherpa"
         android:enableOnBackInvokedCallback="true"
@@ -77,6 +79,11 @@
              the browser app, never an in-app WebView). -->
         <intent>
             <action android:name="android.support.customtabs.action.CustomTabsService"/>
+        </intent>
+        <!-- Android 11+ package visibility: lets speech_to_text find the system
+             speech recognizer for dictation. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
         </intent>
     </queries>
 </manifest>

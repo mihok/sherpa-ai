@@ -10,16 +10,26 @@ import 'format.dart';
 ///
 /// Every component the fit engine adds up, so a verdict is never a bare
 /// "Won't fit" (R12 §2: show why, never fail silently).
-String fitBreakdown(FitResult f, {FitOptions options = const FitOptions()}) {
+///
+/// [runtime] names what differs for MLX (8-bit KV, no separate buffers) and
+/// LiteRT-LM (the CPU weight cache; KV not known before the engine reads
+/// the file).
+String fitBreakdown(FitResult f, {FitOptions options = const FitOptions(), SherpaRuntime runtime = SherpaRuntime.llamaCpp}) {
   final b = f.breakdown;
+  final llama = runtime == SherpaRuntime.llamaCpp;
+  final kvKnown = b.kvBytes > 0 || f.kv.bytesPerFullCell > 0 || llama;
+  final kvType = runtime == SherpaRuntime.mlx ? '8-bit' : options.typeK.name;
   final parts = <String>[
     'Weights ${formatBytes(b.weightsBytes)}',
     if (b.mmprojBytes > 0) 'vision projector ${formatBytes(b.mmprojBytes)}',
     if (b.draftBytes > 0) 'draft ${formatBytes(b.draftBytes)}',
-    'KV cache ${formatBytes(b.kvBytes)} (${formatContext(f.contextLength)} context, ${options.typeK.name})',
-    'buffers ${formatBytes(b.computeBytes)}',
+    if (kvKnown)
+      'KV cache ${formatBytes(b.kvBytes)} (${formatContext(f.contextLength)} context, $kvType)'
+    else
+      'KV cache (not known yet)',
+    if (llama || b.computeBytes > 0) 'buffers ${formatBytes(b.computeBytes)}',
     'runtime ${formatBytes(b.runtimeOverheadBytes)}',
-    if (b.repackBytes > 0) 'repacking ${formatBytes(b.repackBytes)}',
+    if (b.repackBytes > 0) '${runtime == SherpaRuntime.litert ? 'CPU weight cache' : 'repacking'} ${formatBytes(b.repackBytes)}',
     if (b.appOverheadBytes > 0) 'app ${formatBytes(b.appOverheadBytes)}',
   ];
   final avail = '~${formatBytes(f.budgetBytes)} available${f.budgetEstimated ? ' (estimated from total RAM)' : ''}';
@@ -77,7 +87,7 @@ class _RiskSheet extends StatelessWidget {
             if (fit != null) ...[
               SizedBox(height: t.space.md),
               Text(
-                fitBreakdown(fit),
+                fitBreakdown(fit, runtime: row.variant.runtime),
                 style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
             ],

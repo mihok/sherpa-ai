@@ -229,6 +229,44 @@ final class ModelArchitecture {
     );
   }
 
+  /// Reads the shape from an MLX / transformers `config.json` (multimodal
+  /// checkpoints nest the language model under `text_config`), or returns
+  /// null when it lacks the layer count or head geometry.
+  ///
+  /// Per-layer details GGUF headers carry (sliding windows, hybrid layers,
+  /// shared KV) are not modelled: every layer is counted as full
+  /// attention, which over-estimates KV for those models and errs safe.
+  static ModelArchitecture? fromMlxConfig(Map<String, Object?> config) {
+    final nested = config['text_config'];
+    final c = nested is Map ? {...config, ...nested.cast<String, Object?>()} : config;
+    int? intOf(String k) => c[k] is num ? (c[k]! as num).toInt() : null;
+    final layers = intOf('num_hidden_layers') ?? intOf('n_layers') ?? intOf('num_layers');
+    final heads = intOf('num_attention_heads') ?? intOf('n_heads');
+    final kvHeads = intOf('num_key_value_heads') ?? intOf('n_kv_heads') ?? heads;
+    final hidden = intOf('hidden_size') ?? intOf('d_model');
+    final headDim = intOf('head_dim') ?? (heads != null && heads > 0 && hidden != null ? hidden ~/ heads : null);
+    if (layers == null || layers <= 0 || kvHeads == null || kvHeads <= 0 || headDim == null || headDim <= 0) return null;
+    final experts = intOf('num_local_experts') ?? intOf('num_experts') ?? intOf('n_routed_experts');
+    final window = intOf('sliding_window');
+    return ModelArchitecture(
+      layerCount: layers,
+      kvHeadsPerLayer: List.filled(layers, kvHeads),
+      keyLength: headDim,
+      valueLength: headDim,
+      trainContextLength: intOf('max_position_embeddings'),
+      embeddingLength: hidden,
+      feedForwardLength: intOf('intermediate_size'),
+      vocabSize: intOf('vocab_size'),
+      headCount: heads,
+      expertCount: experts,
+      expertUsedCount: intOf('num_experts_per_tok'),
+      architecture: c['model_type'] is String ? c['model_type']! as String : null,
+      notes: [
+        if (window != null && window > 0) 'sliding-window layers counted as full attention (over-estimates KV)',
+      ],
+    );
+  }
+
   JsonMap toJson() => compact({
         'layerCount': layerCount,
         'kvHeadsPerLayer': kvHeadsPerLayer,

@@ -6,14 +6,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show KeepAliveLink;
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
+import 'package:sherpa_webview/sherpa_webview.dart' show McpAppModelContext;
 
 import '../../../services/inference/local_model_provider.dart' show kLocalProviderName;
 import '../../../services/mcp/composer_sources.dart';
 import '../../../state/providers.dart';
 import '../../../state/services.dart';
 import '../../../state/ui_preferences.dart';
+import '../../apps/state/apps_providers.dart';
 import '../../context/state/context_actions.dart';
 import '../../mcp/state/mcp_providers.dart';
+import '../attachments/attachment_policy.dart';
+import '../attachments/attachment_store.dart';
+import '../attachments/composer_attachments.dart';
+import '../attachments/inlining_provider.dart';
 import 'chat_dependencies.dart';
 import 'chat_errors.dart';
 import 'chat_view_state.dart';
@@ -124,6 +130,13 @@ class ChatController extends Notifier<ChatViewState> {
   /// reconciliation).
   bool get isRunning => _runActive;
 
+  /// The chat's approval UI as an [ApprovalHandler]: the agent loop asks
+  /// through it, and so do MCP App views of this chat for the tool calls
+  /// they make themselves (their call ids start with
+  /// [PendingApproval.appCallPrefix]; the card says "Requested by an
+  /// app"). Ending or stopping a run never answers an app's request.
+  UiApprovalHandler get approvalHandler => _approvals;
+
   @override
   ChatViewState build() {
     // Services are app-lifetime singletons. They are read, not watched, so a
@@ -166,24 +179,131 @@ class ChatController extends Notifier<ChatViewState> {
   /// [mentions] (MCP resources picked with `@`) are resolved after that and
   /// attached to the message: the text of a small one is embedded, others
   /// are linked. The agent loop counts either as untrusted content.
-  Future<void> send(String text, {List<McpResourceSuggestion> mentions = const []}) async {
+  ///
+  /// [attachments] from the composer go first (photos are stored as files
+  /// and sent as images; text files and PDFs as resources). Context that
+  /// MCP App views set for the model since the last user turn rides along
+  /// as untrusted app data ([McpAppModelContexts]).
+  Future<void> send(
+    String text, {
+    List<McpResourceSuggestion> mentions = const [],
+    List<ComposerAttachment> attachments = const [],
+  }) async {
     final trimmed = text.trim();
-    if ((trimmed.isEmpty && mentions.isEmpty) || _runActive) return;
+    if ((trimmed.isEmpty && mentions.isEmpty && attachments.isEmpty) || _runActive) return;
     unawaited(_platform.haptic(ChatHaptic.send));
     await _launch(
       anchorAt: state.items.length,
-      pendingUser: trimmed.isEmpty ? mentions.map((m) => '@${m.mention}').join(' ') : trimmed,
+      pendingUser: trimmed.isNotEmpty
+          ? trimmed
+          : [for (final a in attachments) a.name, for (final m in mentions) '@${m.mention}'].join(' '),
       userTurn: true,
       open: (runner) async {
+        final files = await attachmentParts(
+          attachments,
+          sessionId: sessionId,
+          store: ref.read(chatAttachmentStoreProvider),
+        );
         final attached = await _resolveMentions(mentions);
+        final app = _takeAppContexts();
         return runner.send(
           sessionId,
-          [if (trimmed.isNotEmpty) TextPart(trimmed), ...attached.parts],
-          metadata: attached.metadata,
+          [...files.parts, if (trimmed.isNotEmpty) TextPart(trimmed), ...attached.parts, ...app.parts],
+          metadata: _mergeMetadata(attached.metadata, app.listed, files.listed),
         );
       },
-      again: () => send(trimmed, mentions: mentions),
+      again: () => send(trimmed, mentions: mentions, attachments: attachments),
     );
+  }
+
+  /// Sends a message an MCP App view proposed and the user confirmed
+  /// (`ui/message`), then runs the agent as for [send]. The message is
+  /// stored as the user's but attributed: "Sent by [from]" in the bubble
+  /// ([kMcpAppMessageKey]), and flagged untrusted for the agent loop (an
+  /// untrusted server's view wrote it). While a run is active it waits for
+  /// the run to end rather than being dropped.
+  Future<void> sendAppMessage(String text, {required String from}) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    await _loaded;
+    // Another queued message may start first when a run ends: wait again.
+    do {
+      await _whenIdle();
+      if (_disposed) return;
+    } while (_runActive);
+    unawaited(_platform.haptic(ChatHaptic.send));
+    await _launch(
+      anchorAt: state.items.length,
+      pendingUser: trimmed,
+      userTurn: true,
+      open: (runner) async {
+        final app = _takeAppContexts();
+        return runner.send(
+          sessionId,
+          [TextPart(trimmed), ...app.parts],
+          metadata: {
+            kMcpAppMessageKey: {'label': from},
+            UntrustedData.messageMetadataKey: true,
+            ..._mergeMetadata(const {}, app.listed, const []),
+          },
+        );
+      },
+      again: () => sendAppMessage(trimmed, from: from),
+    );
+  }
+
+  /// Completes once no run (or context rewrite) is active.
+  Future<void> _whenIdle() async {
+    while (_runActive && !_disposed) {
+      final done = _runDone;
+      if (done != null && !done.isCompleted) {
+        await done.future;
+      } else {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+  }
+
+  /// The model context MCP App views of this chat set since the last user
+  /// turn (taken, so each is sent once), as untrusted resources the agent
+  /// loop counts as tainted content, plus their [kMcpResourcesKey] entries.
+  ({List<ContentPart> parts, List<JsonMap> listed}) _takeAppContexts() {
+    List<McpAppModelContext> contexts;
+    try {
+      contexts = ref.read(mcpAppModelContextsProvider).take(sessionId);
+    } on Object catch (e) {
+      debugPrint('chat[$sessionId] (app context): $e');
+      return (parts: const [], listed: const []);
+    }
+    final parts = <ContentPart>[];
+    final listed = <JsonMap>[];
+    for (final (i, c) in contexts.indexed) {
+      final hasText = c.content.any((b) => b['type'] == 'text' && b['text'] is String && (b['text']! as String).trim().isNotEmpty);
+      if (!hasText) continue;
+      final id = c.identity;
+      final uri = Uri(scheme: 'mcp-app-context', path: '${id.serverId}/$i/${id.label}').toString();
+      parts.add(EmbeddedResourcePart(uri: uri, mimeType: 'text/plain', text: McpAppModelContexts.render(c)));
+      listed.add({
+        'uri': uri,
+        'serverId': id.serverId,
+        'serverName': id.serverName,
+        'name': 'Context from ${id.appName == null || id.appName!.isEmpty ? 'an app' : id.appName}',
+      });
+    }
+    return (parts: parts, listed: listed);
+  }
+
+  /// [base] (mention metadata) with app contexts added to its resource list
+  /// and the [kMessageAttachmentsKey] list.
+  static JsonMap _mergeMetadata(JsonMap base, List<JsonMap> appContexts, List<JsonMap> attachments) {
+    if (appContexts.isEmpty && attachments.isEmpty) return base;
+    final resources = base[kMcpResourcesKey];
+    return {
+      ...base,
+      if (appContexts.isNotEmpty || resources != null)
+        kMcpResourcesKey: [if (resources is List) ...resources, ...appContexts],
+      if (attachments.isNotEmpty) kMessageAttachmentsKey: attachments,
+    };
   }
 
   /// Sends what an MCP prompt (a slash command) expanded to. Every message
@@ -215,10 +335,11 @@ class ChatController extends Notifier<ChatViewState> {
       open: (runner) async {
         await _appendPromptMessages(prompt, messages.sublist(0, messages.length - 1));
         final attached = await _resolveMentions(mentions);
+        final app = _takeAppContexts();
         return runner.send(
           sessionId,
-          [...last.content, ...attached.parts],
-          metadata: {..._promptMetadata(prompt, last), ...attached.metadata},
+          [...last.content, ...attached.parts, ...app.parts],
+          metadata: _mergeMetadata({..._promptMetadata(prompt, last), ...attached.metadata}, app.listed, const []),
         );
       },
       again: () => sendPrompt(prompt, mentions: mentions),
@@ -284,8 +405,12 @@ class ChatController extends Notifier<ChatViewState> {
     if (!_runActive) return;
     _stopping = true;
     _runner?.cancel('stopped by user');
-    _approvals.denyAll();
+    _denyRunApprovals();
   }
+
+  /// Denies the run's pending approvals; requests from MCP App views keep
+  /// waiting for the user (they are not part of the run).
+  void _denyRunApprovals() => _approvals.denyWhere((r) => !r.isFromApp);
 
   /// Answers the approval card currently shown.
   void respondToApproval(ApprovalResponse response) {
@@ -370,7 +495,7 @@ class ChatController extends Notifier<ChatViewState> {
       keepBefore: userMessageId,
       pendingUser: trimmed,
       userTurn: true,
-      open: (runner) => runner.edit(sessionId, userMessageId, [TextPart(trimmed)]),
+      open: (runner) => runner.edit(sessionId, userMessageId, [TextPart(trimmed), ..._takeAppContexts().parts]),
       again: () => edit(userMessageId, trimmed),
     );
   }
@@ -809,17 +934,33 @@ class ChatController extends Notifier<ChatViewState> {
     if (_disposed) return;
     _commit(state.copyWith(availability: availability, model: selection));
 
-    if (availability != ProviderAvailability.ready) return;
+    if (availability != ProviderAvailability.ready) {
+      _commit(state.copyWith(attachmentPolicy: AttachmentPolicy.textOnly));
+      return;
+    }
+    unawaited(_quiet(() => _refreshAttachmentPolicy(choice!)));
     try {
       final models = await _registry.models(choice.providerId);
       final d = models.where((m) => m.id == choice!.modelId).firstOrNull;
       final current = state.model;
       if (d != null && !_disposed && current != null && current.modelId == d.id) {
         _commit(state.copyWith(model: current.copyWith(modelName: d.displayName)));
+        if (d.displayName != selection.modelName) unawaited(_quiet(() => _refreshAttachmentPolicy(choice!)));
       }
     } on Object {
       // Listing can fail offline; the raw model id is a fine label.
     }
+  }
+
+  /// What the model accepts as attachments: vision from its capabilities,
+  /// documents and image size from its provider.
+  Future<void> _refreshAttachmentPolicy(ModelChoice choice) async {
+    final provider = await _registry.resolve(choice.providerId);
+    final caps = await provider.capabilities(choice.modelId);
+    final model = state.model;
+    if (_disposed || model == null || model.choice != choice) return;
+    final policy = AttachmentPolicy.forModel(modelName: model.modelName, provider: provider.info, capabilities: caps);
+    if (policy != state.attachmentPolicy) _commit(state.copyWith(attachmentPolicy: policy));
   }
 
   /// How many models the on-device provider offers (0 when it isn't wired).
@@ -885,7 +1026,9 @@ class ChatController extends Notifier<ChatViewState> {
     final extras = ref.read(chatContextExtrasProvider)(provider, choice, base);
     final runner = AgentRunner(
       store: _store,
-      provider: provider,
+      // Attached photos and PDFs are stored as files; this reads them into
+      // each request (providers do no file IO).
+      provider: AttachmentInliningProvider(provider, ref.read(chatAttachmentStoreProvider)),
       modelId: choice.modelId,
       tools: _router,
       approvals: ref.read(approvalPolicyProvider),
@@ -995,7 +1138,8 @@ class ChatController extends Notifier<ChatViewState> {
       error: null,
       notices: const [],
       interrupted: null,
-      pendingApproval: null,
+      // An MCP App's request may already be waiting; the run's come later.
+      pendingApproval: _approvals.current,
       pendingUserText: _pendingUser,
       items: items,
       historyCount: math.min(state.historyCount, math.min(anchorAt, items.length)),
@@ -1122,7 +1266,7 @@ class ChatController extends Notifier<ChatViewState> {
     if (_finishing) return;
     _finishing = true;
     _draft?.finish(_clock.now());
-    _approvals.denyAll();
+    _denyRunApprovals();
     for (final p in _touchedParents) {
       _siblings.remove(p);
     }
@@ -1178,7 +1322,8 @@ class ChatController extends Notifier<ChatViewState> {
       lastOutcome: e.outcome,
       error: error,
       notices: notices,
-      pendingApproval: null,
+      // The run's own requests were denied; an app's may still wait.
+      pendingApproval: _approvals.current,
       pendingUserText: null,
       draft: null,
       items: items,
@@ -1209,16 +1354,20 @@ class ChatController extends Notifier<ChatViewState> {
   void _onApprovalChanged(PendingApproval? pending) {
     if (_disposed) return;
     if (pending != null) {
-      _liveTools[pending.call.id] = _toolView(pending.call, ToolRunStatus.awaitingApproval, def: pending.tool);
-      _invalidateTools();
+      // An app's own call is not in the transcript: no tool card to update.
+      if (!pending.isFromApp) {
+        _liveTools[pending.call.id] = _toolView(pending.call, ToolRunStatus.awaitingApproval, def: pending.tool);
+        _invalidateTools();
+      }
       unawaited(_platform.haptic(ChatHaptic.approvalRequested));
     }
-    _flush(base: state.copyWith(
-      pendingApproval: pending,
-      status: pending != null
-          ? ChatRunStatus.awaitingApproval
-          : (_runActive && !_finishing && !_stopping ? ChatRunStatus.runningTools : state.status),
-    ));
+    final running = _runActive && !_finishing && !_stopping;
+    // An app's request neither starts nor pauses a run: the composer stays
+    // usable while it waits.
+    final status = pending != null && !pending.isFromApp
+        ? ChatRunStatus.awaitingApproval
+        : (running && state.status == ChatRunStatus.awaitingApproval ? ChatRunStatus.runningTools : state.status);
+    _flush(base: state.copyWith(pendingApproval: pending, status: status));
   }
 
   // ---------------------------------------------------------------------------

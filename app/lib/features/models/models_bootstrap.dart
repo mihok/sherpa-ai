@@ -14,6 +14,7 @@ import '../../services/downloads/downloads.dart';
 import '../../services/inference/local_engine_host.dart';
 import '../../services/inference/local_inference.dart';
 import '../../services/inference/local_provider_registry.dart';
+import '../../services/inference/platform_models.dart' show PlatformModelsConfig;
 import '../../services/inference/runner_extras.dart';
 import '../../state/providers.dart';
 import '../../state/services.dart';
@@ -22,6 +23,7 @@ import '../chat/state/chat_dependencies.dart';
 import 'state/local_inference_providers.dart';
 import 'state/local_model_choice.dart';
 import 'state/models_providers.dart';
+import 'state/platform_models_providers.dart';
 
 /// `ProviderScope` overrides that wire the on-device model feature
 /// (library, downloads, Hub browser). Spread into `bootstrap()`'s list:
@@ -74,28 +76,42 @@ Future<List<Override>> inMemoryModelFeatureOverrides({TransferBackend? transfers
 /// ...await localInferenceOverrides(registry: registry),
 /// ```
 ///
-/// - `providerRegistryProvider`: [registry] decorated with the built-in
-///   `local` provider ([LocalProviderRegistry]).
+/// - `providerRegistryProvider`: [registry] decorated with the on-device
+///   providers ([LocalProviderRegistry]): `local` (llama.cpp) and the
+///   platform ones — `mlx` and `apple_fm` on iOS, `litert_lm` and
+///   `gemini_nano` on Android — each built on first use.
 /// - `localInferenceConfigProvider`: where the engine keeps its files
 ///   ([LocalInferenceConfig.platformDefault] unless [config] is given); the
 ///   engine starts 2 s after the first frame, never during launch.
-/// - `useLocalModelInChatProvider`: "Use in chat" opens a chat on the model.
+/// - `platformModelsConfigProvider`: how the platform providers are built
+///   ([platform]; defaults to this device's platform and the real plugins).
+/// - `useLocalModelInChatProvider`: "Use in chat" opens a chat on the model
+///   (its format picks the provider: GGUF → `local`, MLX → `mlx`, LiteRT →
+///   `litert_lm`).
 /// - `chatRunnerExtrasProvider`: runners on the local provider count tokens
-///   exactly ([localChatRunnerExtras]).
+///   exactly, and on-device chats summarize with their own model
+///   ([localChatRunnerExtras]).
+///
+/// A deleted chat's on-device state is forgotten through
+/// `onDeviceSessionDeletedHooksProvider`, which the app adds to
+/// `sessionDeletedHooksProvider` next to MCP's hooks (one override of that
+/// provider exists, so it is composed where MCP overrides it).
 ///
 /// Needs the model feature's overrides ([modelFeatureOverrides]) and, for
-/// real memory signals, `memoryMonitorProvider`.
+/// real memory and thermal signals, `memoryMonitorProvider`.
 Future<List<Override>> localInferenceOverrides({
   required ProviderRegistry registry,
   LocalInferenceConfig? config,
+  PlatformModelsConfig platform = const PlatformModelsConfig(),
 }) async {
   final c = config ?? await LocalInferenceConfig.platformDefault();
   return [
     localInferenceConfigProvider.overrideWithValue(c),
+    platformModelsConfigProvider.overrideWithValue(platform),
     providerRegistryProvider.overrideWith((ref) {
       final local = ref.watch(localInferenceProvider);
       if (local == null) return registry;
-      final decorated = LocalProviderRegistry(registry, local);
+      final decorated = LocalProviderRegistry(registry, local, platform: ref.watch(platformModelProvidersProvider));
       ref.onDispose(decorated.dispose);
       return decorated;
     }),
@@ -118,8 +134,13 @@ RunnerExtras localChatRunnerExtras(ModelProvider provider, ModelChoice choice, C
 Future<List<Override>> inMemoryLocalInferenceOverrides({
   required ProviderRegistry registry,
   EngineHostFactory hostFactory = createLocalEngineHost,
+  PlatformModelsConfig platform = const PlatformModelsConfig(),
 }) async =>
-    localInferenceOverrides(registry: registry, config: await LocalInferenceConfig.temporary(hostFactory: hostFactory));
+    localInferenceOverrides(
+      registry: registry,
+      config: await LocalInferenceConfig.temporary(hostFactory: hostFactory),
+      platform: platform,
+    );
 
 /// "Use in chat": opens the newest still-empty chat on [choice] (so
 /// tapping twice doesn't pile up empty chats), or starts one, and shows it.

@@ -87,6 +87,11 @@ typedef _Measured = ({
 /// asks the model to copy a list, which is what n-gram drafting is for:
 /// the agent case of repeating arguments and file content). A draft model
 /// is loaded next to the main one for its runs and freed after each.
+///
+/// **Applied settings live in the lifecycle.** "Apply" pins a config as the
+/// autotuner's overrides ([AutotuneOverrides], speculative mode and draft
+/// model included); the lifecycle loads the model with them from the next
+/// message, whether or not autotune has measured it yet.
 final class PerfLab {
   PerfLab({
     required this.local,
@@ -188,6 +193,7 @@ final class PerfLab {
     final e = await _engine();
     final spec = _specFor(e, modelId);
     final tuner = e.lifecycle.autotuner;
+    await _migrateSpeculative(e, modelId);
     final memory = await _sample();
     final (:budget, :addedBack) = await _budget(e);
     final device = await _readDevice();
@@ -209,8 +215,7 @@ final class PerfLab {
       profile: profile,
       defaults: tuner?.defaults ?? const TuningCandidate(nThreads: 0),
       overrides: overrides,
-      speculative: local.speculativeFor(modelId),
-      current: await _current(e, spec),
+      current: await _current(e, spec, overrides),
       budget: budget,
       addedBackBytes: addedBack,
       toolCalling: spec.toolCalling,
@@ -237,7 +242,7 @@ final class PerfLab {
     );
   }
 
-  Future<CurrentSettings> _current(_Engine e, LocalModelSpec spec) async {
+  Future<CurrentSettings> _current(_Engine e, LocalModelSpec spec, [AutotuneOverrides? overrides]) async {
     if (_isWarm(e, spec.id)) {
       final l = e.lifecycle.loaded!;
       final info = l.sessionInfo;
@@ -248,6 +253,7 @@ final class PerfLab {
       } on Object {
         live = null;
       }
+      final draftPath = l.loadOptions.draftModelPath;
       return CurrentSettings(
         config: LabConfig(
           nThreads: c.nThreads > 0 ? c.nThreads : info.nThreads,
@@ -256,6 +262,9 @@ final class PerfLab {
           kv: KvType.byLabel(info.typeK),
           flashAttention: c.flashAttention,
           speculative: SpeculativeChoice.of(c.speculative),
+          draftModelId: c.speculative != SpeculativeMode.draft || draftPath == null
+              ? null
+              : drafts(spec.id).where((d) => d.path == draftPath).firstOrNull?.modelId,
         ),
         contextTokens: info.nCtx,
         loaded: true,
@@ -266,8 +275,10 @@ final class PerfLab {
     }
     final plan = await e.lifecycle.plan(spec.id);
     final cfg = plan.config ?? spec.sessionDefaults.copyWith(nCtx: spec.preferredContext);
+    final o = overrides ?? await e.lifecycle.autotuner?.overrides(spec.id);
+    final draftId = o?.speculative == SpeculativeMode.draft ? o?.draftModelId ?? pairedDraftId(spec.id) : null;
     return CurrentSettings(
-      config: LabConfig.fromSession(cfg),
+      config: LabConfig.fromSession(cfg, draftModelId: draftId ?? (spec.draftModelPath == null ? null : pairedDraftId(spec.id))),
       contextTokens: cfg.nCtx,
       loaded: false,
       flashAttentionOn: plan.estimate?.flashAttention,
@@ -300,7 +311,7 @@ final class PerfLab {
   }
 
   /// The [DraftOption.modelId] of a model's own paired draft file.
-  static String pairedDraftId(String modelId) => '$modelId#draft';
+  static String pairedDraftId(String modelId) => '$modelId$kPairedDraftSuffix';
 
   String? _draftPath(String modelId, String? draftId) {
     if (draftId == null) return null;
@@ -310,16 +321,29 @@ final class PerfLab {
     return null;
   }
 
-  static ModelLoadOptions _withDraft(ModelLoadOptions o, String draftPath) => ModelLoadOptions(
-        path: o.path,
-        modelId: o.modelId,
-        nGpuLayers: o.nGpuLayers,
-        loadMode: o.loadMode,
-        useExtraBuffers: o.useExtraBuffers,
-        loadMtp: o.loadMtp,
-        chatTemplateOverride: o.chatTemplateOverride,
-        draftModelPath: draftPath,
-      );
+  /// The model's load options for measuring [config] (with its draft model
+  /// when it drafts), or null when that draft is no longer in the library.
+  ModelLoadOptions? _loadFor(LocalModelSpec spec, LabConfig config) {
+    if (config.speculative != SpeculativeChoice.draft) return spec.loadOptionsWith();
+    final path = _draftPath(spec.id, config.draftModelId);
+    return path == null ? null : spec.loadOptionsWith(draftModelPath: path);
+  }
+
+  /// Moves a speculative mode the app kept on its own (before the
+  /// lifecycle took it in the autotune overrides) into the overrides,
+  /// unless they already pin one, and clears the app's copy.
+  Future<void> _migrateSpeculative(_Engine e, String modelId) async {
+    final legacy = local.speculativeFor(modelId);
+    final tuner = e.lifecycle.autotuner;
+    if (legacy == null || tuner == null) return;
+    try {
+      final o = await tuner.overrides(modelId);
+      if (o.speculative == null) await tuner.setOverrides(modelId, o.copyWith(speculative: legacy));
+      await local.setSpeculative(modelId, null);
+    } on Object {
+      // Kept where it was: it still applies through the session defaults.
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Memory check
@@ -332,13 +356,9 @@ final class PerfLab {
     final ctx = await _contextTokens(e, spec);
     final invalid = config.invalidReason;
     if (invalid != null) return FitCheck(config: config, contextTokens: ctx, invalidReason: invalid);
-    var load = spec.loadOptions;
-    if (config.speculative == SpeculativeChoice.draft) {
-      final path = _draftPath(modelId, config.draftModelId);
-      if (path == null) {
-        return FitCheck(config: config, contextTokens: ctx, invalidReason: 'That draft model is no longer in the library.');
-      }
-      load = _withDraft(load, path);
+    final load = _loadFor(spec, config);
+    if (load == null) {
+      return FitCheck(config: config, contextTokens: ctx, invalidReason: 'That draft model is no longer in the library.');
     }
     final MemoryEstimate estimate;
     try {
@@ -431,32 +451,33 @@ final class PerfLab {
   // ---------------------------------------------------------------------------
   // Overrides
 
-  /// Pins [config] as the user's override for [modelId] (threads, batches,
-  /// KV, flash attention via [Autotuner.setOverrides]; speculative decoding
-  /// via [LocalInference.setSpeculative]). A warm model is unloaded once
-  /// idle, so the next chat loads with it. Returns false when the override
-  /// waits for a tuned profile (the lifecycle applies overrides on top of
-  /// a measured profile only; speculative decoding applies at once).
-  Future<bool> apply(String modelId, LabConfig config) async {
+  /// Pins [config] as the user's override for [modelId]
+  /// ([Autotuner.setOverrides]: threads, batches, KV, flash attention,
+  /// speculative decoding and its draft model). The lifecycle applies it at
+  /// the next load, measured profile or not; a warm model is unloaded once
+  /// idle, so the next chat loads with it.
+  Future<void> apply(String modelId, LabConfig config) async {
     final e = await _engine();
-    if (config.speculative == SpeculativeChoice.draft) {
-      throw const PerfLabException('Chats can’t use a draft model yet: this setting can be measured, not applied.');
-    }
     final fit = await checkFit(modelId, config);
     if (!fit.fits) throw PerfLabException(fit.problem!);
     final tuner = e.lifecycle.autotuner ?? (throw const PerfLabException('Tuning is turned off in this build.'));
-    await tuner.setOverrides(modelId, config.overrides);
-    await local.setSpeculative(modelId, config.speculative == SpeculativeChoice.off ? null : config.speculative.mode);
+    final overrides = config.overrides;
+    if (config.speculative == SpeculativeChoice.draft &&
+        e.lifecycle.draftModelPathFor(modelId, draftModelId: overrides.draftModelId) == null) {
+      throw const PerfLabException('Chats can’t load this draft model yet; it can be measured, not applied. '
+          'Pick another draft model from the library.');
+    }
+    await _migrateSpeculative(e, modelId);
+    await tuner.setOverrides(modelId, overrides);
     _reloadWhenIdle(e, modelId);
-    return await tuner.cached(modelId) != null;
   }
 
-  /// Back to automatic settings: clears the overrides and the speculative
-  /// choice.
+  /// Back to automatic settings: clears every override (speculative
+  /// decoding included).
   Future<void> resetToAuto(String modelId) async {
     final e = await _engine();
+    await _migrateSpeculative(e, modelId);
     await e.lifecycle.autotuner?.setOverrides(modelId, const AutotuneOverrides());
-    await local.setSpeculative(modelId, null);
     _reloadWhenIdle(e, modelId);
   }
 
@@ -468,9 +489,9 @@ final class PerfLab {
   // ---------------------------------------------------------------------------
   // Autotune
 
-  /// Runs the autotune sweep again ([Autotuner.profileFor] with `force`) as
-  /// one background job, reporting each measured candidate. A preempted
-  /// sweep restarts once the engine is free.
+  /// Runs the autotune sweep again ([ModelLifecycleManager.autotune] with
+  /// `force`) as one background job; [onProgress] is the lifecycle's report
+  /// of each candidate. A preempted sweep restarts once the engine is free.
   Future<AutotuneProfile> retune(
     String modelId, {
     CancellationToken? cancel,
@@ -478,39 +499,18 @@ final class PerfLab {
     void Function(LabJobPhase phase)? onPhase,
   }) async {
     final e = await _engine();
-    final spec = _specFor(e, modelId);
-    final tuner = e.lifecycle.autotuner ?? (throw const PerfLabException('Tuning is turned off in this build.'));
+    _specFor(e, modelId);
+    if (e.lifecycle.autotuner == null) throw const PerfLabException('Tuning is turned off in this build.');
     // The first-use sweep would only measure the same thing again.
     local.autotune?.cancel('re-tuning in the performance lab');
-    final sweep = tuner.sweep;
-    final total = sweep.threads.length + sweep.batchSizes.length + sweep.kvVariants.length;
     final token = cancel ?? CancellationToken();
-    return _guard(token, (_) => _scheduled(e, 'autotune', token, onPhase, (t) async {
-        var done = 0;
-        onProgress?.call(AutotuneProgress(done: 0, total: total));
-        final lease = await e.lifecycle.acquire(modelId, cancel: t);
-        try {
-          final (:budget, addedBack: _) = await _budget(e);
-          final base = lease.loaded.config.copyWith(nCtx: lease.loaded.sessionInfo.nCtx);
-          final memo = <(int, KvType), bool>{};
-          final profile = await tuner.profileFor(
-            model: lease.model,
-            modelKey: modelId,
-            force: true,
-            cancel: t,
-            fits: (c) async {
-              if (!budget.isKnown) return true;
-              return memo[(c.nUbatch, c.typeK)] ??= budget.admits(await e.host.estimateMemory(spec.loadOptions, c.applyTo(base)));
-            },
-            onSample: (c, r) => onProgress?.call(AutotuneProgress(done: ++done, total: total, last: c, lastResult: r)),
-          );
-          await e.host.setThreads(lease.session, profile.candidate.nThreads, profile.candidate.nThreads);
-          onProgress?.call(AutotuneProgress(done: total, total: total));
-          return profile;
-        } finally {
-          lease.release();
-        }
-      }));
+    return _guard(
+      token,
+      (_) => _scheduled(e, 'autotune', token, onPhase, (t) async {
+        final profile = await e.lifecycle.autotune(modelId, force: true, cancel: t, onProgress: onProgress);
+        return profile ?? (throw const PerfLabException('Tuning is turned off in this build.'));
+      }),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -665,9 +665,8 @@ final class PerfLab {
     try {
       var model = lease.model;
       if (c.speculative == SpeculativeChoice.draft) {
-        final path = _draftPath(spec.id, c.draftModelId) ??
-            (throw const PerfLabException('That draft model is no longer in the library.'));
-        temp = await host.loadModel(_withDraft(spec.loadOptions, path), cancel: token);
+        final load = _loadFor(spec, c) ?? (throw const PerfLabException('That draft model is no longer in the library.'));
+        temp = await host.loadModel(load, cancel: token);
         model = temp.ref;
       }
       final (request, promptTokens) = await _probeRequest(host, model, spec.id, b);

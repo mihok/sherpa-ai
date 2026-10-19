@@ -5,10 +5,12 @@ import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_markdown/sherpa_markdown.dart';
 
 import '../../../design/tokens.dart';
+import '../links/reply_links.dart' show kReplyLinkSchemes;
 import '../state/chat_controller.dart';
 import '../state/chat_view_state.dart';
 import '../state/transcript_model.dart';
 import 'chat_style.dart';
+import 'mcp_app_block.dart';
 import 'message_actions.dart';
 import 'reasoning_region.dart';
 import 'source_chips.dart';
@@ -25,6 +27,7 @@ class AssistantTurnCallbacks {
     required this.onSwitch,
     required this.onLinkTap,
     required this.onCopyCode,
+    this.onLinkLongPress,
   });
 
   final void Function(AssistantTurnItem item) onCopy;
@@ -33,6 +36,9 @@ class AssistantTurnCallbacks {
   final void Function(AssistantTurnItem item, bool forward) onSwitch;
   final void Function(Uri uri) onLinkTap;
   final void Function(String code) onCopyCode;
+
+  /// A press held on a link: copies it (never opens anything).
+  final void Function(Uri uri)? onLinkLongPress;
 }
 
 /// Everything the assistant did for one user message.
@@ -88,7 +94,9 @@ class AssistantTurnTile extends StatelessWidget {
                 child: StreamingMarkdown(
                   text: block.text,
                   style: chatMarkdownStyle(context),
+                  linkSchemes: kReplyLinkSchemes,
                   onLinkTap: callbacks.onLinkTap,
+                  onLinkLongPress: callbacks.onLinkLongPress,
                   onCopyCode: callbacks.onCopyCode,
                 ),
               ),
@@ -97,6 +105,7 @@ class AssistantTurnTile extends StatelessWidget {
                 alignment: AlignmentDirectional.centerStart,
                 child: ResourceChip.of(resource),
               ),
+            AppViewBlock(:final part) => UiResourceView(sessionId: sessionId, part: part),
           },
         ),
       if (!item.live && item.finishReason == FinishReason.cancelled.name && item.blocks.isNotEmpty)
@@ -265,7 +274,9 @@ class _StreamingText extends StatelessWidget {
         streaming: true,
         selectable: false,
         style: chatMarkdownStyle(context),
+        linkSchemes: kReplyLinkSchemes,
         onLinkTap: callbacks.onLinkTap,
+        onLinkLongPress: callbacks.onLinkLongPress,
         onCopyCode: callbacks.onCopyCode,
       );
 }

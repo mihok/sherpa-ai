@@ -1,6 +1,7 @@
-// Driver for bench/app/integration_test/stream_perf_test.dart (copied to
-// app/test_driver/_bench_perf_driver.dart by run_frame_bench.sh): writes
-// build/<reportKey>.timeline_summary.json for each traced action.
+// Driver for integration_test/frame_bench_test.dart under `flutter drive`
+// (bench/app/run_frame_bench.sh): writes, for every traced action,
+// build/<reportKey>.timeline_summary.json (the summary bench/app/timeline_to_result.dart
+// reads) and build/<reportKey>.timeline.json (open it in Perfetto/DevTools).
 import 'package:flutter_driver/flutter_driver.dart' as driver;
 import 'package:integration_test/integration_test_driver.dart';
 

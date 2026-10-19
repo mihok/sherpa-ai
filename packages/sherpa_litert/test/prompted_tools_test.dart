@@ -113,9 +113,73 @@ void main() {
       expect(calls.single.repaired, isTrue);
     });
 
+    test('a duplicate argument key makes the call invalid, never a silent pick', () {
+      final calls = callsOf(feed(parser(), ['{"tool_calls": [{"name": "get_weather", "arguments": {"city": "Paris", "city": "Rome"}}]}']));
+      expect(calls.single.name, 'get_weather');
+      expect(calls.single.argumentsError, contains('"city" appears twice'));
+      expect(calls.single.arguments, isEmpty);
+      expect(calls.single.repaired, isFalse);
+    });
+
+    test('a duplicate key in one call of several refuses only that call', () {
+      final calls = callsOf(feed(parser(), [
+        '{"tool_calls": [{"name": "search", "arguments": {"q": "a"}}, ',
+        '{"name": "get_weather", "name": "search", "arguments": {"city": "b"}}]}',
+      ]));
+      expect(calls.first.argumentsError, isNull);
+      expect(calls.first.arguments, {'q': 'a'});
+      expect(calls.last.argumentsError, contains('"name" appears twice'));
+    });
+
+    test('leaked chat-template tokens are refused', () {
+      final calls = callsOf(feed(parser(), [r'{"tool_calls": [{"name": "search", "arguments": {"q": <|"|>tokyo<|"|>}}]}']));
+      expect(calls.single.argumentsError, contains('chat-template token'));
+      expect(calls.single.arguments, isEmpty);
+    });
+
+    test('an ambiguous unquoted value in broken JSON is refused', () {
+      final calls = callsOf(feed(parser(), ['{"tool_calls": [{"name": "get_weather", "arguments": {"city": Paris Tokyo, "unit": celsius]}]}']));
+      expect(calls.single.argumentsError, contains('ambiguous'));
+    });
+
+    test('arguments sent as a JSON string go through the same parser', () {
+      final calls = callsOf(feed(parser(), [r'{"tool_calls": [{"name": "search", "arguments": "{\"q\": \"a\", \"q\": \"b\"}"}]}']));
+      expect(calls.single.argumentsError, contains('"q" appears twice'));
+    });
+
     test('braces in prose do not hold text back', () {
       final p = parser();
       expect(textOf(p.add('Use {curly} braces and <b>tags</b>.')), 'Use {curly} braces and <b>tags</b>.');
+    });
+  });
+
+  group('native tool calls (LiteRtEventMapper)', () {
+    List<ToolCall> native(String argumentsJson) {
+      final m = LiteRtEventMapper(providerId: 'litert_lm', prompted: false, newId: () => 'call_n');
+      final events = m.map(
+        LiteRtEvent(kind: EventKind.toolCalls, toolCalls: [ToolCallMsg(name: 'search', argumentsJson: argumentsJson)]),
+        userCancelled: false,
+        stopRequested: false,
+      );
+      return [for (final e in events) if (e is ToolCallComplete) e.call];
+    }
+
+    test('valid engine JSON is used as is', () {
+      final c = native('{"q": "a"}').single;
+      expect(c.arguments, {'q': 'a'});
+      expect(c.repaired, isFalse);
+      expect(c.argumentsError, isNull);
+    });
+
+    test('duplicate keys and template tokens are refused like the prompted path', () {
+      expect(native('{"q": "a", "q": "b"}').single.argumentsError, contains('"q" appears twice'));
+      expect(native(r'{"q": <|"|>a<|"|>}').single.argumentsError, contains('chat-template token'));
+    });
+
+    test('almost-JSON is repaired and flagged', () {
+      final c = native("{'q': 'a',}").single;
+      expect(c.arguments, {'q': 'a'});
+      expect(c.repaired, isTrue);
     });
   });
 }

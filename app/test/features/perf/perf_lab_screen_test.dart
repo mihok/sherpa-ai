@@ -262,7 +262,8 @@ void main() {
 
     await tapReal(tester, find.text('Apply B'));
     await waitFor(tester, () => !labState(c).applying && labState(c).message != null);
-    expect(find.textContaining('as your override'), findsOneWidget, reason: 'not tuned yet: it waits for a profile');
+    expect(find.textContaining('Chats use it from the next message'), findsOneWidget,
+        reason: 'applied at once, even before autotune has run');
     final tuner = rig.local.lifecycle!.autotuner!;
     final saved = await tester.runAsync(() => tuner.overrides('m1'));
     expect(saved!.nThreads, 4);
@@ -323,6 +324,9 @@ void main() {
     await tapReal(tester, find.text('Re-run autotune'));
     await waitFor(tester, () => rig.host.benchesStarted == 1);
     expect(find.text('Autotune in progress'), findsOneWidget);
+    // The lifecycle's own progress report.
+    await waitFor(tester, () => labState(c).job?.detail != null);
+    expect(labState(c).job!.detail, 'Checked 0 of 10');
     await tapReal(tester, find.text('Cancel'));
     await waitFor(tester, () => labState(c).job == null);
     expect(find.textContaining('Autotune cancelled'), findsOneWidget);

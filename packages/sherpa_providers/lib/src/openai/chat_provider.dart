@@ -151,12 +151,13 @@ final class OpenAiChatProvider implements ModelProvider {
     if (response.contentType.contains('application/json')) {
       // `stream` ignored by the server: one JSON completion (or an error
       // object sent with 200).
-      final json = tryDecodeObject(await response.readText());
+      final text = await response.readText();
+      final json = tryDecodeObject(text);
       if (json == null) {
         throw ProviderException(ProviderErrorKind.unknown, 'The server returned an unreadable JSON response.',
             providerId: config.id);
       }
-      for (final e in parser.addChunk(json)) {
+      for (final e in parser.addChunk(json, rawText: text)) {
         yield e;
       }
       parser.markDone();

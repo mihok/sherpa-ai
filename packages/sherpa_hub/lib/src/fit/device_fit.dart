@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:meta/meta.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../download/download_plan.dart' show SherpaRuntime;
 import '../gguf/ggml_types.dart';
 import '../naming/name_types.dart';
 import '../naming/quant_types.dart';
@@ -427,6 +428,49 @@ FitResult assessFit(
         '${q.id} needs a newer llama.cpp than the one bundled.'));
   }
 
+  reasons.addAll(_memoryReasons(e, b));
+  if (device.platform == DevicePlatform.android &&
+      device.accelerators.contains(Accelerator.openclAdreno) &&
+      q != null &&
+      !FitConstants.openclTensorTypes.contains(q.mainTensorType)) {
+    reasons.add(FitReason(FitReasonCode.gpuBackendUnsupportedQuant, FitSeverity.info,
+        'The GPU (OpenCL) backend has no ${q.mainTensorType} kernels; this file runs on the CPU.'));
+  }
+  reasons.addAll(_deviceReasons(device));
+  if (device.cpuClass == CpuClass.low && !a.isMoe && model.weightBytes > 1536 * 1024 * 1024) {
+    reasons.add(const FitReason(FitReasonCode.slowCpu, FitSeverity.warning,
+        'This CPU reads weights slowly; expect slow generation with a model this size.'));
+  }
+  if (a.isMoe) {
+    reasons.add(FitReason(FitReasonCode.mixtureOfExperts, FitSeverity.info,
+        'Mixture of experts: all ${a.expertCount} experts must be in memory, '
+        'though only ${a.expertUsedCount ?? '?'} run per token (speed follows the active count).'));
+  }
+  for (final n in a.notes) {
+    reasons.add(FitReason(FitReasonCode.approximation, FitSeverity.info, 'Estimate: $n.'));
+  }
+
+  int? maxCtx;
+  if (computeMaxContext) maxCtx = _maxContext((ctx) => _evaluate(device, model, options, b, ctx).verdict, train);
+
+  return FitResult(
+    verdict: verdict,
+    reasons: List.unmodifiable(reasons),
+    breakdown: e.breakdown,
+    kv: e.kv,
+    contextLength: ctx,
+    budgetBytes: b.available,
+    demandBytes: e.demand,
+    budgetEstimated: b.estimated,
+    processCapBytes: b.cap,
+    processDemandBytes: e.capDemand,
+    recommendedMaxContext: maxCtx,
+  );
+}
+
+/// The physical-memory, process-limit and estimated-budget reasons of [e].
+List<FitReason> _memoryReasons(_Eval e, _Budget b) {
+  final reasons = <FitReason>[];
   final demand = _gb(e.demand);
   switch (e.physicalVerdict) {
     case FitVerdict.wontFit:
@@ -455,57 +499,23 @@ FitResult assessFit(
     reasons.add(const FitReason(FitReasonCode.budgetEstimated, FitSeverity.info,
         'Available memory was estimated from total RAM, not measured.'));
   }
-  if (device.platform == DevicePlatform.android &&
-      device.accelerators.contains(Accelerator.openclAdreno) &&
-      q != null &&
-      !FitConstants.openclTensorTypes.contains(q.mainTensorType)) {
-    reasons.add(FitReason(FitReasonCode.gpuBackendUnsupportedQuant, FitSeverity.info,
-        'The GPU (OpenCL) backend has no ${q.mainTensorType} kernels; this file runs on the CPU.'));
-  }
-  if (device.thermal == ThermalLevel.serious || device.thermal == ThermalLevel.critical) {
-    reasons.add(const FitReason(FitReasonCode.thermal, FitSeverity.warning,
-        'The device is hot; generation will be throttled until it cools down.'));
-  }
-  if (device.lowPowerMode) {
-    reasons.add(const FitReason(FitReasonCode.lowPower, FitSeverity.info, 'Low-power mode slows generation.'));
-  }
-  if (device.cpuClass == CpuClass.low && !a.isMoe && model.weightBytes > 1536 * 1024 * 1024) {
-    reasons.add(const FitReason(FitReasonCode.slowCpu, FitSeverity.warning,
-        'This CPU reads weights slowly; expect slow generation with a model this size.'));
-  }
-  if (a.isMoe) {
-    reasons.add(FitReason(FitReasonCode.mixtureOfExperts, FitSeverity.info,
-        'Mixture of experts: all ${a.expertCount} experts must be in memory, '
-        'though only ${a.expertUsedCount ?? '?'} run per token (speed follows the active count).'));
-  }
-  for (final n in a.notes) {
-    reasons.add(FitReason(FitReasonCode.approximation, FitSeverity.info, 'Estimate: $n.'));
-  }
-
-  int? maxCtx;
-  if (computeMaxContext) maxCtx = _maxContext(device, model, options, b, train);
-
-  return FitResult(
-    verdict: verdict,
-    reasons: List.unmodifiable(reasons),
-    breakdown: e.breakdown,
-    kv: e.kv,
-    contextLength: ctx,
-    budgetBytes: b.available,
-    demandBytes: e.demand,
-    budgetEstimated: b.estimated,
-    processCapBytes: b.cap,
-    processDemandBytes: e.capDemand,
-    recommendedMaxContext: maxCtx,
-  );
+  return reasons;
 }
+
+/// Thermal and low-power reasons, whatever the runtime.
+List<FitReason> _deviceReasons(DeviceProfile device) => [
+      if (device.thermal == ThermalLevel.serious || device.thermal == ThermalLevel.critical)
+        const FitReason(FitReasonCode.thermal, FitSeverity.warning,
+            'The device is hot; generation will be throttled until it cools down.'),
+      if (device.lowPowerMode) const FitReason(FitReasonCode.lowPower, FitSeverity.info, 'Low-power mode slows generation.'),
+    ];
 
 /// Binary search over multiples of 256: memory is monotone in context, so
 /// the largest Fits context is well defined.
-int? _maxContext(DeviceProfile d, ModelFootprintInput m, FitOptions o, _Budget b, int? train) {
+int? _maxContext(FitVerdict Function(int ctx) verdictAt, int? train) {
   const step = FitConstants.contextPadding;
   final upper = math.max(step, (train != null && train > 0 ? train : 131072) ~/ step * step);
-  bool ok(int ctx) => _evaluate(d, m, o, b, ctx).verdict == FitVerdict.fits;
+  bool ok(int ctx) => verdictAt(ctx) == FitVerdict.fits;
   if (!ok(step)) return null;
   if (ok(upper)) return upper;
   var lo = 1; // in steps: lo fits, hi does not
@@ -519,6 +529,156 @@ int? _maxContext(DeviceProfile d, ModelFootprintInput m, FitOptions o, _Budget b
     }
   }
   return lo * step;
+}
+
+// ---------------------------------------------------------------------------
+// Other runtimes (MLX, LiteRT-LM)
+// ---------------------------------------------------------------------------
+
+/// The model side of a fit question for a runtime other than llama.cpp,
+/// where only file sizes (and, for MLX, `config.json`) are known before
+/// the model loads.
+@immutable
+final class RuntimeFootprintInput {
+  /// An MLX directory: [weightBytes] = Σ `*.safetensors` sizes;
+  /// [architecture] from its `config.json`
+  /// ([ModelArchitecture.fromMlxConfig]), null when not read yet (the KV
+  /// cache is then not counted, and a reason says so).
+  const RuntimeFootprintInput.mlx({required this.weightBytes, this.architecture, this.label})
+      : runtime = SherpaRuntime.mlx,
+        weightCacheBytes = 0;
+
+  /// A `.litertlm` file of [fileBytes]: the file plus the CPU backend's
+  /// XNNPACK weight cache ([liteRtWeightCacheBytes]). The file's own
+  /// metadata (KV geometry) is only read natively, so the KV cache is not
+  /// counted (a reason says so).
+  RuntimeFootprintInput.liteRt({required int fileBytes, this.label})
+      : runtime = SherpaRuntime.litert,
+        weightBytes = fileBytes,
+        architecture = null,
+        weightCacheBytes = liteRtWeightCacheBytes(fileBytes);
+
+  final SherpaRuntime runtime;
+  final int weightBytes;
+  final ModelArchitecture? architecture;
+
+  /// Packed weights the runtime writes and maps (LiteRT CPU backend).
+  final int weightCacheBytes;
+  final String? label;
+}
+
+/// The XNNPACK weight cache LiteRT-LM writes into the app's cache
+/// directory on the CPU backend's first load: about the model's size
+/// ([FitConstants.liteRtWeightCacheFraction]). Storage checks count it.
+int liteRtWeightCacheBytes(int fileBytes) => (fileBytes * FitConstants.liteRtWeightCacheFraction).round();
+
+_Eval _evaluateRuntime(RuntimeFootprintInput m, _Budget b, int ctx) {
+  final a = m.architecture;
+  final kv = a == null
+      ? KvEstimate(
+          bytes: 0,
+          contextCells: ctx,
+          swaCells: 0,
+          streams: 1,
+          attentionLayers: 0,
+          swaLayerCount: 0,
+          bytesPerFullCell: 0,
+        )
+      // MLX's 8-bit KV costs exactly q8_0's 1.0625 bytes per value.
+      : estimateKvCache(a, contextLength: ctx, typeK: KvCacheType.q8_0, typeV: KvCacheType.q8_0, swaFull: true);
+  final overhead = switch (m.runtime) {
+    SherpaRuntime.mlx => FitConstants.mlxRuntimeOverheadBytes,
+    SherpaRuntime.litert => FitConstants.liteRtRuntimeOverheadBytes,
+    _ => b.runtimeOverhead,
+  };
+  final breakdown = MemoryBreakdown(
+    weightsBytes: m.weightBytes,
+    mmprojBytes: 0,
+    draftBytes: 0,
+    kvBytes: kv.bytes,
+    computeBytes: 0,
+    runtimeOverheadBytes: overhead,
+    repackBytes: m.weightCacheBytes,
+    appOverheadBytes: b.appOverhead,
+  );
+  final demand = breakdown.totalBytes;
+  final physical = _classify(demand, b.available, b.fitFraction, FitConstants.tightFraction);
+  int? capDemand;
+  FitVerdict? capVerdict;
+  final cap = b.cap;
+  if (cap != null) {
+    capDemand = b.weightsCountTowardCap ? demand : kv.bytes + overhead + m.weightCacheBytes;
+    capVerdict = _classify(capDemand, cap, b.fitFraction, FitConstants.tightFraction);
+  }
+  final verdict = capVerdict != null && capVerdict.isWorseThan(physical) ? capVerdict : physical;
+  return _Eval(verdict, breakdown, kv, demand, capDemand, physical, capVerdict);
+}
+
+/// Will this MLX or LiteRT-LM model run on this device at this context?
+///
+/// The same budget, verdicts and limits as [assessFit] (iOS jetsam counts
+/// everything; the Android 17 limiter counts anonymous memory only), with
+/// what these runtimes need:
+/// * **MLX** (iOS): weights resident in Metal buffers, the 8-bit KV cache
+///   at the context (from `config.json`, when known) and MLX's runtime
+///   overhead — the estimate sherpa_apple_ml's admission makes at load;
+/// * **LiteRT-LM** (Android): the file plus the CPU weight cache (about
+///   the model's size, [liteRtWeightCacheBytes]) and the engine's overhead;
+///   the KV cache is not known before the engine reads the file.
+///
+/// A pure function of its inputs; [FitResult.recommendedMaxContext] is set
+/// only when the KV cache is known.
+FitResult assessRuntimeFit(
+  DeviceProfile device,
+  RuntimeFootprintInput model, {
+  FitOptions options = const FitOptions(),
+  bool computeMaxContext = true,
+}) {
+  final b = _budget(device, options);
+  final reasons = <FitReason>[];
+  final a = model.architecture;
+  final train = a?.trainContextLength;
+  var ctx = math.max(1, options.contextLength);
+  if (train != null && train > 0 && ctx > train) {
+    reasons.add(FitReason(FitReasonCode.contextClamped, FitSeverity.info,
+        'The model was trained for $train tokens; context capped at $train.'));
+    ctx = train;
+  }
+  final e = _evaluateRuntime(model, b, ctx);
+  reasons.addAll(_memoryReasons(e, b));
+  reasons.addAll(_deviceReasons(device));
+  if (a == null) {
+    reasons.add(FitReason(
+      FitReasonCode.approximation,
+      FitSeverity.info,
+      model.runtime == SherpaRuntime.litert
+          ? 'Estimate: the file plus its CPU weight cache; the KV cache is sized when LiteRT-LM opens the file.'
+          : "Estimate: weights only; the KV cache is added once the model's config.json is read.",
+    ));
+  } else {
+    if (a.isMoe) {
+      reasons.add(FitReason(FitReasonCode.mixtureOfExperts, FitSeverity.info,
+          'Mixture of experts: all ${a.expertCount} experts must be in memory, '
+          'though only ${a.expertUsedCount ?? '?'} run per token (speed follows the active count).'));
+    }
+    for (final n in a.notes) {
+      reasons.add(FitReason(FitReasonCode.approximation, FitSeverity.info, 'Estimate: $n.'));
+    }
+  }
+  final maxCtx = computeMaxContext && a != null ? _maxContext((c) => _evaluateRuntime(model, b, c).verdict, train) : null;
+  return FitResult(
+    verdict: e.verdict,
+    reasons: List.unmodifiable(reasons),
+    breakdown: e.breakdown,
+    kv: e.kv,
+    contextLength: ctx,
+    budgetBytes: b.available,
+    demandBytes: e.demand,
+    budgetEstimated: b.estimated,
+    processCapBytes: b.cap,
+    processDemandBytes: e.capDemand,
+    recommendedMaxContext: maxCtx,
+  );
 }
 
 // ---------------------------------------------------------------------------

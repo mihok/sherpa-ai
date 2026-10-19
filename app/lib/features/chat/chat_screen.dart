@@ -4,12 +4,19 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 
 import '../../design/tokens.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../services/mcp/composer_sources.dart';
+import '../mcp/input/input_host.dart' show McpPendingInputsInline;
 import '../mcp/session_tools_sheet.dart';
+import '../mcp/state/input_providers.dart' show mcpPendingInputsForSessionProvider;
 import '../mcp/state/mcp_providers.dart';
+import 'attachments/attachment_policy.dart';
+import 'attachments/composer_attachments.dart';
+import 'dictation/dictation.dart';
+import 'links/reply_links.dart';
 import 'model_picker_sheet.dart';
 import 'prompt_arguments_sheet.dart';
 import 'state/chat_controller.dart';
@@ -20,6 +27,7 @@ import 'state/model_selection.dart';
 import 'state/transcript_model.dart';
 import 'widgets/approval_card.dart';
 import 'widgets/assistant_turn.dart';
+import 'widgets/attachment_views.dart';
 import 'widgets/chat_notices.dart';
 import 'widgets/chat_style.dart';
 import 'widgets/composer.dart';
@@ -83,9 +91,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     onSwitch: (item, forward) => item.firstMessageId == null
         ? null
         : _controller.switchBranch(item.firstMessageId!, forward ? BranchDirection.next : BranchDirection.previous),
-    onLinkTap: _openLink,
+    onLinkTap: (uri) => unawaited(openReplyLink(context, ref, uri)),
+    onLinkLongPress: (uri) => unawaited(copyReplyLink(context, ref, uri)),
     onCopyCode: (_) => _toast('Code copied'),
   );
+
+  /// Photos and files waiting in the composer.
+  late final ComposerAttachments _attachments = ComposerAttachments(prepare: ref.read(chatImagePreparerProvider));
+
+  /// The microphone: speech typed into the composer (null: unsupported).
+  late final ComposerDictation? _dictation = switch (ref.read(chatDictationProvider)) {
+    final service? => ComposerDictation(service, _text),
+    null => null,
+  };
 
   ChatController get _controller => ref.read(chatControllerProvider(widget.sessionId).notifier);
 
@@ -114,6 +132,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _text.removeListener(_onComposerText);
     _text.dispose();
     _composerFocus.dispose();
+    _attachments.dispose();
+    _dictation?.dispose();
     super.dispose();
   }
 
@@ -130,9 +150,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       unawaited(_controller.edit(editing, text));
       setState(() => _editingId = null);
     } else {
-      unawaited(_controller.send(text, mentions: mentions));
+      if (_attachments.busy) return _toast('A photo is still being prepared.');
+      final blocked = _attachments.blockedReason(ref.read(chatControllerProvider(widget.sessionId)).attachmentPolicy);
+      if (blocked != null) return _toast(blocked);
+      unawaited(_controller.send(text, mentions: mentions, attachments: _attachments.take()));
     }
     _text.clear();
+  }
+
+  /// "Attach": the sheet says what this model accepts; the picked file is
+  /// checked against the same limits and refused with the reason.
+  Future<void> _attach() async {
+    final s = ref.read(chatControllerProvider(widget.sessionId));
+    final model = s.model;
+    final destination = switch (model?.location) {
+      ExecutionLocation.onDevice => 'Attachments stay on this phone.',
+      ExecutionLocation.localNetwork => 'Attachments are sent to ${model!.host ?? model.providerName} on your network.',
+      ExecutionLocation.remote => 'Attachments are sent to ${model!.providerName} with your message.',
+      null => '',
+    };
+    final source = await AttachSheet.show(context, policy: s.attachmentPolicy, destination: destination);
+    if (source == null || !mounted) return;
+    final picker = ref.read(chatAttachmentPickerProvider);
+    PickedAttachment? picked;
+    try {
+      picked = switch (source) {
+        AttachSource.photos => await picker.pickPhoto(),
+        AttachSource.camera => await picker.takePhoto(),
+        AttachSource.files => await picker.pickFile(maxBytes: AttachmentPolicy.maxImageInputBytes),
+      };
+    } on Object catch (e) {
+      debugPrint('attach ($source): $e');
+      _toast(source == AttachSource.camera ? "Couldn't open the camera." : "Couldn't open the picker.");
+      return;
+    }
+    if (picked == null || !mounted) return;
+    final error = await _attachments.add(picked, ref.read(chatControllerProvider(widget.sessionId)).attachmentPolicy);
+    if (error != null) _toast(error);
   }
 
   /// A slash command from an MCP prompt: the server expands it (with the
@@ -302,49 +356,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  /// Links are never opened silently: the full URL is shown first
-  /// (docs/research/11 §9.7, exfiltration via links).
-  Future<void> _openLink(Uri uri) async {
-    final tokens = SherpaTokens.of(context);
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      useSafeArea: true,
-      builder: (sheet) => Padding(
-        padding: EdgeInsets.fromLTRB(tokens.space.xl, 0, tokens.space.xl, tokens.space.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Link in the reply', style: Theme.of(sheet).textTheme.titleMedium),
-            SizedBox(height: tokens.space.sm),
-            SelectableText(uri.toString(), style: chatMonoStyle(sheet)),
-            SizedBox(height: tokens.space.md),
-            Text(
-              'Check the address before opening it. Links in replies can come from web pages or tools.',
-              style: Theme.of(sheet).textTheme.bodySmall,
-            ),
-            SizedBox(height: tokens.space.md),
-            Align(
-              alignment: AlignmentDirectional.centerEnd,
-              child: FilledButton.tonalIcon(
-                onPressed: () {
-                  unawaited(ref.read(chatPlatformProvider).copyText(uri.toString()));
-                  Navigator.of(sheet).pop();
-                  _toast('Link copied');
-                },
-                icon: const Icon(Icons.copy_rounded),
-                label: const Text('Copy link'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+  /// The model's approvals open as a sheet on compact screens. An MCP
+  /// App's own request never pops up by itself (a view could time it to
+  /// land under a tap meant for something else): it waits in the reminder
+  /// bar until the user taps Review.
+  void _maybeShowApprovalSheet(PendingApproval? pending) {
+    if (pending == null || !_compact || pending.isFromApp) return;
+    _openApprovalSheet(pending);
   }
 
-  void _maybeShowApprovalSheet(PendingApproval? pending) {
-    if (pending == null || !_compact || _sheetFor != null) return;
+  void _openApprovalSheet(PendingApproval pending) {
+    if (_sheetFor != null) return;
     setState(() => _sheetFor = pending.call.id);
     unawaited(ApprovalSheet.show(context, widget.sessionId).whenComplete(() {
       if (mounted) setState(() => _sheetFor = null);
@@ -362,6 +384,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final (pending, interrupted, hasItems) =
         ref.watch(provider.select((s) => (s.pendingApproval, s.interrupted, s.items.isNotEmpty)));
     final onDeviceModels = ref.watch(provider.select((s) => s.onDeviceModels));
+    final attachmentPolicy = ref.watch(provider.select((s) => s.attachmentPolicy));
+    final hasInputs = ref.watch(mcpPendingInputsForSessionProvider(widget.sessionId)).isNotEmpty;
     ref.listen(provider.select((s) => s.pendingApproval), (prev, next) {
       if (next != null && next.call.id != prev?.call.id) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -404,10 +428,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           onResume: () => unawaited(_controller.resumeIfInterrupted()),
           onDiscard: () => unawaited(_controller.discardInterrupted()),
         ),
+      // Questions and forms from tool servers for this chat (elicitation,
+      // URL consent, sampling); each opens its sheet on Review.
+      if (hasInputs) McpPendingInputsInline(sessionId: widget.sessionId),
       if (pending != null)
-        _compact
+        _compact || pending.isFromApp
             ? (_sheetFor == null
-                ? ApprovalReminderBar(approval: pending, onReview: () => _maybeShowApprovalSheet(pending))
+                ? ApprovalReminderBar(approval: pending, onReview: () => _openApprovalSheet(pending))
                 : const SizedBox.shrink())
             : DockedApprovalCard(sessionId: widget.sessionId, approval: pending),
       if (fetching != null)
@@ -432,6 +459,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             if (q != _mentionQuery) setState(() => _mentionQuery = q);
           },
           onSendWithMentions: _sendWithMentions,
+          attachments: _attachments,
+          attachmentPolicy: attachmentPolicy,
+          onAttach: () => unawaited(_attach()),
+          dictation: _editingId == null ? _dictation : null,
         )
       else
         SetupPanel(

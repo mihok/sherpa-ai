@@ -147,6 +147,9 @@ final class ConversationCache {
   /// opening it failed).
   void forget(String sessionKey) => _bySession.remove(sessionKey);
 
+  /// The native conversation [sessionKey] holds, if any.
+  String? conversationOf(String sessionKey) => _bySession[sessionKey]?.conversationId;
+
   /// The engine was released or reloaded: no native conversation survives.
   void clear() => _bySession.clear();
 }

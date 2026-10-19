@@ -66,21 +66,37 @@ final class ToolCallAccumulator {
   int get length => _slots.length;
 
   /// Merges one chunk's `delta.tool_calls` array (OpenAI Chat semantics).
-  List<ModelEvent> addChatDeltas(List<Object?> toolCalls) {
+  ///
+  /// [rawEvent] is the event's JSON text and [path] the location of
+  /// [toolCalls] in it (`['choices', 0, 'delta', 'tool_calls']`). When a
+  /// non-compliant server sends `function.arguments` as an object rather
+  /// than a string, decoding the event has already collapsed its duplicate
+  /// keys, so the call's argument text is taken from [rawEvent] instead and
+  /// strict mode still refuses them. Without [rawEvent] such an object is
+  /// re-encoded (duplicates are then lost). String arguments never look at
+  /// [rawEvent].
+  List<ModelEvent> addChatDeltas(List<Object?> toolCalls, {String? rawEvent, List<Object> path = const []}) {
     final out = <ModelEvent>[];
-    for (final raw in toolCalls) {
-      final tc = asJsonMap(raw);
-      if (tc != null) out.addAll(_addChatDelta(tc));
+    for (var k = 0; k < toolCalls.length; k++) {
+      final tc = asJsonMap(toolCalls[k]);
+      if (tc != null) out.addAll(_addChatDelta(tc, rawEvent, path, k));
     }
     return out;
   }
 
-  List<ModelEvent> _addChatDelta(JsonMap tc) {
+  List<ModelEvent> _addChatDelta(JsonMap tc, String? rawEvent, List<Object> path, int position) {
     final index = tc.integer('index');
     final id = tc.text('id');
     final fn = tc.child('function') ?? const <String, Object?>{};
     final name = fn.text('name')?.trim();
-    final args = _argumentText(fn['arguments']);
+    final a = fn['arguments'];
+    final args = switch (a) {
+      String() => a,
+      // Non-compliant servers send the arguments object itself.
+      Map() || List() =>
+        ToolArgumentsRepair.objectArgumentsText(a, rawEvent, [...path, position, 'function', 'arguments']),
+      _ => null,
+    };
 
     final slot = _slotForChatDelta(index, id, name);
     if (id != null && slot.id == null && !slot.started) {
@@ -116,13 +132,6 @@ final class ToolCallAccumulator {
     if (name != null && name.isNotEmpty && slot.wireName != null && name != slot.wireName && hasArgs) return true;
     return false;
   }
-
-  static String? _argumentText(Object? a) => switch (a) {
-        String() => a,
-        // Non-compliant servers send the arguments object itself.
-        Map() || List() => jsonEncode(a),
-        _ => null,
-      };
 
   _Slot _open() {
     final slot = _Slot(_slots.length);

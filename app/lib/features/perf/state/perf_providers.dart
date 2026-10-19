@@ -346,10 +346,7 @@ class PerfLabController extends Notifier<PerfLabState> {
         onPhase: (ph) => _progress((j) => j.copyWith(phase: ph)),
         onProgress: (pr) => _progress((j) => j.copyWith(
               progress: pr.fraction,
-              detail: pr.last == null
-                  ? 'Measured ${pr.done} of ${pr.total}'
-                  : 'Measured ${pr.done} of ${pr.total}: ${LabConfig.fromCandidate(pr.last!).summary}, '
-                      '${pr.lastResult!.genTokensPerSec.toStringAsFixed(1)} tok/s decode',
+              detail: autotuneDetail(pr),
             )),
       );
       _end(LabJobKind.autotune,
@@ -369,12 +366,8 @@ class PerfLabController extends Notifier<PerfLabState> {
     state = state.copyWith(applying: true, clearMessage: true);
     LabMessage message;
     try {
-      final now = await lab.apply(modelId, config);
-      message = now
-          ? LabMessage.success('Applied ${config.summary}. Chats use it from the next message.')
-          : LabMessage.info('Saved ${config.summary} as your override. '
-              '${config.speculative == SpeculativeChoice.off ? '' : 'Speculative decoding applies from the next message; '}'
-              'the other settings take effect once this model has been tuned: run autotune on the Overview tab.');
+      await lab.apply(modelId, config);
+      message = LabMessage.success('Applied ${config.summary}. Chats use it from the next message.');
     } on PerfLabException catch (e) {
       message = LabMessage.error(e.message);
     }
@@ -405,4 +398,20 @@ class PerfLabController extends Notifier<PerfLabState> {
     await lab.history.clear(modelId);
     if (ref.mounted) state = PerfLabState(benchSpec: state.benchSpec, abSpec: state.abSpec, a: state.a, b: state.b, ab: state.ab);
   }
+}
+
+/// The sweep's progress line: "Checked 3 of 10: 4 threads · … , 16.2 tok/s
+/// decode" (or why a candidate was skipped).
+String autotuneDetail(AutotuneProgress p) {
+  final c = p.candidate;
+  if (c == null) return 'Checked ${p.done} of ${p.total}';
+  final what = LabConfig.fromCandidate(c).summary;
+  final outcome = switch (p.step) {
+    AutotuneStep.measured => '${p.result!.genTokensPerSec.toStringAsFixed(1)} tok/s decode',
+    AutotuneStep.repeated => 'measured already',
+    AutotuneStep.doesNotFit => 'skipped: it doesn’t fit in memory',
+    AutotuneStep.unsupported => 'skipped: the engine can’t use it',
+    null => '',
+  };
+  return 'Checked ${p.done} of ${p.total}: $what${outcome.isEmpty ? '' : ', $outcome'}';
 }

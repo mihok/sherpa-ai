@@ -53,9 +53,13 @@ final class UiApprovalHandler implements ApprovalHandler {
   }
 
   /// Denies everything still waiting (controller disposal).
-  void denyAll() {
+  void denyAll() => denyWhere((_) => true);
+
+  /// Denies the waiting requests that match [test] (a run ending denies its
+  /// own calls but not ones an MCP App view asked for meanwhile).
+  void denyWhere(bool Function(PendingApproval request) test) {
     for (final r in List.of(_queue)) {
-      _resolve(r, const ApprovalResponse(UserDecision.deny));
+      if (test(r.view)) _resolve(r, const ApprovalResponse(UserDecision.deny));
     }
   }
 

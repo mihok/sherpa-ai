@@ -5,10 +5,11 @@ import 'package:sherpa_inference/sherpa_inference.dart';
 
 import '../../state/services.dart' show localProviderId;
 import 'local_inference.dart';
+import 'on_device_ids.dart' show kOnDeviceName;
 
 /// What the picker, chat header and session list call the built-in local
 /// provider.
-const String kLocalProviderName = 'On this device';
+const String kLocalProviderName = kOnDeviceName;
 
 /// `ProviderNotice.code` of the one-time "the engine crashed last time"
 /// notice on the first local reply after a crash report.
@@ -69,7 +70,14 @@ final class LocalModelProvider implements ModelProvider {
   Future<LlamaCppProvider> _ready() async {
     final status = await _local.start();
     final e = _local.engine;
-    if (e != null) return e;
+    if (e != null) {
+      try {
+        await _local.beforeRequest?.call();
+      } on Object {
+        // Freeing another engine is best effort.
+      }
+      return e;
+    }
     throw ProviderException(
       ProviderErrorKind.unsupported,
       'On-device inference is unavailable: ${status.reason ?? 'the engine did not start'}',

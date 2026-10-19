@@ -33,7 +33,7 @@ final class AutotuneEnvironment {
   String key(String modelKey) => [deviceId, osVersion, appVersion, engineVersion, modelKey].join('|');
 }
 
-/// One point of the sweep.
+/// One point of the sweep, and the configuration a profile chooses.
 @immutable
 final class TuningCandidate {
   const TuningCandidate({
@@ -43,6 +43,8 @@ final class TuningCandidate {
     this.typeK = KvType.f16,
     this.typeV = KvType.f16,
     this.flashAttention = FlashAttention.auto,
+    this.speculative,
+    this.draftModelId,
   });
 
   factory TuningCandidate.fromJson(JsonMap j) => TuningCandidate(
@@ -52,7 +54,14 @@ final class TuningCandidate {
         typeK: KvType.byLabel(j.opt<String>('typeK') ?? 'f16'),
         typeV: KvType.byLabel(j.opt<String>('typeV') ?? 'f16'),
         flashAttention: FlashAttention.values.byName(j.opt<String>('flashAttention') ?? 'auto'),
+        speculative: speculativeByName(j.opt<String>('speculative')),
+        draftModelId: j.opt<String>('draftModelId'),
       );
+
+  /// [SpeculativeMode] named [name]; null for null or a name this version
+  /// does not know (a newer app's mode is read as "not set").
+  static SpeculativeMode? speculativeByName(String? name) =>
+      name == null ? null : SpeculativeMode.values.where((m) => m.name == name).firstOrNull;
 
   final int nThreads;
   final int nBatch;
@@ -61,7 +70,27 @@ final class TuningCandidate {
   final KvType typeV;
   final FlashAttention flashAttention;
 
-  TuningCandidate copyWith({int? nThreads, int? nBatch, int? nUbatch, KvType? typeK, KvType? typeV, FlashAttention? flashAttention}) =>
+  /// Speculative decoding: [SpeculativeMode.none] (off), `ngram` or
+  /// `draft`; null leaves the session's own mode
+  /// (`LocalModelSpec.sessionDefaults`). The sweep never measures it
+  /// (`se_bench` does not sample); it comes from [AutotuneOverrides].
+  final SpeculativeMode? speculative;
+
+  /// With [SpeculativeMode.draft]: the registered model
+  /// (`LocalModelSpec.id`) whose GGUF drafts. Null means the model's own
+  /// draft (`LocalModelSpec.draftModelPath`).
+  final String? draftModelId;
+
+  TuningCandidate copyWith({
+    int? nThreads,
+    int? nBatch,
+    int? nUbatch,
+    KvType? typeK,
+    KvType? typeV,
+    FlashAttention? flashAttention,
+    SpeculativeMode? speculative,
+    String? draftModelId,
+  }) =>
       TuningCandidate(
         nThreads: nThreads ?? this.nThreads,
         nBatch: nBatch ?? this.nBatch,
@@ -69,6 +98,8 @@ final class TuningCandidate {
         typeK: typeK ?? this.typeK,
         typeV: typeV ?? this.typeV,
         flashAttention: flashAttention ?? this.flashAttention,
+        speculative: speculative ?? this.speculative,
+        draftModelId: draftModelId ?? this.draftModelId,
       );
 
   BenchConfig bench({required int nPrompt, required int nGen, required int nReps}) => BenchConfig(
@@ -84,7 +115,8 @@ final class TuningCandidate {
         flashAttention: flashAttention,
       );
 
-  /// Applies this candidate to a session config (context and seed stay).
+  /// Applies this candidate to a session config (context and seed stay;
+  /// so does the speculative mode when [speculative] is null).
   SessionConfig applyTo(SessionConfig c) => c.copyWith(
         nThreads: nThreads,
         nThreadsBatch: nThreads,
@@ -93,6 +125,7 @@ final class TuningCandidate {
         typeK: typeK,
         typeV: typeV,
         flashAttention: flashAttention,
+        speculative: speculative,
       );
 
   JsonMap toJson() => {
@@ -102,6 +135,8 @@ final class TuningCandidate {
         'typeK': typeK.label,
         'typeV': typeV.label,
         'flashAttention': flashAttention.name,
+        'speculative': ?speculative?.name,
+        'draftModelId': ?draftModelId,
       };
 
   @override
@@ -112,13 +147,16 @@ final class TuningCandidate {
       other.nUbatch == nUbatch &&
       other.typeK == typeK &&
       other.typeV == typeV &&
-      other.flashAttention == flashAttention;
+      other.flashAttention == flashAttention &&
+      other.speculative == speculative &&
+      other.draftModelId == draftModelId;
 
   @override
-  int get hashCode => Object.hash(nThreads, nBatch, nUbatch, typeK, typeV, flashAttention);
+  int get hashCode => Object.hash(nThreads, nBatch, nUbatch, typeK, typeV, flashAttention, speculative, draftModelId);
 
   @override
-  String toString() => 't$nThreads b$nBatch/$nUbatch ${typeK.label}/${typeV.label} fa:${flashAttention.name}';
+  String toString() => 't$nThreads b$nBatch/$nUbatch ${typeK.label}/${typeV.label} fa:${flashAttention.name}'
+      '${speculative == null ? '' : ' spec:${speculative!.name}${draftModelId == null ? '' : '($draftModelId)'}'}';
 }
 
 @immutable
@@ -239,10 +277,21 @@ final class AutotuneProfile {
       });
 }
 
-/// Power-user overrides, applied on top of the measured profile.
+/// Power-user overrides, applied on top of the measured profile (or of
+/// [Autotuner.defaults] before one is measured). Null fields are not
+/// overridden.
 @immutable
 final class AutotuneOverrides {
-  const AutotuneOverrides({this.nThreads, this.nBatch, this.nUbatch, this.typeK, this.typeV, this.flashAttention});
+  const AutotuneOverrides({
+    this.nThreads,
+    this.nBatch,
+    this.nUbatch,
+    this.typeK,
+    this.typeV,
+    this.flashAttention,
+    this.speculative,
+    this.draftModelId,
+  });
 
   factory AutotuneOverrides.fromJson(JsonMap j) => AutotuneOverrides(
         nThreads: j.optInt('nThreads'),
@@ -252,6 +301,8 @@ final class AutotuneOverrides {
         typeV: j.opt<String>('typeV') == null ? null : KvType.byLabel(j.req<String>('typeV')),
         flashAttention:
             j.opt<String>('flashAttention') == null ? null : FlashAttention.values.byName(j.req<String>('flashAttention')),
+        speculative: TuningCandidate.speculativeByName(j.opt<String>('speculative')),
+        draftModelId: j.opt<String>('draftModelId'),
       );
 
   final int? nThreads;
@@ -261,8 +312,23 @@ final class AutotuneOverrides {
   final KvType? typeV;
   final FlashAttention? flashAttention;
 
+  /// Speculative decoding for every session of the model
+  /// ([TuningCandidate.speculative]); [SpeculativeMode.none] turns it off.
+  final SpeculativeMode? speculative;
+
+  /// With [SpeculativeMode.draft]: the registered model whose GGUF drafts
+  /// ([TuningCandidate.draftModelId]); null = the model's own draft.
+  final String? draftModelId;
+
   bool get isEmpty =>
-      nThreads == null && nBatch == null && nUbatch == null && typeK == null && typeV == null && flashAttention == null;
+      nThreads == null &&
+      nBatch == null &&
+      nUbatch == null &&
+      typeK == null &&
+      typeV == null &&
+      flashAttention == null &&
+      speculative == null &&
+      draftModelId == null;
 
   TuningCandidate apply(TuningCandidate c) => c.copyWith(
         nThreads: nThreads,
@@ -271,6 +337,32 @@ final class AutotuneOverrides {
         typeK: typeK,
         typeV: typeV,
         flashAttention: flashAttention,
+        speculative: speculative,
+        draftModelId: draftModelId,
+      );
+
+  /// A copy with the given fields replaced ([clearDraftModelId] resets the
+  /// draft to the model's own).
+  AutotuneOverrides copyWith({
+    int? nThreads,
+    int? nBatch,
+    int? nUbatch,
+    KvType? typeK,
+    KvType? typeV,
+    FlashAttention? flashAttention,
+    SpeculativeMode? speculative,
+    String? draftModelId,
+    bool clearDraftModelId = false,
+  }) =>
+      AutotuneOverrides(
+        nThreads: nThreads ?? this.nThreads,
+        nBatch: nBatch ?? this.nBatch,
+        nUbatch: nUbatch ?? this.nUbatch,
+        typeK: typeK ?? this.typeK,
+        typeV: typeV ?? this.typeV,
+        flashAttention: flashAttention ?? this.flashAttention,
+        speculative: speculative ?? this.speculative,
+        draftModelId: clearDraftModelId ? null : draftModelId ?? this.draftModelId,
       );
 
   JsonMap toJson() => compact({
@@ -280,7 +372,50 @@ final class AutotuneOverrides {
         'typeK': typeK?.label,
         'typeV': typeV?.label,
         'flashAttention': flashAttention?.name,
+        'speculative': speculative?.name,
+        'draftModelId': draftModelId,
       });
+}
+
+/// What happened to one candidate of an autotune sweep.
+enum AutotuneStep {
+  /// Benched.
+  measured,
+
+  /// Already measured in an earlier stage (reused, not benched again).
+  repeated,
+
+  /// Over the memory budget: not benched.
+  doesNotFit,
+
+  /// The engine refused the combination (e.g. a quantized V cache without
+  /// flash attention).
+  unsupported,
+}
+
+/// Progress of an autotune sweep: [done] of [total] candidates considered.
+/// The first report has [done] 0 and no [candidate]; the last has [done]
+/// == [total].
+@immutable
+final class AutotuneProgress {
+  const AutotuneProgress({required this.done, required this.total, this.candidate, this.step, this.result});
+
+  final int done;
+  final int total;
+
+  /// The candidate just considered, and what happened to it.
+  final TuningCandidate? candidate;
+  final AutotuneStep? step;
+
+  /// Its bench result ([AutotuneStep.measured] only).
+  final BenchResult? result;
+
+  double get fraction => total == 0 ? 0 : (done / total).clamp(0.0, 1.0);
+
+  bool get isDone => done >= total;
+
+  @override
+  String toString() => 'AutotuneProgress($done/$total${candidate == null ? '' : ' $candidate ${step?.name}'})';
 }
 
 /// First-use performance tuning with `se_bench`.
@@ -321,7 +456,8 @@ final class Autotuner {
   static String _overridesKey(String modelKey) => 'sherpa.autotune.overrides.$modelKey';
 
   /// The default when nothing was measured: all performance cores (the
-  /// engine's own default), R04 §21.4's phone batch sizes, q8_0 KV.
+  /// engine's own default), R04 §21.4's phone batch sizes, q8_0 KV. Before
+  /// a sweep, [cached] applies the overrides to it.
   TuningCandidate get defaults => TuningCandidate(
         nThreads: env.performanceCores.clamp(1, 8),
         nBatch: 512,
@@ -331,16 +467,38 @@ final class Autotuner {
         flashAttention: FlashAttention.auto,
       );
 
-  /// The stored profile for [modelKey] in this environment, with overrides
-  /// applied; null when it must be (re)measured.
+  /// The profile to load [modelKey] with: the one measured in this
+  /// environment with the overrides applied; before one is measured,
+  /// [defaults] with the overrides applied ([AutotuneSource.override]), so
+  /// the user's settings apply without a sweep. Null when there is neither
+  /// a measured profile nor an override.
+  ///
+  /// Whether the sweep still has to run is [isTuned]: overrides do not
+  /// replace measuring the settings they leave alone.
   Future<AutotuneProfile?> cached(String modelKey) async {
-    final j = await _store.read(_profileKey(modelKey));
     final overrides = await this.overrides(modelKey);
+    final p = await measured(modelKey);
+    if (p != null) return _withOverrides(p, overrides);
+    if (overrides.isEmpty) return null;
+    return AutotuneProfile(
+      candidate: overrides.apply(defaults),
+      source: AutotuneSource.override,
+      environmentKey: env.key(modelKey),
+    );
+  }
+
+  /// The profile measured for [modelKey] in this environment, without
+  /// overrides; null when it must be (re)measured.
+  Future<AutotuneProfile?> measured(String modelKey) async {
+    final j = await _store.read(_profileKey(modelKey));
     if (j == null) return null;
     final p = AutotuneProfile.fromJson(j);
-    if (p.environmentKey != env.key(modelKey)) return null;
-    return _withOverrides(p, overrides);
+    return p.environmentKey == env.key(modelKey) ? p : null;
   }
+
+  /// Whether [modelKey] has a measured profile in this environment (the
+  /// first-use sweep is done).
+  Future<bool> isTuned(String modelKey) async => await measured(modelKey) != null;
 
   Future<AutotuneOverrides> overrides(String modelKey) async {
     final j = await _store.read(_overridesKey(modelKey));
@@ -362,10 +520,15 @@ final class Autotuner {
           measuredAt: p.measuredAt,
         );
 
+  /// Candidates a full sweep considers (one per thread count, batch size
+  /// and KV variant).
+  int get sweepSize => sweep.threads.length + sweep.batchSizes.length + sweep.kvVariants.length;
+
   /// Returns the profile for [modelKey], running the sweep on [model] when
-  /// none is stored for this environment (or [force]). [fits] rejects
+  /// none was measured for this environment (or [force]). [fits] rejects
   /// candidates over the memory budget (e.g. an f16 KV cache that only fits
-  /// at a shorter context).
+  /// at a shorter context). [onSample] sees each bench; [onProgress] each
+  /// candidate considered ([sweepSize] in all).
   Future<AutotuneProfile> profileFor({
     required ModelRef model,
     required String modelKey,
@@ -373,27 +536,43 @@ final class Autotuner {
     bool force = false,
     CancellationToken? cancel,
     void Function(TuningCandidate candidate, BenchResult result)? onSample,
+    void Function(AutotuneProgress progress)? onProgress,
   }) async {
     if (!force) {
-      final c = await cached(modelKey);
-      if (c != null) return c;
+      final m = await measured(modelKey);
+      if (m != null) return _withOverrides(m, await overrides(modelKey));
     }
     final samples = <TuningSample>[];
+    final total = sweepSize;
+    var done = 0;
+    void report(TuningCandidate c, AutotuneStep step, [BenchResult? r]) {
+      onProgress?.call(AutotuneProgress(done: ++done, total: total, candidate: c, step: step, result: r));
+    }
+
+    onProgress?.call(AutotuneProgress(done: 0, total: total));
     Future<TuningSample?> measure(TuningCandidate c) async {
       cancel?.throwIfCancelled();
       for (final s in samples) {
-        if (s.candidate == c) return s;
+        if (s.candidate == c) {
+          report(c, AutotuneStep.repeated);
+          return s;
+        }
       }
-      if (fits != null && !await fits(c)) return null;
+      if (fits != null && !await fits(c)) {
+        report(c, AutotuneStep.doesNotFit);
+        return null;
+      }
       try {
         final r = await _host.bench(model, c.bench(nPrompt: sweep.nPrompt, nGen: sweep.nGen, nReps: sweep.nReps),
             cancel: cancel);
         onSample?.call(c, r);
         final s = TuningSample(c, r.promptTokensPerSec, r.genTokensPerSec);
         samples.add(s);
+        report(c, AutotuneStep.measured, r);
         return s;
       } on EngineException {
         cancel?.throwIfCancelled();
+        report(c, AutotuneStep.unsupported);
         return null; // an unsupported combination (e.g. FA off with quantized V)
       }
     }

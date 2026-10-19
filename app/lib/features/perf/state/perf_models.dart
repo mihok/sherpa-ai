@@ -29,6 +29,15 @@ enum SpeculativeChoice {
       };
 }
 
+/// The [DraftOption.modelId] of a model's own paired draft file. In the
+/// lifecycle's terms it is "the model's own draft"
+/// (`LocalModelSpec.draftModelPath`, no `draftModelId`).
+String pairedDraftId(String modelId) => '$modelId$kPairedDraftSuffix';
+
+const String kPairedDraftSuffix = '#draft';
+
+bool isPairedDraftId(String? id) => id != null && id.endsWith(kPairedDraftSuffix);
+
 /// One configuration the lab can measure, compare and apply.
 ///
 /// Zero threads or batch sizes mean "engine default" (all performance
@@ -46,23 +55,38 @@ final class LabConfig {
     this.draftModelId,
   });
 
-  factory LabConfig.fromCandidate(TuningCandidate c, {SpeculativeChoice speculative = SpeculativeChoice.off}) => LabConfig(
-        nThreads: c.nThreads,
-        nBatch: c.nBatch,
-        nUbatch: c.nUbatch,
-        kv: _plainKv(c.typeK),
-        flashAttention: c.flashAttention,
-        speculative: speculative,
-      );
+  /// [c] as a lab config. Its speculative mode wins; [speculative] is used
+  /// when it has none (it then keeps the session's own). [modelId] names a
+  /// draft without its own id: the model's paired draft.
+  factory LabConfig.fromCandidate(
+    TuningCandidate c, {
+    SpeculativeChoice speculative = SpeculativeChoice.off,
+    String? modelId,
+  }) {
+    final choice = c.speculative == null ? speculative : SpeculativeChoice.of(c.speculative);
+    return LabConfig(
+      nThreads: c.nThreads,
+      nBatch: c.nBatch,
+      nUbatch: c.nUbatch,
+      kv: _plainKv(c.typeK),
+      flashAttention: c.flashAttention,
+      speculative: choice,
+      draftModelId: choice != SpeculativeChoice.draft
+          ? null
+          : c.draftModelId ?? (modelId == null ? null : pairedDraftId(modelId)),
+    );
+  }
 
-  /// The parameters a session was (or will be) created with.
-  factory LabConfig.fromSession(SessionConfig c) => LabConfig(
+  /// The parameters a session was (or will be) created with ([draftModelId]:
+  /// the draft it loads with, when it drafts).
+  factory LabConfig.fromSession(SessionConfig c, {String? draftModelId}) => LabConfig(
         nThreads: c.nThreads,
         nBatch: c.nBatch,
         nUbatch: c.nUbatch,
         kv: _plainKv(c.typeK),
         flashAttention: c.flashAttention,
         speculative: SpeculativeChoice.of(c.speculative),
+        draftModelId: c.speculative == SpeculativeMode.draft ? draftModelId : null,
       );
 
   factory LabConfig.fromJson(JsonMap j) => LabConfig(
@@ -116,7 +140,10 @@ final class LabConfig {
   SessionConfig applyTo(SessionConfig base) =>
       candidate.applyTo(base).copyWith(speculative: speculative.mode);
 
-  /// The user override that pins this config ([Autotuner.setOverrides]).
+  /// The user override that pins this config ([Autotuner.setOverrides]),
+  /// speculative decoding included: the lifecycle loads a draft model with
+  /// the weights ([AutotuneOverrides.draftModelId] names a library model;
+  /// none means the model's own paired draft).
   AutotuneOverrides get overrides => AutotuneOverrides(
         nThreads: nThreads > 0 ? nThreads : null,
         nBatch: nBatch > 0 ? nBatch : null,
@@ -124,6 +151,8 @@ final class LabConfig {
         typeK: kv,
         typeV: kv,
         flashAttention: flashAttention,
+        speculative: speculative.mode,
+        draftModelId: speculative == SpeculativeChoice.draft && !isPairedDraftId(draftModelId) ? draftModelId : null,
       );
 
   LabConfig copyWith({
@@ -540,7 +569,6 @@ final class PerfOverview {
     required this.toolCalling,
     this.device,
     this.profile,
-    this.speculative,
     this.addedBackBytes = 0,
     this.drafts = const [],
   });
@@ -551,13 +579,11 @@ final class PerfOverview {
   final MemoryState memory;
   final EngineDescription engine;
 
-  /// The stored profile with overrides applied (null = never tuned here).
+  /// The profile the model loads with: measured, or (before a sweep) the
+  /// defaults, with overrides applied. Null = neither tuned nor overridden.
   final AutotuneProfile? profile;
   final TuningCandidate defaults;
   final AutotuneOverrides overrides;
-
-  /// The lab-chosen speculative mode (null = off).
-  final SpeculativeMode? speculative;
   final CurrentSettings current;
 
   /// What a load is admitted against now.
@@ -566,16 +592,27 @@ final class PerfOverview {
   final bool toolCalling;
   final List<DraftOption> drafts;
 
-  bool get hasOverrides => !overrides.isEmpty || speculative != null;
+  /// The speculative mode the user pinned (null = the app default, off).
+  SpeculativeMode? get speculative => overrides.speculative;
 
-  /// The settings the model loads with: the tuned profile (with
-  /// overrides), or, before tuning, what admission plans from the app's
-  /// session defaults (the lifecycle uses the autotuner's defaults only
-  /// once a profile exists).
+  bool get hasOverrides => !overrides.isEmpty;
+
+  /// The profile holds the user's settings but nothing was measured yet.
+  bool get unmeasured => profile != null && profile!.measuredAt == null;
+
+  /// The settings the model loads with: the profile (with overrides), or,
+  /// with neither a profile nor overrides, what admission plans from the
+  /// app's session defaults.
   LabConfig get tuned {
     final p = profile;
     if (p == null) return current.config;
-    return LabConfig.fromCandidate(p.candidate, speculative: SpeculativeChoice.of(speculative));
+    return LabConfig.fromCandidate(p.candidate, speculative: current.config.speculative, modelId: modelId);
+  }
+
+  /// The draft option [tuned] drafts with, if any.
+  DraftOption? get tunedDraft {
+    final id = tuned.draftModelId;
+    return id == null ? null : drafts.where((d) => d.modelId == id).firstOrNull;
   }
 }
 
@@ -587,19 +624,6 @@ enum LabJobPhase {
 
   /// A chat reply took the engine; the job runs again once it is idle.
   paused,
-}
-
-/// Progress of a running sweep ("Re-run autotune").
-@immutable
-final class AutotuneProgress {
-  const AutotuneProgress({required this.done, required this.total, this.last, this.lastResult});
-
-  final int done;
-  final int total;
-  final TuningCandidate? last;
-  final BenchResult? lastResult;
-
-  double get fraction => total == 0 ? 0 : (done / total).clamp(0, 1);
 }
 
 /// Progress of a running A/B comparison.

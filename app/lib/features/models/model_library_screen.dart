@@ -13,14 +13,18 @@ import '../../routing/routes.dart';
 import '../../services/device/device_profile_source.dart';
 import '../../services/downloads/downloads.dart';
 import '../../services/inference/local_model_specs.dart' show isRunnableLocally;
+import '../../services/inference/on_device_ids.dart';
+import '../../services/inference/platform_models.dart' show EngineAvailability;
 import '../../state/providers.dart';
 import '../../state/ui_preferences.dart';
 import '../home/relative_time.dart';
 import 'state/local_inference_providers.dart';
 import 'state/local_model_choice.dart';
 import 'state/models_providers.dart';
+import 'state/platform_models_providers.dart';
 import 'widgets/format.dart';
 import 'widgets/pills.dart';
+import 'widgets/system_models_section.dart';
 
 /// Opens the system file picker. A provider so tests can hand in a file.
 final modelFilePickerProvider = Provider<Future<LocalModelFile?> Function()>((ref) => pickModelFile);
@@ -140,6 +144,7 @@ class _ModelLibraryScreenState extends ConsumerState<ModelLibraryScreen> {
                 const _EmptyLibrary()
               else
                 for (final m in list) LibraryModelTile(model: m),
+              const SystemModelsSection(),
             ],
           ),
         ),
@@ -292,6 +297,40 @@ class LocalEngineBanner extends ConsumerWidget {
   }
 }
 
+/// "MLX: Ready." / "LiteRT-LM: Runs on GPU (falls back to CPU)." / why it
+/// can't run here, from the platform engine's availability check.
+class _EngineLine extends StatelessWidget {
+  const _EngineLine({required this.name, required this.availability});
+
+  final String name;
+  final EngineAvailability? availability;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    final a = availability;
+    final ok = a?.isAvailable ?? false;
+    final color = ok ? theme.colorScheme.onSurfaceVariant : t.semantic.warning;
+    return Semantics(
+      container: true,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(ok ? Icons.memory_rounded : Icons.block_rounded, size: 16, color: color),
+          SizedBox(width: t.space.xs),
+          Expanded(
+            child: Text(
+              '$name: ${a?.reason ?? 'not available in this build of Sherpa.'}',
+              style: theme.textTheme.bodySmall?.copyWith(color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// The lifecycle halves a model's context after a crash while loading or
 /// generating with it (ModelLifecycleManager.start).
 bool _downgraded(EngineCrashReport crash) {
@@ -330,7 +369,21 @@ class LibraryModelTile extends ConsumerWidget {
     final scheme = theme.colorScheme;
     final m = model;
     final use = ref.watch(useLocalModelInChatProvider);
-    final engineProblem = ref.watch(localEngineStatusProvider).value?.unavailableMessage;
+    final provider = libraryProviderIdFor(m.format);
+    final platformModel = provider == mlxProviderId || provider == liteRtProviderId;
+    // MLX / LiteRT: the platform engine's verdict on this model (with its
+    // reason); GGUF: llama.cpp's status.
+    final availability = platformModel ? ref.watch(libraryModelAvailabilityProvider(m.id)) : null;
+    final engineName = provider == mlxProviderId ? 'MLX' : 'LiteRT-LM';
+    final String? engineProblem;
+    if (!platformModel) {
+      engineProblem = ref.watch(localEngineStatusProvider).value?.unavailableMessage;
+    } else if (availability!.isLoading && !availability.hasValue) {
+      engineProblem = 'Checking whether $engineName can run it here…';
+    } else {
+      final a = availability.value;
+      engineProblem = a == null ? '$engineName is not available in this build of Sherpa.' : (a.isAvailable ? null : a.reason);
+    }
     final now = ref.watch(clockProvider).now();
     final ctx = m.defaultContextLength;
     final facts = <Widget>[
@@ -410,6 +463,9 @@ class LibraryModelTile extends ConsumerWidget {
                     if (!m.usable) ...[
                       SizedBox(height: t.space.sm),
                       Text(m.issue.message, style: theme.textTheme.bodySmall?.copyWith(color: t.semantic.danger)),
+                    ] else if (platformModel && availability!.hasValue) ...[
+                      SizedBox(height: t.space.sm),
+                      _EngineLine(name: engineName, availability: availability.value),
                     ],
                     SizedBox(height: t.space.sm),
                     Wrap(

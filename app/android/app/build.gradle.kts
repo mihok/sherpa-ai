@@ -43,6 +43,14 @@ android {
             // does not reach the APK, so the app picks one. Native libraries
             // stay uncompressed and 16 KB-aligned (no useLegacyPackaging).
             pickFirsts += "**/libc++_shared.so"
+            // The Flutter Gradle plugin resets `ndk.abiFilters` to
+            // armeabi-v7a, arm64-v8a and x86_64, so the arm64-only filter
+            // above does not reach plugin AARs. LiteRT-LM's x86_64 engine
+            // (26 MB, stored uncompressed) would ship in every APK; Sherpa
+            // runs on-device models on arm64 only. On an x86_64 emulator
+            // sherpa_litert then reports LiteRT-LM unavailable
+            // (`runtime_missing`) instead of crashing.
+            excludes += "lib/x86_64/liblitertlm_jni.so"
         }
     }
 

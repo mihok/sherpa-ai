@@ -9,6 +9,7 @@ import '../../design/tokens.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../routing/routes.dart';
 import '../../services/inference/local_inference.dart';
+import '../../services/inference/on_device_ids.dart';
 import '../../state/services.dart';
 import '../models/state/local_inference_providers.dart';
 import '../models/state/local_model_fit.dart';
@@ -20,10 +21,13 @@ import 'widgets/chat_style.dart';
 
 /// The model picker's "On this device" section: every installed model with
 /// its fit on this phone right now (Fits / Tight / Won't fit, the same
-/// estimate as the download screens). Models that won't fit, have broken
-/// files, or can't run because the engine is unavailable are shown
-/// disabled with the reason. Renders nothing when on-device inference is
-/// not wired.
+/// estimate as the download screens) and its engine — llama.cpp for GGUF,
+/// MLX (iOS) and LiteRT-LM (Android) with their availability — then the
+/// system models (Apple Intelligence, Gemini Nano) with their status.
+/// Models that won't fit, have broken files, or can't run because their
+/// engine is unavailable or not on this platform are shown disabled with
+/// the reason. Gemini Nano says that it only runs while Sherpa is on
+/// screen. Renders nothing when on-device inference is not wired.
 class LocalModelPickerSection extends ConsumerStatefulWidget {
   const LocalModelPickerSection({super.key, required this.current, required this.onPick});
 
@@ -75,6 +79,7 @@ class _LocalModelPickerSectionState extends ConsumerState<LocalModelPickerSectio
 
     final crash = status.crashReport;
     final list = options.value;
+    final system = ref.watch(systemModelOptionsProvider).value ?? const <SystemModelOption>[];
     return Padding(
       padding: EdgeInsets.only(bottom: tokens.space.lg),
       child: Column(
@@ -109,7 +114,7 @@ class _LocalModelPickerSectionState extends ConsumerState<LocalModelPickerSectio
                 ],
               ),
             )
-          else if (list.isEmpty)
+          else if (list.isEmpty && system.isEmpty)
             Padding(
               padding: EdgeInsets.symmetric(horizontal: tokens.space.sm),
               child: Row(
@@ -127,6 +132,13 @@ class _LocalModelPickerSectionState extends ConsumerState<LocalModelPickerSectio
                 selected: widget.current == o.choice,
                 onTap: o.selectable ? () => widget.onPick(o.choice) : null,
               ),
+          for (final o in system)
+            _SystemModelRow(
+              key: ValueKey('system-model-${o.providerId}'),
+              option: o,
+              selected: widget.current == o.choice,
+              onTap: o.selectable ? () => widget.onPick(o.choice) : null,
+            ),
         ],
       ),
     );
@@ -147,7 +159,13 @@ class _LocalModelRow extends StatelessWidget {
     final o = option;
     final caps = o.descriptor.capabilities;
     final enabled = onTap != null;
+    final engine = switch (o.choice.providerId) {
+      mlxProviderId => 'MLX',
+      liteRtProviderId => 'LiteRT',
+      _ => null,
+    };
     final facts = [
+      ?engine,
       '${formatTokenCount(caps.contextLength)} context',
       if (!caps.canCallTools) 'no tools',
       if (caps.reasoning != ReasoningSupport.none) 'reasoning',
@@ -166,6 +184,7 @@ class _LocalModelRow extends StatelessWidget {
       o.model.displayName,
       facts,
       'Device fit: $fitLabel. ${o.fitReason}',
+      ?o.engineNote,
       if (reason != null && reason != o.fitReason) reason,
       if (!enabled) 'Not available',
       const PrivacyBadgeData(location: ExecutionLocation.onDevice).description,
@@ -221,7 +240,105 @@ class _LocalModelRow extends StatelessWidget {
                     if (reason != null)
                       Text(reason, style: theme.textTheme.bodySmall?.copyWith(color: tokens.semantic.danger))
                     else if (o.fit == FitBadgeKind.tight)
-                      Text(o.fitReason, style: theme.textTheme.bodySmall?.copyWith(color: tokens.semantic.warning)),
+                      Text(o.fitReason, style: theme.textTheme.bodySmall?.copyWith(color: tokens.semantic.warning))
+                    else if (o.engineNote != null)
+                      Text(o.engineNote!, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Apple Intelligence or Gemini Nano: its status, and for Gemini Nano that
+/// it only runs while Sherpa is on screen (so the choice is never a silent
+/// one for background work).
+class _SystemModelRow extends StatelessWidget {
+  const _SystemModelRow({super.key, required this.option, required this.selected, required this.onTap});
+
+  final SystemModelOption option;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    final o = option;
+    final enabled = onTap != null;
+    final reason = o.unavailableReason;
+    final muted = theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final spoken = [
+      o.name,
+      'System model',
+      o.availability.reason,
+      if (reason != null && reason != o.availability.reason) reason,
+      if (o.foregroundOnly) 'Only while Sherpa is on screen',
+      if (!enabled) 'Not available',
+      const PrivacyBadgeData(location: ExecutionLocation.onDevice).description,
+    ].join('. ');
+    return Semantics(
+      container: true,
+      button: true,
+      enabled: enabled,
+      selected: selected,
+      onTap: onTap,
+      label: spoken,
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(tokens.radius.md),
+        child: Container(
+          constraints: BoxConstraints(minHeight: tokens.space.minTouchTarget),
+          padding: EdgeInsets.symmetric(horizontal: tokens.space.sm, vertical: tokens.space.sm),
+          decoration: selected
+              ? BoxDecoration(color: theme.colorScheme.secondaryContainer, borderRadius: BorderRadius.circular(tokens.radius.md))
+              : null,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                selected
+                    ? Icons.check_circle_rounded
+                    : enabled
+                        ? Icons.radio_button_unchecked_rounded
+                        : Icons.block_rounded,
+                color: selected ? theme.colorScheme.primary : theme.colorScheme.outline,
+              ),
+              SizedBox(width: tokens.space.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: tokens.space.sm,
+                      runSpacing: tokens.space.xxs,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(o.name, style: theme.textTheme.bodyLarge?.copyWith(color: enabled ? null : theme.disabledColor)),
+                        const InfoPill(
+                          label: 'System',
+                          icon: Icons.phone_android_rounded,
+                          explanation: "Built into this phone's operating system; nothing to download from Hugging Face.",
+                        ),
+                        if (o.foregroundOnly)
+                          const InfoPill(
+                            label: 'On screen only',
+                            icon: Icons.visibility_outlined,
+                            tone: PillTone.warning,
+                            explanation: kForegroundOnlyExplanation,
+                          ),
+                      ],
+                    ),
+                    if (reason != null)
+                      Text(reason, style: theme.textTheme.bodySmall?.copyWith(color: tokens.semantic.danger))
+                    else
+                      Text(o.availability.reason, style: muted),
+                    if (o.foregroundOnly && enabled) Text('Pauses when you leave Sherpa; continues when you come back.', style: muted),
                   ],
                 ),
               ),

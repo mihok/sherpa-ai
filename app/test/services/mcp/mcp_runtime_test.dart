@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sherpa/features/context/data/data_erase.dart' show dataEraseHooksProvider;
 import 'package:sherpa/features/mcp/mcp_bootstrap.dart';
 import 'package:sherpa/features/mcp/state/mcp_providers.dart';
+import 'package:sherpa/services/mcp/auth/mcp_oauth.dart' show McpSignedIn;
 import 'package:sherpa/services/mcp/auth/oauth_platform.dart';
+import 'package:sherpa/services/mcp/input/host_settings.dart';
 import 'package:sherpa/services/mcp/input_handler.dart';
 import 'package:sherpa/services/mcp/mcp_records.dart';
 import 'package:sherpa/services/mcp/mcp_runtime.dart';
@@ -214,9 +218,135 @@ void main() {
       await rt.dispose();
     });
   });
+  group('delete all data', () {
+    test('eraseAll removes user servers, their sign-in, notes, pins, switches, approvals and input data', () async {
+      final records = InMemoryMcpRecords();
+      final secrets = InMemorySecretStore();
+      final world = FakeAuthWorld();
+      final remote = remoteWith()
+        ..requireBearer[remoteUrl] = world.issued.contains
+        ..resourceMetadata[remoteUrl] = world.prmUrl;
+      final rt = await fakeRuntime(
+        records: records,
+        secrets: secrets,
+        remote: remote,
+        client: world.client(),
+        browser: FakeBrowser(world.approve),
+        notes: DocumentNoteStorage(records),
+      );
+      addTearDown(rt.dispose);
+      await rt.start();
+
+      // A signed-in user server with a reviewed tool, switches and a grant.
+      final c = await rt.addServer(url: Uri.parse(remoteUrl), name: 'Example tools');
+      await rt.refresh();
+      expect(await rt.oauth.authorize(c.id, (await rt.oauth.prepareConsent(c.id))!), isA<McpSignedIn>());
+      await rt.refresh();
+      expect(await rt.oauth.hasCredentials(c.id), isTrue);
+      expect(await rt.approveTool(const McpToolKey('example_tools', 'send')), isTrue);
+      await rt.setToolEnabled('example_tools__lookup', false);
+      await rt.setToolEnabled('memory__delete_note', false);
+      await rt.setSessionServer('chat-1', McpRuntime.memoryServerId, false);
+      await rt.enablement.setPinned('device__current_time', true);
+      final send = rt.router.lookup('example_tools__send')!;
+      rt.policy.recordFor(send, 'chat-1', const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.always));
+      rt.policy.recordFor(rt.router.lookup('memory__delete_note')!, 'chat-1',
+          const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.always));
+      // Built-in changes: a server turned off, a note, host settings.
+      await rt.setEnabled(McpRuntime.deviceServerId, false);
+      final saved = await rt.router.execute(
+        const ToolCall(id: 'n1', name: 'memory__save_note', arguments: {'text': 'My locker code is 4417'}),
+        toolCtx('chat-2'),
+      );
+      expect(saved.isError, isFalse);
+      await rt.updateHostSettings(c.id, const McpServerHostSettings(sampling: McpSamplingMode.ask, appsEnabled: false));
+      await pumpEventQueue();
+      for (final collection in [
+        DocumentCollections.mcpServers,
+        DocumentCollections.mcpToolPins,
+        DocumentCollections.mcpToolSettings,
+        DocumentCollections.approvalGrants,
+        DocumentCollections.memoryNotes,
+      ]) {
+        expect(records.ids(collection), isNotEmpty, reason: '$collection before');
+      }
+      expect(rt.policy.grants, hasLength(2));
+      expect((await secrets.keys(prefix: 'oauth/')).where((k) => k.contains('/tokens/')), isNotEmpty);
+
+      await rt.eraseAll();
+      await pumpEventQueue();
+
+      expect(rt.servers.map((s) => s.id), [McpRuntime.memoryServerId, McpRuntime.deviceServerId],
+          reason: 'only the built-in servers stay');
+      expect(rt.servers.every((s) => s.enabled && s.trusted), isTrue, reason: 'with their defaults');
+      expect(await rt.oauth.hasCredentials(c.id), isFalse);
+      expect((await secrets.keys(prefix: 'oauth/')).where((k) => k.contains('/tokens/')), isEmpty);
+      expect(rt.oauth.stateOf(c.id).needsConsent, isFalse);
+      expect(records.ids(DocumentCollections.mcpServers), isNot(contains(c.id)));
+      expect(records.ids(DocumentCollections.memoryNotes), isEmpty);
+      expect(await rt.notes.keys(), isEmpty);
+      expect(records.ids(DocumentCollections.mcpToolPins).where((k) => k.startsWith('example_tools/')), isEmpty);
+      expect(records.ids(DocumentCollections.mcpToolSettings), isEmpty);
+      expect(records.ids(DocumentCollections.approvalGrants), isEmpty);
+      expect(rt.policy.grants, isEmpty);
+      expect(rt.isToolEnabled('memory__delete_note'), isTrue);
+      expect(rt.isToolEnabled('example_tools__lookup'), isTrue);
+      expect(rt.enablement.isServerEnabled('chat-1', McpRuntime.memoryServerId), isTrue);
+      expect(rt.enablement.isPinned('chat-1', 'device__current_time'), isFalse);
+      expect(rt.hostSettingsOf(c.id).sampling, McpSamplingMode.off);
+      expect(rt.pendingReviews, isEmpty);
+      expect(rt.policy.evaluate(rt.router.lookup('memory__delete_note')!, 'chat-1'), isA<NeedsConfirmation>(),
+          reason: 'no remembered approval');
+      // The built-in tools are listed again (and re-pinned without review).
+      expect(rt.router.lookup('device__current_time'), isNotNull);
+      expect(rt.router.entryFor('memory__save_note')!.quarantined, isFalse);
+      final notes = await rt.router.execute(
+        const ToolCall(id: 'n2', name: 'memory__search_notes', arguments: {'query': 'locker'}),
+        toolCtx('chat-2'),
+      );
+      expect([for (final p in notes.content) if (p is TextPart) p.text].join(), isNot(contains('4417')));
+      expect(jsonEncode(notes.structured), isNot(contains('4417')));
+
+      // Nothing comes back after a restart either.
+      final again = await fakeRuntime(records: records, secrets: secrets, remote: remote, notes: DocumentNoteStorage(records));
+      addTearDown(again.dispose);
+      expect(again.servers.map((s) => s.id), [McpRuntime.memoryServerId, McpRuntime.deviceServerId]);
+      expect(again.server(McpRuntime.deviceServerId)!.enabled, isTrue);
+      expect(again.policy.grants, isEmpty);
+      expect(again.isToolEnabled('memory__delete_note'), isTrue);
+    });
+
+    test('the "Delete all data" hook, registered as bootstrap does, erases MCP data', () async {
+      final rt = await fakeRuntime(remote: remoteWith());
+      addTearDown(rt.dispose);
+      final c = await rt.addServer(url: Uri.parse(remoteUrl), name: 'Example tools');
+      final container = ProviderContainer(overrides: [
+        sessionStoreProvider.overrideWithValue(InMemorySessionStore()),
+        ...mcpRuntimeOverrides(rt),
+        dataEraseHooksProvider.overrideWith((ref) => [() => _eraseMcp(ref)]),
+      ]);
+      addTearDown(container.dispose);
+      for (final hook in container.read(dataEraseHooksProvider)) {
+        await hook();
+      }
+      expect(rt.server(c.id), isNull);
+    });
+
+    test('eraseAll on a fresh runtime is harmless', () async {
+      final records = InMemoryMcpRecords();
+      final rt = await fakeRuntime(records: records, notes: DocumentNoteStorage(records));
+      addTearDown(rt.dispose);
+      await rt.eraseAll();
+      expect(rt.servers.map((s) => s.id), [McpRuntime.memoryServerId, McpRuntime.deviceServerId]);
+      expect(rt.router.lookup('memory__save_note'), isNotNull);
+    });
+  });
 }
 
 extension on McpRuntime {
   Future<void> setSessionServer(String sessionId, String serverId, bool on) =>
       enablement.setServerEnabled(serverId, on, sessionId: sessionId);
 }
+
+/// The bootstrap's hook (lib/bootstrap.dart registers the same function).
+Future<void> _eraseMcp(Ref ref) => ref.read(mcpRuntimeProvider).eraseAll();

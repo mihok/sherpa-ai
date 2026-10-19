@@ -154,6 +154,18 @@ final class McpServerConfigStore {
     _meta.remove(id);
     return _serial.run(() => _records.delete(_collection, id));
   }
+
+  /// Deletes every stored config ("Delete all data"), unreadable ones too
+  /// when they still name their id. Built-in servers then start with their
+  /// defaults.
+  Future<void> clear() {
+    _meta.clear();
+    return _serial.run(() async {
+      for (final doc in await _records.list(_collection)) {
+        if (doc['id'] case final String id) await _records.delete(_collection, id);
+      }
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +229,16 @@ final class DocumentToolPinStore implements ToolPinStore {
     final keys = [for (final k in all.keys) if (k.serverId == serverId) k];
     for (final k in keys) {
       all.remove(k);
+      await _serial.run(() => _records.delete(_collection, k.encoded));
+    }
+  }
+
+  /// Deletes every pin, of every server ("Delete all data").
+  Future<void> clear() async {
+    final all = await _all();
+    final keys = all.keys.toList();
+    all.clear();
+    for (final k in keys) {
       await _serial.run(() => _records.delete(_collection, k.encoded));
     }
   }
@@ -306,6 +328,21 @@ final class PersistentToolEnablement implements ToolEnablement {
   /// Drops a session's overrides (the session was deleted).
   Future<void> forgetSession(String sessionId) => _apply(() => _state.forgetSession(sessionId));
 
+  /// Drops every switch and pin, global and per session ("Delete all
+  /// data"), and the stored document.
+  Future<void> clear() async {
+    final j = _state.toJson();
+    final scopes = {
+      for (final field in const ['servers', 'tools', 'pinned']) ...?(j[field] as Map?)?.keys.map((k) => '$k'),
+    };
+    await _apply(() {
+      for (final s in scopes) {
+        _state.forgetSession(s);
+      }
+    });
+    await _serial.run(() => _records.delete(_collection, _doc));
+  }
+
   Future<void> _apply(void Function() change) {
     change();
     _changes.add(null);
@@ -363,6 +400,10 @@ final class ApprovalGrantStore {
     };
     return _serial.run(() => _records.put(_collection, _doc, doc));
   }
+
+  /// Deletes the stored grants ("Delete all data"), after any save queued
+  /// before it.
+  Future<void> clear() => _serial.run(() => _records.delete(_collection, _doc));
 }
 
 // ---------------------------------------------------------------------------

@@ -108,6 +108,28 @@ void main() {
       expect(h.sideEffects.first.declaredReadOnly, isFalse);
     });
 
+    test('the extractive strategy tags tool key facts and failures with the tool that ran', () async {
+      final c = Conv()..user('save it');
+      c.proxied('c1', 'files__write_file', {'path': '/p.md'}, 'Wrote 12 bytes to /p.md', server: 'files');
+      c.assistant('', calls: const [ToolCall(id: 'c2', name: 'call_tool', arguments: {'name': 'notes__create_note'})]);
+      c.results(const [
+        ToolResultPart(
+          callId: 'c2',
+          toolName: 'call_tool',
+          content: [TextPart('quota exceeded')],
+          isError: true,
+          meta: {ToolResultPart.metaTool: 'notes__create_note'},
+        ),
+      ]);
+      c.toolTurn('c3', 'files__read_file', {'path': '/p.md'}, 'plain call');
+      final s = await const ExtractiveContextStrategy()
+          .summarize(CompactionInput(messages: c.messages, toolLookup: (n) => _defs[n], annotationsFor: _trustAll));
+      expect(s.keyFacts, contains('[tool:files__write_file] Wrote 12 bytes to /p.md'));
+      expect(s.keyFacts, contains('[tool:files__read_file] plain call'));
+      expect(s.failedApproaches, contains('[tool:notes__create_note] notes__create_note failed: quota exceeded'));
+      expect([...s.keyFacts, ...s.failedApproaches].where((f) => f.contains('call_tool')), isEmpty);
+    });
+
     test('the rendered line names the tool and its key argument before anything is clipped', () {
       final s = CompactionSummary(goal: 'g', sideEffectLedger: harvest(annotationsFor: _trustAll).sideEffects);
       final line = s.render().split('\n').firstWhere((l) => l.contains('(call c1,'));

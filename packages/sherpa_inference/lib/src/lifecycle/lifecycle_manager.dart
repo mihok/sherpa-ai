@@ -29,6 +29,7 @@ final class LocalModelSpec {
     this.toolCalling = true,
     this.chatTemplateOverride,
     this.mmprojPath,
+    this.draftModelPath,
     this.nGpuLayers = -1,
     this.loras = const [],
     this.sessionDefaults = const SessionConfig(),
@@ -58,6 +59,13 @@ final class LocalModelSpec {
   final bool toolCalling;
   final String? chatTemplateOverride;
   final String? mmprojPath;
+
+  /// GGUF of this model's own draft model (e.g. its paired draft file) for
+  /// speculative decoding with [SpeculativeMode.draft]. It is loaded next to
+  /// the model only when the session drafts with it: [sessionDefaults], or
+  /// the tuned profile ([TuningCandidate.speculative] with no
+  /// [TuningCandidate.draftModelId]), asks for [SpeculativeMode.draft].
+  final String? draftModelPath;
   final int nGpuLayers;
 
   /// LoRA adapters (path, scale) applied to every session of this model.
@@ -67,12 +75,19 @@ final class LocalModelSpec {
   /// admission fill in the rest.
   final SessionConfig sessionDefaults;
 
-  ModelLoadOptions get loadOptions => ModelLoadOptions(
+  /// The load options for [sessionDefaults]: with [draftModelPath] when
+  /// they draft with a model ([loadOptionsWith]).
+  ModelLoadOptions get loadOptions =>
+      loadOptionsWith(draftModelPath: sessionDefaults.speculative == SpeculativeMode.draft ? draftModelPath : null);
+
+  /// The load options with [draftModelPath] as the draft model (null: none).
+  ModelLoadOptions loadOptionsWith({String? draftModelPath}) => ModelLoadOptions(
         path: path,
         modelId: identity,
         nGpuLayers: nGpuLayers,
         chatTemplateOverride: chatTemplateOverride,
         mmprojPath: mmprojPath,
+        draftModelPath: draftModelPath,
       );
 
   String get label => displayName ?? id;
@@ -173,9 +188,12 @@ final class PrefixSavedEvent extends LifecycleEvent {
 
 /// The warm model: weights, one session, and what its KV cache holds.
 final class LoadedModel {
-  LoadedModel._(this.spec, this.model, this.info, this.session, this.sessionInfo, this.estimate);
+  LoadedModel._(this.spec, this.model, this.info, this.session, this.sessionInfo, this.estimate, this.loadOptions);
 
   final LocalModelSpec spec;
+
+  /// What the model was loaded with (including its draft model, if any).
+  final ModelLoadOptions loadOptions;
   final EngineModel model;
   final EngineModelInfo info;
   EngineSession session;
@@ -384,9 +402,25 @@ final class ModelLifecycleManager {
         'at': _clock.now().toUtc().toIso8601String(),
       });
     }
+    if (modelId != null && report.phase.phase == InferencePhase.benchmarking) {
+      // The sweep would hit the same candidate again: no automatic autotune
+      // for this model until a forced run (the performance lab) completes.
+      await _store.write(_autotuneCrashKey(modelId), {
+        'reason': report.description,
+        'at': _clock.now().toUtc().toIso8601String(),
+      });
+    }
     _events.add(EngineCrashDetectedEvent(report, downgradedContext: cap));
     return report;
   }
+
+  static String _autotuneCrashKey(String modelId) => 'sherpa.lifecycle.autotune_crash.$modelId';
+
+  /// Why automatic autotune is off for [modelId]: the previous run ended
+  /// (engine crash or OS kill) while it benchmarked. Null when it is not.
+  /// A forced [autotune] that completes clears it.
+  Future<String?> autotuneCrashFor(String modelId) async =>
+      (await _store.read(_autotuneCrashKey(modelId)))?.opt<String>('reason');
 
   /// The context cap recorded after a crash, if any.
   Future<int?> downgradeFor(String modelId) async => (await _store.read(_downgradeKey(modelId)))?.optInt('maxContext');
@@ -489,13 +523,34 @@ final class ModelLifecycleManager {
     final spec = _specs[modelId];
     if (spec == null) throw ArgumentError.value(modelId, 'modelId', 'not a registered on-device model');
     if (!_started) await start();
-    return _plan(spec);
+    return (await _plan(spec)).plan;
   }
 
-  Future<AdmissionPlan> _plan(LocalModelSpec spec) async {
+  /// The draft model GGUF [modelId] would speculate with: the registered
+  /// model [draftModelId]'s file, or (null) the model's own
+  /// [LocalModelSpec.draftModelPath]. Null when there is none.
+  String? draftModelPathFor(String modelId, {String? draftModelId}) {
+    if (draftModelId != null && draftModelId != modelId) return _specs[draftModelId]?.path;
+    return _specs[modelId]?.draftModelPath;
+  }
+
+  Future<({AdmissionPlan plan, ModelLoadOptions load})> _plan(LocalModelSpec spec) async {
     final tuned = await autotuner?.cached(spec.id);
     var base = spec.sessionDefaults;
     if (tuned != null) base = tuned.candidate.applyTo(base);
+    // A draft model is loaded with the weights (and counted in the
+    // estimate); without one, drafting falls back to no speculation.
+    String? draft;
+    String? draftNote;
+    if (base.speculative == SpeculativeMode.draft) {
+      final override = tuned?.candidate.speculative == SpeculativeMode.draft;
+      draft = override ? draftModelPathFor(spec.id, draftModelId: tuned?.candidate.draftModelId) : spec.draftModelPath;
+      if (draft == null) {
+        base = base.copyWith(speculative: SpeculativeMode.none);
+        draftNote = 'speculative decoding is off: its draft model is not available';
+      }
+    }
+    final load = spec.loadOptionsWith(draftModelPath: draft);
     final cap = await downgradeFor(spec.id);
     final preferred = cap == null ? spec.preferredContext : math.min(cap, spec.preferredContext);
     final preferredKv = tuned?.candidate.typeK;
@@ -514,21 +569,28 @@ final class ModelLifecycleManager {
       kvLadder: ladder,
       trainContext: spec.trainContext,
     );
-    final plan = await planAdmission(req, budget, (c) => host.estimateMemory(spec.loadOptions, c), policy: policy);
-    if (cap != null && plan.admitted) {
-      return AdmissionPlan(
-        config: plan.config,
-        estimate: plan.estimate,
-        budget: plan.budget,
-        notes: ['context capped at $cap tokens after an earlier engine crash', ...plan.notes],
+    final plan = await planAdmission(req, budget, (c) => host.estimateMemory(load, c), policy: policy);
+    final notes = [
+      if (cap != null && plan.admitted) 'context capped at $cap tokens after an earlier engine crash',
+      ?draftNote,
+    ];
+    if (notes.isNotEmpty && plan.admitted) {
+      return (
+        plan: AdmissionPlan(
+          config: plan.config,
+          estimate: plan.estimate,
+          budget: plan.budget,
+          notes: [...notes, ...plan.notes],
+        ),
+        load: load,
       );
     }
-    return plan;
+    return (plan: plan, load: load);
   }
 
   Future<LoadedModel> _loadLocked(LocalModelSpec spec, {CancellationToken? cancel}) async {
     final sw = Stopwatch()..start();
-    final plan = await _plan(spec);
+    final (:plan, :load) = await _plan(spec);
     if (!plan.admitted) {
       _events.add(AdmissionRefusedEvent(spec, plan));
       throw AdmissionRefusedException(plan);
@@ -537,7 +599,7 @@ final class ModelLifecycleManager {
     await _phase(InferencePhase.loading, null, spec: spec, config: config);
     EngineModel? model;
     try {
-      model = await host.loadModel(spec.loadOptions, cancel: cancel);
+      model = await host.loadModel(load, cancel: cancel);
       final info = EngineModelInfo.parse(model.infoJson);
       if (info.contextTrain > 0 && config.nCtx > info.contextTrain) config = config.copyWith(nCtx: info.contextTrain);
       EngineSession? session;
@@ -559,7 +621,7 @@ final class ModelLifecycleManager {
         }
         await host.setLoras(session.ref, refs);
       }
-      final l = LoadedModel._(spec, model, info, session, EngineSessionInfo.parse(session.infoJson), plan.estimate);
+      final l = LoadedModel._(spec, model, info, session, EngineSessionInfo.parse(session.infoJson), plan.estimate, load);
       _loaded = l;
       await _phase(InferencePhase.idle, l);
       _events.add(ModelLoadedEvent(spec, config, plan.estimate, plan.notes, sw.elapsed));
@@ -767,33 +829,67 @@ final class ModelLifecycleManager {
   /// Benchmarks the warm model of [modelId] (or uses the stored profile) and
   /// applies the thread count right away; batch sizes and KV type apply at
   /// the next load. Run it as background work.
-  Future<AutotuneProfile?> autotune(String modelId, {bool force = false, CancellationToken? cancel}) async {
+  ///
+  /// Returns null without measuring when there is no [autotuner], or,
+  /// unless [force], when the device is hot or the previous run ended while
+  /// this model was benchmarking ([autotuneCrashFor]). The sweep runs in the
+  /// [InferencePhase.benchmarking] phase, so a crash during it is reported
+  /// (and stops automatic retries). [cancel] stops it between benches (and
+  /// the running bench); [onProgress] reports each candidate
+  /// ([Autotuner.sweepSize] in all; nothing when a stored profile is used).
+  ///
+  /// Candidates are checked against the memory budget at the warm model's
+  /// context, counting its own memory as available: it is freed before a
+  /// config chosen here loads.
+  Future<AutotuneProfile?> autotune(
+    String modelId, {
+    bool force = false,
+    CancellationToken? cancel,
+    void Function(AutotuneProgress progress)? onProgress,
+  }) async {
     final tuner = autotuner;
     if (tuner == null) return null;
     final state = await (_memory?.sample() ?? Future.value(MemoryState.unknown));
     if (state.thermal.index >= ThermalLevel.serious.index && !force) return null;
+    if (!force && await autotuneCrashFor(modelId) != null) return null;
     final lease = await acquire(modelId, cancel: cancel);
     try {
-      await _phase(InferencePhase.benchmarking, lease.loaded);
-      final budget = MemoryBudget.from(state, device: device, policy: policy);
+      cancel?.throwIfCancelled();
+      final l = lease.loaded;
+      await _phase(InferencePhase.benchmarking, l);
+      final budget = await _budgetWithLoaded(l);
+      final base = l.config.copyWith(nCtx: l.sessionInfo.nCtx);
       final fitsMemo = <(int, KvType), bool>{};
       final profile = await tuner.profileFor(
         model: lease.model,
         modelKey: modelId,
         force: force,
         cancel: cancel,
+        onProgress: onProgress,
         fits: (c) async {
           if (!budget.isKnown) return true;
-          return fitsMemo[(c.nUbatch, c.typeK)] ??= budget.admits(await host.estimateMemory(
-              lease.loaded.spec.loadOptions, c.applyTo(lease.loaded.config.copyWith(nCtx: lease.loaded.sessionInfo.nCtx))));
+          return fitsMemo[(c.nUbatch, c.typeK)] ??= budget.admits(await host.estimateMemory(l.loadOptions, c.applyTo(base)));
         },
       );
       await host.setThreads(lease.session, profile.candidate.nThreads, profile.candidate.nThreads);
+      if (force) await _store.delete(_autotuneCrashKey(modelId));
       return profile;
     } finally {
       await _phase(InferencePhase.idle, lease.loaded);
       lease.release();
     }
+  }
+
+  /// The admission budget now, with [l]'s anonymous memory (KV, compute,
+  /// repacked weights) counted as available.
+  Future<MemoryBudget> _budgetWithLoaded(LoadedModel l) async {
+    var state = await (_memory?.sample() ?? Future.value(MemoryState.unknown));
+    final available = state.availableBytes;
+    final est = l.estimate;
+    if (available != null && est != null) {
+      state = state.copyWith(availableBytes: available + math.max(0, est.anonymousBytes));
+    }
+    return MemoryBudget.from(state, device: device, policy: policy);
   }
 
   Future<void> dispose() async {

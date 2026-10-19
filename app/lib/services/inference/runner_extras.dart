@@ -1,10 +1,13 @@
 import 'dart:async';
 
+import 'package:sherpa_apple_ml/sherpa_apple_ml.dart' show AppleFoundationModelsProvider, MlxProvider;
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_inference/sherpa_inference.dart';
+import 'package:sherpa_litert/sherpa_litert.dart' show GeminiNanoProvider, LiteRtLmProvider;
 
 import '../../state/services.dart' show ModelChoice;
 import 'local_model_provider.dart';
+import 'platform_models.dart' show OnDeviceEngineView;
 
 /// What the local provider adds to an `AgentRunner`; mirrors the chat's
 /// `RunnerExtras` (both null = the runner's defaults).
@@ -33,6 +36,14 @@ const int minSummarizerParameters = 1500000000;
 ///   ([withLocalSummarizer]), so the ladder's synchronous counts hit a
 ///   cache filled off the UI isolate and summarizing never competes with
 ///   the user's reply;
+/// * a platform on-device provider (MLX, LiteRT-LM, Apple Intelligence,
+///   Gemini Nano): the ladder summarizes with the chat's own model too —
+///   history never leaves the phone for compaction — but there is no exact
+///   synchronous counter (the core's estimate stands) and no priority:
+///   these engines run one request at a time, first come first served, so
+///   a summary simply queues behind the reply. Gemini Nano refuses a
+///   request made while Sherpa is in the background, so a summary there
+///   falls back to the extractive one instead of reaching AICore;
 /// * anything else (remote providers, an unavailable engine): nothing. The
 ///   chat decides about remote summaries itself (they need the user's
 ///   opt-in).
@@ -46,11 +57,21 @@ LocalRunnerExtras localRunnerExtras(ModelProvider provider, ModelChoice choice, 
     case LlamaCppProvider():
       local = provider;
       counter = provider.tokenCounter(choice.modelId);
+    case _ when isPlatformOnDeviceProvider(provider):
+      return (counter: null, contextManager: withLocalSummarizer(base, provider, choice.modelId));
     default:
       return noRunnerExtras;
   }
   return (counter: counter, contextManager: WarmingContextManager(withLocalSummarizer(base, local, choice.modelId)));
 }
+
+/// MLX, LiteRT-LM, Apple Intelligence or Gemini Nano (also behind the
+/// registry's [OnDeviceEngineView]); never a remote provider.
+bool isPlatformOnDeviceProvider(ModelProvider p) => switch (p) {
+      OnDeviceEngineView() || MlxProvider() || LiteRtLmProvider() || AppleFoundationModelsProvider() || GeminiNanoProvider() =>
+        p.info.location == ExecutionLocation.onDevice,
+      _ => false,
+    };
 
 /// [base] (a ladder) summarizing with [modelId] on [local] at background
 /// priority, falling back to the ladder's deterministic summary when the
@@ -85,7 +106,9 @@ ModelContextStrategy? _modelStrategyOf(ContextStrategy s) => switch (s) {
     };
 
 /// [local] with its requests at [InferencePriority.background] (the
-/// summarizer); other providers are returned as they are.
+/// summarizer); other providers are returned as they are — including the
+/// platform on-device engines (MLX, LiteRT-LM, Apple Intelligence, Gemini
+/// Nano), which have no priority concept and ignore it.
 ModelProvider backgroundView(ModelProvider local) => switch (local) {
       LocalModelProvider() => local.withPriority(InferencePriority.background),
       LlamaCppProvider() => local.withPriority(InferencePriority.background),

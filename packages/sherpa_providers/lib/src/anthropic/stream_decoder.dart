@@ -120,9 +120,9 @@ final class AnthropicStreamDecoder {
       case 'message_start':
         _messageStart(data.optObj('message') ?? const {}, out);
       case 'content_block_start':
-        _blockStart(data.optInt('index') ?? -1, data.optObj('content_block') ?? const {}, out);
+        _blockStart(data.optInt('index') ?? -1, data.optObj('content_block') ?? const {}, out, sse.data);
       case 'content_block_delta':
-        _blockDelta(data.optInt('index') ?? -1, data.optObj('delta') ?? const {}, out);
+        _blockDelta(data.optInt('index') ?? -1, data.optObj('delta') ?? const {}, out, sse.data);
       case 'content_block_stop':
         _blockStop(data.optInt('index') ?? -1, out);
       case 'message_delta':
@@ -189,7 +189,8 @@ final class AnthropicStreamDecoder {
   /// server-side fallback answered).
   String? get model => _model;
 
-  void _blockStart(int index, JsonMap block, _Out out) {
+  /// [rawEvent] is the event's JSON text (see [_Block.initialText]).
+  void _blockStart(int index, JsonMap block, _Out out, String rawEvent) {
     final type = block['type']?.toString() ?? '';
     switch (type) {
       case 'text':
@@ -212,6 +213,9 @@ final class AnthropicStreamDecoder {
           ..id = block.opt<String>('id') ?? 'toolu_missing_$index'
           ..name = toolNames.fromWire(block.opt<String>('name') ?? '')
           ..initialInput = block.optObj('input');
+        if (b.initialInput?.isNotEmpty ?? false) {
+          b.initialText = ToolArgumentsRepair.rawValueAt(rawEvent, const ['content_block', 'input']);
+        }
         _blocks[index] = b;
         _deferred ??= [];
         out.emit(ToolCallStart(index: b.toolIndex, id: b.id, name: b.name));
@@ -233,7 +237,7 @@ final class AnthropicStreamDecoder {
     }
   }
 
-  void _blockDelta(int index, JsonMap delta, _Out out) {
+  void _blockDelta(int index, JsonMap delta, _Out out, String rawEvent) {
     final b = _blocks[index];
     if (b == null) return;
     switch (delta['type']) {
@@ -246,7 +250,13 @@ final class AnthropicStreamDecoder {
       case 'signature_delta':
         if (b.kind == _Kind.thinking) b.signature.write(delta.opt<String>('signature') ?? '');
       case 'input_json_delta':
-        final fragment = delta.opt<String>('partial_json') ?? '';
+        final fragment = switch (delta['partial_json']) {
+          final String s => s,
+          // Non-compliant servers send the input object itself.
+          final v when v is Map || v is List =>
+            ToolArgumentsRepair.objectArgumentsText(v, rawEvent, const ['delta', 'partial_json']),
+          _ => '',
+        };
         if (fragment.isEmpty || b.kind != _Kind.toolUse) return;
         b.json.write(fragment);
         out.emit(ToolCallArgsDelta(index: b.toolIndex, fragment: fragment));
@@ -278,6 +288,18 @@ final class AnthropicStreamDecoder {
     final raw = b.json.toString();
     if (raw.trim().isEmpty) {
       // No deltas: the input came whole in content_block_start (or is {}).
+      // Decoding the event kept the last of two equal keys, so its raw
+      // text is checked: strict mode refuses the call instead of guessing.
+      final dup = b.initialText == null ? null : ToolArgumentsRepair.duplicateKey(b.initialText!);
+      if (dup != null) {
+        return ToolCall(
+          id: b.id,
+          name: b.name,
+          arguments: const {},
+          rawArguments: b.initialText,
+          argumentsError: ToolArgumentsRepair.duplicateKeyError(dup),
+        );
+      }
       return ToolCall(id: b.id, name: b.name, arguments: b.initialInput ?? const {}, rawArguments: raw);
     }
     try {
@@ -475,4 +497,8 @@ final class _Block {
   String id = '';
   String name = '';
   JsonMap? initialInput;
+
+  /// The raw text of a non-empty [initialInput] in its event, where
+  /// duplicate keys are still visible.
+  String? initialText;
 }

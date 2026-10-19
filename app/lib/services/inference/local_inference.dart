@@ -369,7 +369,7 @@ final class LocalInference {
       final tuner = AutotuneScheduler(
         scheduler: engine.scheduler,
         policy: config.autotune,
-        isTuned: (id) async => await autotuner.cached(id) != null,
+        isTuned: autotuner.isTuned,
         run: (id, cancel) async {
           final m = await (_memory?.sample() ?? Future.value(MemoryState.unknown));
           // Benching on battery saver measures the throttle, not the device.
@@ -697,6 +697,27 @@ final class LocalInference {
   void onAppForeground() {
     _backgrounded = false;
     _lifecycle?.onAppForeground();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Other on-device engines
+
+  /// Runs before llama.cpp loads a model or serves a request: frees another
+  /// in-process engine's weights (MLX, LiteRT-LM), so two engines never
+  /// hold gigabytes at once. Set by the app's wiring; best effort.
+  Future<void> Function()? beforeRequest;
+
+  /// Another on-device engine (MLX, LiteRT-LM) is about to load: unload the
+  /// warm model, if one is loaded (its KV prefix is persisted as usual).
+  Future<void> unloadForOtherEngine() async {
+    final lifecycle = _lifecycle;
+    if (lifecycle == null || lifecycle.loaded == null) return;
+    _autotune?.cancel('another on-device engine is loading');
+    try {
+      await lifecycle.unload(reason: 'another on-device engine needs the memory');
+    } on Object catch (e) {
+      debugPrint('Local inference: unload for another engine failed (${e.runtimeType})');
+    }
   }
 
   // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../design/tokens.dart';
 import '../state/transcript_model.dart';
+import 'attachment_views.dart';
 import 'chat_style.dart';
 import 'message_actions.dart';
 import 'source_chips.dart';
@@ -77,7 +78,9 @@ class UserMessageTile extends StatelessWidget {
     final tokens = SherpaTokens.of(context);
     final theme = Theme.of(context);
     final source = item.promptSource;
+    final app = item.appSource;
     final resources = item.resources;
+    final attachments = item.attachments;
     Offset? pressAt;
     return RepaintBoundary(
       child: ReadableWidth(
@@ -100,7 +103,17 @@ class UserMessageTile extends StatelessWidget {
                     padding: EdgeInsets.only(bottom: tokens.space.xs),
                     child: PromptSourceLabel(source: source),
                   ),
-                if (item.text.trim().isNotEmpty || resources.isEmpty)
+                if (app != null)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: tokens.space.xs),
+                    child: AppSourceLabel(source: app),
+                  ),
+                if (attachments.isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: tokens.space.xs),
+                    child: MessageAttachmentsView(attachments: attachments),
+                  ),
+                if (item.text.trim().isNotEmpty || (resources.isEmpty && attachments.isEmpty))
                   GestureDetector(
                     onLongPressStart: (d) => pressAt = d.globalPosition,
                     onLongPress: () => _showMenu(context, pressAt ?? Offset.zero, runActive: runActive),

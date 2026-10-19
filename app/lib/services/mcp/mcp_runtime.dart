@@ -60,6 +60,7 @@ final class McpRuntime {
     required this.hostSettings,
     required this.inputQueue,
     required this.inputHistory,
+    required this.notes,
   });
 
   static const String memoryServerId = 'memory';
@@ -93,6 +94,7 @@ final class McpRuntime {
     final grants = ApprovalGrantStore(records, clock: clock);
     final stored = await configs.load();
     final onDevice = OnDeviceServers();
+    final noteStorage = notes ?? DocumentNoteStorage(records);
     final rt = McpRuntime._(
       records: records,
       configs: configs,
@@ -104,11 +106,12 @@ final class McpRuntime {
       hostSettings: await McpHostSettingsStore.load(records, clock: clock),
       inputQueue: McpInputQueue(clock: clock, timeout: inputTimeout),
       inputHistory: McpInputHistory(),
+      notes: noteStorage,
     );
 
     bool storedEnabled(String id) => stored.where((s) => s.$1.id == id).firstOrNull?.$1.enabled ?? true;
     final memory = onDevice.register(
-      memoryMcpServer(MemoryNotes(store: notes ?? DocumentNoteStorage(records), clock: clock)),
+      memoryMcpServer(MemoryNotes(store: noteStorage, clock: clock)),
       id: memoryServerId,
       name: 'Memory',
       enabled: storedEnabled(memoryServerId),
@@ -177,7 +180,8 @@ final class McpRuntime {
         rt._emit();
       },
     );
-    rt.hygiene = ToolHygiene(store: DocumentToolPinStore(records), clock: clock);
+    rt._pins = DocumentToolPinStore(records);
+    rt.hygiene = ToolHygiene(store: rt._pins, clock: clock);
     rt.router = McpToolRouter(
       manager: rt.manager,
       hygiene: rt.hygiene,
@@ -232,7 +236,11 @@ final class McpRuntime {
   /// What servers asked for and how it ended (redacted; the console).
   final McpInputHistory inputHistory;
 
+  /// The built-in memory server's notes (user data).
+  final NoteStorage notes;
+
   late final McpServerManager manager;
+  late final DocumentToolPinStore _pins;
   late final ApprovalPolicy policy;
   late final ToolHygiene hygiene;
   late final McpToolRouter router;
@@ -275,6 +283,68 @@ final class McpRuntime {
       inputHistory.forget(c.id);
     }
     await hostSettings.eraseAll();
+  }
+
+  /// "Delete all data" for MCP, as a `dataEraseHooksProvider` hook:
+  /// * every user-added server goes: its connection and config, and its
+  ///   OAuth state through [McpOAuthService.signOut] (tokens revoked when
+  ///   the server answers within [revokeTimeout], deleted either way, plus
+  ///   pending sign-ins); the built-in servers stay, back to their defaults
+  ///   (on);
+  /// * the memory server's notes;
+  /// * tool pins (reviewed definitions) and every tool switch (global and
+  ///   per chat);
+  /// * remembered approvals: the policy's grants and the stored collection;
+  /// * the input data ([eraseInputData]): sampling and MCP Apps settings,
+  ///   network consents, the input history; pending requests are declined.
+  ///
+  /// The built-in servers' tools are listed again afterwards. Each part is
+  /// best effort, so one failure does not keep the rest.
+  Future<void> eraseAll({Duration revokeTimeout = const Duration(seconds: 5)}) async {
+    Future<void> step(Future<void> Function() part) async {
+      try {
+        await part();
+      } on Object {
+        // Best effort: the other parts still go.
+      }
+    }
+
+    await step(eraseInputData);
+    final removed = [for (final c in servers) if (!isBuiltIn(c.id)) c];
+    for (final c in removed) {
+      await step(() => manager.removeServer(c.id));
+      await step(() async {
+        try {
+          await oauth.signOut(c).timeout(revokeTimeout);
+        } on TimeoutException {
+          await oauth.signOut(c, revoke: false);
+        }
+      });
+      oauth.forget(c.id);
+    }
+    for (final id in const [memoryServerId, deviceServerId]) {
+      if (manager.config(id) != null) await step(() => manager.setEnabled(id, true));
+    }
+    await step(configs.clear);
+    await step(() async {
+      for (final key in await notes.keys()) {
+        await notes.delete(key);
+      }
+    });
+    await step(() async {
+      await _pins.clear();
+      for (final c in servers) {
+        await hygiene.forgetServer(c.id);
+      }
+      for (final c in removed) {
+        await hygiene.forgetServer(c.id);
+      }
+    });
+    await step(enablement.clear);
+    policy.revokeWhere((_) => true);
+    await step(grants.clear);
+    await refresh(force: true);
+    _emit();
   }
 
   /// Saves [next] for [serverId]. When what the server may ask for changes

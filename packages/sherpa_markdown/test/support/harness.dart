@@ -40,6 +40,7 @@ Future<void> pumpMarkdown(
   String text, {
   bool streaming = false,
   void Function(Uri uri)? onLinkTap,
+  void Function(Uri uri)? onLinkLongPress,
   void Function(String code)? onCopyCode,
   SherpaMarkdownStyle style = const SherpaMarkdownStyle(),
   Brightness brightness = Brightness.light,
@@ -53,6 +54,7 @@ Future<void> pumpMarkdown(
         text: text,
         streaming: streaming,
         onLinkTap: onLinkTap,
+        onLinkLongPress: onLinkLongPress,
         onCopyCode: onCopyCode,
         style: style,
         selectable: selectable,

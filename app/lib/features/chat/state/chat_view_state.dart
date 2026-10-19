@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../attachments/attachment_policy.dart';
 import 'chat_errors.dart';
 import 'model_selection.dart';
 import 'transcript_model.dart';
@@ -146,6 +147,16 @@ final class PendingApproval {
 
   String get toolDisplayName => tool?.displayName ?? call.name;
 
+  /// Call ids MCP Apps views use for the calls they make themselves.
+  static const String appCallPrefix = 'app-';
+
+  /// An MCP App view asked for this call (not the model, and not part of a
+  /// run): the card says so, and Stop does not answer it.
+  bool get isFromApp => call.id.startsWith(appCallPrefix);
+
+  /// "Requested by an app", or null for the model's own calls.
+  String? get requesterLabel => isFromApp ? 'Requested by an app' : null;
+
   /// "Built-in" for Sherpa's own tools, otherwise the server's name.
   String get sourceLabel => sourceLabelOf(tool?.source);
 
@@ -263,6 +274,7 @@ final class ChatViewState {
     this.interrupted,
     this.scrollRequest,
     this.onDeviceModels = 0,
+    this.attachmentPolicy = AttachmentPolicy.textOnly,
   });
 
   final String sessionId;
@@ -309,6 +321,10 @@ final class ChatViewState {
   /// ([ProviderAvailability.needsModel] rather than `noProviders`).
   final int onDeviceModels;
 
+  /// What the current model accepts as attachments (photos need vision,
+  /// PDFs a provider that takes documents) and the limits that apply.
+  final AttachmentPolicy attachmentPolicy;
+
   bool get isRunActive => status.isActive;
   bool get canSend => availability == ProviderAvailability.ready && !isRunActive && !loading;
 
@@ -344,6 +360,7 @@ final class ChatViewState {
     Object? interrupted = _keep,
     Object? scrollRequest = _keep,
     int? onDeviceModels,
+    AttachmentPolicy? attachmentPolicy,
   }) =>
       ChatViewState(
         sessionId: sessionId,
@@ -370,5 +387,6 @@ final class ChatViewState {
         scrollRequest:
             identical(scrollRequest, _keep) ? this.scrollRequest : scrollRequest as ChatScrollRequest?,
         onDeviceModels: onDeviceModels ?? this.onDeviceModels,
+        attachmentPolicy: attachmentPolicy ?? this.attachmentPolicy,
       );
 }

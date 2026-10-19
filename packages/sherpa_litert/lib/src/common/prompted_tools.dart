@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_providers/tool_arguments.dart';
 
 import 'fingerprint.dart';
 
@@ -277,32 +278,54 @@ final class PromptedToolParser {
   List<ParsedToolCall> _parseValue(String text, {required bool bareRequiresKnownName}) {
     final extracted = JsonRepair.extract(text);
     if (extracted == null) return const [];
+    // Strict first: the first complete JSON value (models often append
+    // chatter or a closing fence after it). Otherwise the shared lenient
+    // parser repairs it; the whole envelope is then also run through the
+    // strict-mode checks, because its arguments can't be located in text
+    // that is not JSON.
+    final end = _valueEnd(extracted);
+    final strictText = end == null ? extracted : extracted.substring(0, end);
     Object? value;
-    var repaired = false;
+    String? strictJson;
+    _Envelope envelope;
     try {
-      value = _firstValue(extracted);
+      value = jsonDecode(strictText);
+      strictJson = strictText;
+      envelope = const _Envelope.strict();
     } on FormatException {
-      value = JsonRepair.decode(extracted);
-      repaired = true;
+      try {
+        final (v, fixes) = ToolArgumentsRepair.parseValue(extracted);
+        value = v;
+      } on FormatException {
+        return const [];
+      }
+      final check = value is Map ? ToolArgumentsRepair.parseArguments(extracted) : null;
+      envelope = _Envelope.repaired(
+        check != null && check.fixes.contains(ToolArgumentsRepair.refusedFix) ? check.error : null,
+      );
     }
     if (value == null) return const [];
-    final items = <Object?>[];
+    final items = <(Object?, List<Object>)>[];
     var bare = false;
     if (value is Map && value['tool_calls'] is List) {
-      items.addAll(value['tool_calls'] as List);
+      for (final (i, item) in (value['tool_calls'] as List).indexed) {
+        items.add((item, ['tool_calls', i]));
+      }
     } else if (value is Map && value['tool_calls'] is Map) {
-      items.add(value['tool_calls']);
+      items.add((value['tool_calls'], const ['tool_calls']));
     } else if (value is List) {
-      items.addAll(value);
+      for (final (i, item) in value.indexed) {
+        items.add((item, [i]));
+      }
     } else if (value is Map) {
-      items.add(value);
+      items.add((value, const []));
       bare = true;
     } else {
       return const [];
     }
     final out = <ParsedToolCall>[];
-    for (final item in items) {
-      final call = _call(item, repaired: repaired);
+    for (final (item, path) in items) {
+      final call = _call(item, path: path, strictJson: strictJson, envelope: envelope);
       if (call == null) continue;
       if (bare && bareRequiresKnownName && !call.hadArgumentsKey && !_toolNames.contains(call.name)) continue;
       if (bare && bareRequiresKnownName && _toolNames.isNotEmpty && !_toolNames.contains(call.name) && value is Map &&
@@ -312,13 +335,6 @@ final class PromptedToolParser {
       out.add(call);
     }
     return out;
-  }
-
-  /// Decodes the first complete JSON value of [text] (models often append
-  /// chatter or a closing fence after it).
-  static Object? _firstValue(String text) {
-    final end = _valueEnd(text);
-    return jsonDecode(end == null ? text : text.substring(0, end));
   }
 
   /// End offset of the balanced object/array starting at 0, ignoring
@@ -351,45 +367,81 @@ final class PromptedToolParser {
     return null;
   }
 
-  ParsedToolCall? _call(Object? item, {required bool repaired}) {
+  /// One call of an envelope. Its arguments go through the strict shared
+  /// parser ([ToolArgumentsRepair], like every other tool-call path):
+  /// strict JSON as is; repaired JSON flagged `repaired` (forces approval
+  /// of non-read-only tools); duplicate keys, leaked chat-template tokens
+  /// and ambiguous unquoted values make the call invalid (`argumentsError`,
+  /// never run; the agent loop tells the model).
+  ParsedToolCall? _call(
+    Object? item, {
+    required List<Object> path,
+    required String? strictJson,
+    required _Envelope envelope,
+  }) {
     if (item is! Map) return null;
     var m = item;
-    if (m['function'] is Map) m = m['function'] as Map;
+    var at = path;
+    if (m['function'] is Map) {
+      m = m['function'] as Map;
+      at = [...at, 'function'];
+    }
     final name = m['name'];
     if (name is! String || name.trim().isEmpty) return null;
+    final key = const ['arguments', 'parameters', 'args'].where((k) => m[k] != null).firstOrNull;
     final hadArgs = m.containsKey('arguments') || m.containsKey('parameters') || m.containsKey('args');
-    var args = m['arguments'] ?? m['parameters'] ?? m['args'];
-    var argsRepaired = repaired;
-    String? error;
-    if (args is String) {
-      final t = args.trim();
-      if (t.isEmpty) {
-        args = const <String, Object?>{};
-      } else {
-        try {
-          args = jsonDecode(t);
-        } on FormatException {
-          args = JsonRepair.decodeObject(t);
-          argsRepaired = true;
-          if (args == null) error = 'malformed JSON arguments';
-        }
-      }
+    final args = key == null ? null : m[key];
+    // The call's own text, when the envelope was strict JSON: duplicate keys
+    // anywhere in it (two "name"s, or an argument sent twice) are refused.
+    final itemRaw = strictJson == null ? null : ToolArgumentsRepair.rawValueAt(strictJson, path);
+    final dup = itemRaw == null ? null : ToolArgumentsRepair.duplicateKey(itemRaw);
+    ArgumentsParseResult parsed;
+    String raw;
+    if (dup != null) {
+      raw = itemRaw!;
+      parsed = ArgumentsParseResult.failed(ToolArgumentsRepair.duplicateKeyError(dup));
+    } else if (envelope.refusal != null) {
+      raw = jsonEncode(args ?? const <String, Object?>{});
+      parsed = ArgumentsParseResult.failed(envelope.refusal!);
+    } else if (args == null) {
+      raw = '{}';
+      parsed = const ArgumentsParseResult.ok({});
+    } else if (args is String) {
+      // Arguments the model sent as a JSON string.
+      raw = args;
+      parsed = ToolArgumentsRepair.parseArguments(args);
+    } else {
+      final argsRaw = strictJson == null ? null : ToolArgumentsRepair.rawValueAt(strictJson, [...at, key!]);
+      raw = argsRaw ?? jsonEncode(args);
+      parsed = ToolArgumentsRepair.parseArguments(raw);
     }
-    args ??= const <String, Object?>{};
-    if (args is! Map) {
-      error ??= 'arguments must be a JSON object';
-      args = const <String, Object?>{};
-    }
-    final map = (normalizeJson(args) as Map).cast<String, Object?>();
+    final ok = parsed.isOk;
+    final map = parsed.value ?? const <String, Object?>{};
     return ParsedToolCall(
       name: name.trim(),
       arguments: map,
-      raw: jsonEncode(map),
-      repaired: argsRepaired && error == null,
-      error: error,
+      raw: ok ? jsonEncode(map) : raw,
+      repaired: ok && (parsed.repaired || envelope.isRepaired),
+      error: parsed.error,
       hadArgumentsKey: hadArgs,
     );
   }
+}
+
+/// How the envelope around a call was read.
+final class _Envelope {
+  const _Envelope.strict()
+      : isRepaired = false,
+        refusal = null;
+
+  const _Envelope.repaired(this.refusal) : isRepaired = true;
+
+  /// The envelope was not valid JSON and needed the lenient parser.
+  final bool isRepaired;
+
+  /// The strict-mode refusal of the repaired envelope (duplicate key,
+  /// template tokens, ambiguous value), applied to every call in it.
+  final String? refusal;
 }
 
 enum _Verdict { yes, no, maybe }

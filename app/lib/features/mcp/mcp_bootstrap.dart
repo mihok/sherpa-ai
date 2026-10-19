@@ -19,6 +19,8 @@ import '../../state/connectivity.dart' show NetworkStatus, statusFor;
 import '../../state/providers.dart';
 import '../../state/sessions.dart' show sessionDeletedHooksProvider;
 import '../apps/state/apps_providers.dart' show mcpAppModelContextsProvider, mcpAppViewPoolProvider;
+import '../chat/attachments/attachment_store.dart' show chatSessionDeletedHooksProvider;
+import '../models/state/platform_models_providers.dart' show onDeviceSessionDeletedHooksProvider;
 import 'state/input_providers.dart';
 import 'state/mcp_providers.dart';
 
@@ -105,6 +107,11 @@ List<Override> mcpRuntimeOverrides(McpRuntime runtime, {http.Client? httpClient}
               ref.read(mcpAppModelContextsProvider).take(id);
               await runtime.enablement.forgetSession(id);
             },
+            // Riverpod allows one override of the hook list, and MCP is
+            // always wired in the app: the other features' hooks (chat
+            // attachments, on-device engine sessions) join here.
+            ...ref.watch(chatSessionDeletedHooksProvider),
+            ...ref.watch(onDeviceSessionDeletedHooksProvider),
           ]),
       mcpInputQueueProvider.overrideWithValue(runtime.inputQueue),
       if (httpClient != null) mcpHttpClientProvider.overrideWithValue(httpClient),

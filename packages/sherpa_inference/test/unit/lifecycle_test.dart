@@ -290,4 +290,145 @@ void main() {
     expect(records.every((r) => r.compactSummary.length <= 128), isTrue);
     await lc.dispose();
   });
+
+  group('draft models, overrides and autotune (perf lab API)', () {
+    const env = AutotuneEnvironment(deviceId: 'd', osVersion: '1', appVersion: '1', engineVersion: 'e', performanceCores: 4);
+
+    ModelLifecycleManager tuned({List<LocalModelSpec> specs = const [], void Function(PhaseRecord)? onPhase}) {
+      final lc = ModelLifecycleManager(
+        host: host,
+        memory: memory,
+        forensics: forensics,
+        store: store,
+        autotuner: Autotuner(host: host, store: store, environment: env),
+        backgroundPolicy: BackgroundPolicy.none,
+        policy: const AdmissionPolicy(fitFraction: 1, safetyMarginBytes: 0),
+        onPhase: onPhase,
+      );
+      for (final s in specs) {
+        lc.register(s);
+      }
+      return lc;
+    }
+
+    const paired = LocalModelSpec(
+      id: 'big',
+      path: '/models/big.gguf',
+      draftModelPath: '/models/big.draft.gguf',
+      sessionDefaults: SessionConfig(speculative: SpeculativeMode.draft),
+    );
+
+    test('a spec drafting with its own draft model loads it (and counts it in admission)', () async {
+      final lc = tuned(specs: [paired, _spec('a')]);
+      expect(paired.loadOptions.draftModelPath, '/models/big.draft.gguf');
+      expect(_spec('a').loadOptions.draftModelPath, isNull);
+      expect(const LocalModelSpec(id: 'x', path: '/x', draftModelPath: '/d').loadOptions.draftModelPath, isNull,
+          reason: 'not drafting: the draft file is not loaded');
+      final lease = await lc.acquire('big');
+      expect(host.loads.single.draftModelPath, '/models/big.draft.gguf');
+      expect(lease.loaded.loadOptions.draftModelPath, '/models/big.draft.gguf');
+      expect(host.sessionConfigs.single.speculative, SpeculativeMode.draft);
+      expect(host.estimateLoads.every((o) => o.draftModelPath == '/models/big.draft.gguf'), isTrue);
+      lease.release();
+      await lc.dispose();
+    });
+
+    test('an override picks the draft (another registered model) and applies without a measured profile', () async {
+      final lc = tuned(specs: [_spec('a'), _spec('tiny')]);
+      final tuner = lc.autotuner!;
+      await tuner.setOverrides('a', const AutotuneOverrides(nThreads: 2, speculative: SpeculativeMode.draft, draftModelId: 'tiny'));
+      expect(await tuner.isTuned('a'), isFalse);
+      expect(lc.draftModelPathFor('a', draftModelId: 'tiny'), '/models/tiny.gguf');
+      expect(lc.draftModelPathFor('a'), isNull, reason: 'a has no draft of its own');
+      final plan = await lc.plan('a');
+      expect(plan.config!.nThreads, 2, reason: 'overrides apply before autotune has run');
+      expect(plan.config!.speculative, SpeculativeMode.draft);
+      final lease = await lc.acquire('a');
+      expect(host.loads.single.draftModelPath, '/models/tiny.gguf');
+      expect(host.sessionConfigs.single.nThreads, 2);
+      lease.release();
+
+      // The draft left the library: no speculation, said in the plan.
+      lc.unregister('tiny');
+      final without = await lc.plan('a');
+      expect(without.config!.speculative, SpeculativeMode.none);
+      expect(without.notes, contains(contains('draft model is not available')));
+      expect(host.estimateLoads.last.draftModelPath, isNull);
+
+      // Back to n-gram or off: the draft is never loaded.
+      await tuner.setOverrides('a', const AutotuneOverrides(speculative: SpeculativeMode.ngram));
+      expect((await lc.plan('a')).config!.speculative, SpeculativeMode.ngram);
+      await tuner.setOverrides('a', const AutotuneOverrides(speculative: SpeculativeMode.none));
+      expect((await lc.plan('a')).config!.speculative, SpeculativeMode.none);
+      await lc.dispose();
+    });
+
+    test('an override with no draft id uses the spec\'s own draft; one turning drafting off wins over the spec', () async {
+      final lc = tuned(specs: [paired]);
+      await lc.autotuner!.setOverrides('big', const AutotuneOverrides(speculative: SpeculativeMode.none));
+      (await lc.acquire('big')).release();
+      expect(host.loads.last.draftModelPath, isNull);
+      expect(host.sessionConfigs.last.speculative, SpeculativeMode.none);
+      await lc.unload();
+      await lc.autotuner!.setOverrides('big', const AutotuneOverrides(speculative: SpeculativeMode.draft));
+      (await lc.acquire('big')).release();
+      expect(host.loads.last.draftModelPath, '/models/big.draft.gguf');
+      await lc.dispose();
+    });
+
+    test('autotune reports progress, runs in the benchmarking phase and honours cancellation', () async {
+      final records = <PhaseRecord>[];
+      final lc = tuned(specs: [_spec('a')], onPhase: records.add);
+      final progress = <AutotuneProgress>[];
+      final profile = await lc.autotune('a', onProgress: progress.add);
+      expect(profile!.source, AutotuneSource.measured);
+      expect(progress.first.done, 0);
+      expect(progress.last.done, lc.autotuner!.sweepSize);
+      expect(progress.where((p) => p.step == AutotuneStep.measured), hasLength(host.benches.length));
+      final phases = records.map((r) => r.phase).toList();
+      expect(phases, containsAllInOrder([InferencePhase.loading, InferencePhase.idle, InferencePhase.benchmarking, InferencePhase.idle]));
+      expect(records.lastWhere((r) => r.phase == InferencePhase.benchmarking).modelId, 'a');
+      expect(host.benches.every((b) => b.nThreads >= 1), isTrue);
+
+      final token = CancellationToken()..cancel();
+      await expectLater(lc.autotune('a', force: true, cancel: token), throwsA(isA<CancelledException>()));
+      expect(lc.loaded!.leases, 0, reason: 'the lease is released');
+      await lc.dispose();
+    });
+
+    test('a crash while benchmarking stops automatic autotune until a forced run completes', () async {
+      final lc = tuned(specs: [_spec('a')]);
+      final lease = await lc.acquire('a');
+      // The process dies while the sweep benches.
+      await forensics.enter(PhaseRecord(phase: InferencePhase.benchmarking, at: DateTime.utc(2026), modelId: 'a', nCtx: 8192));
+      lease.release();
+
+      final next = tuned(specs: [_spec('a')]);
+      final report = await next.start();
+      expect(report!.phase.phase, InferencePhase.benchmarking);
+      expect(report.description, contains('while benchmarking'));
+      expect(await next.downgradeFor('a'), isNull, reason: 'the chat context is not the culprit');
+      expect(await next.autotuneCrashFor('a'), contains('benchmarking'));
+      final benches = host.benches.length;
+      expect(await next.autotune('a'), isNull);
+      expect(host.benches.length, benches, reason: 'not retried automatically');
+      expect(await next.autotune('a', force: true), isNotNull);
+      expect(await next.autotuneCrashFor('a'), isNull);
+      await next.dispose();
+    });
+
+    test('autotune counts the warm model\'s own memory as available', () async {
+      final lc = tuned(specs: [_spec('a', preferred: 4096)]);
+      (await lc.acquire('a')).release();
+      expect(lc.loaded!.estimate!.anonymousBytes, 498 * _mib, reason: 'f16 at 4096 tokens in the fake estimator');
+      // With the model loaded, 600 MB are left: neither a fresh f16 (878 MB)
+      // nor q8_0 (668 MB) load would fit, but the warm model's own memory
+      // is freed before a tuned config loads.
+      memory.emit(const MemoryState(pressure: MemoryPressure.normal, availableBytes: 600 * _mib, source: 'test'));
+      final p = await lc.autotune('a');
+      expect(p!.source, AutotuneSource.measured);
+      expect(host.benches.where((b) => b.typeK == KvType.f16), isNotEmpty);
+      await lc.dispose();
+    });
+  });
 }

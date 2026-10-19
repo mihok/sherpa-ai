@@ -110,6 +110,7 @@ final class FakeEngineHost implements EngineHost {
     this.mappedBytes = 380 * _mib,
     this.computeBytes = 30 * _mib,
     this.stateBytesPerToken = 1024,
+    this.draftModelBytes = 100 * _mib,
     BenchResult Function(BenchConfig config)? bench,
   }) : _bench = bench;
 
@@ -119,7 +120,13 @@ final class FakeEngineHost implements EngineHost {
   final int mappedBytes;
   final int computeBytes;
   final int stateBytesPerToken;
+
+  /// Added to an estimate whose load options carry a draft model.
+  final int draftModelBytes;
   final BenchResult Function(BenchConfig config)? _bench;
+
+  /// Load options passed to [estimateMemory], in order.
+  final List<ModelLoadOptions> estimateLoads = [];
 
   /// Scripts consumed in order by [generate]; when empty, [defaultScript].
   final List<FakeScript> scripts = [];
@@ -221,15 +228,17 @@ final class FakeEngineHost implements EngineHost {
   @override
   Future<MemoryEstimate> estimateMemory(ModelLoadOptions model, SessionConfig session) async {
     estimates++;
+    estimateLoads.add(model);
     final ctx = _resolvedCtx(session.nCtx);
     final perToken = kFakeKvBytesPerToken[session.typeK] ?? 114688;
     final kv = ctx * perToken;
-    final total = modelBytes + kv + computeBytes;
+    final draft = model.draftModelPath == null ? 0 : draftModelBytes;
+    final total = modelBytes + draft + kv + computeBytes;
     return MemoryEstimate(
       nCtx: ctx,
       nCtxSeq: ctx,
       flashAttention: session.typeV.isQuantized || session.flashAttention == FlashAttention.on,
-      modelBytes: modelBytes,
+      modelBytes: modelBytes + draft,
       modelMappedBytes: mappedBytes,
       kvBytes: kv,
       computeBytes: computeBytes,

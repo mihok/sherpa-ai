@@ -262,6 +262,19 @@ final class LiteRtLmProvider implements ModelProvider {
     _cache.clear();
   }
 
+  /// A chat was deleted: closes its native conversation (the KV cache of
+  /// its transcript) after the running turn, if the engine holds one.
+  Future<void> forgetConversation(String sessionId) => _lock.run(() async {
+        final conversation = _cache.conversationOf(sessionId);
+        _cache.forget(sessionId);
+        if (conversation == null || !backend.isSupported) return;
+        try {
+          await backend.closeConversation(conversation);
+        } on Object {
+          // Already gone with the engine.
+        }
+      });
+
   Future<void> dispose() async {
     await _globalSub?.cancel();
     await _fgSub?.cancel();

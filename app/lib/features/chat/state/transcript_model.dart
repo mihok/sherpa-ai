@@ -53,6 +53,144 @@ const String kMcpResourcesKey = 'mcpResources';
 /// client-only display hint, [ReplyPerf.toJson]).
 const String kReplyPerfKey = 'perf';
 
+/// `Message.metadata` key of a user message an MCP App view sent (the user
+/// confirmed it): `{label, serverId?, serverName?, appName?, callId?}`.
+const String kMcpAppMessageKey = 'mcpApp';
+
+/// `Message.metadata` key listing a user message's attachments (written by
+/// the composer, see `attachmentParts`): `[{kind, name, mimeType, bytes,
+/// uri, width?, height?, originalWidth?, originalHeight?}]`.
+const String kMessageAttachmentsKey = 'attachments';
+
+/// Who sent a user message on the user's behalf: an MCP App view.
+@immutable
+final class AppMessageSource {
+  const AppMessageSource({required this.label});
+
+  /// [kMcpAppMessageKey] of [m], or null for a message the user typed.
+  static AppMessageSource? of(Message m) {
+    final a = m.metadata[kMcpAppMessageKey];
+    if (a is! Map) return null;
+    final label = a['label'];
+    return AppMessageSource(label: label is String && label.trim().isNotEmpty ? label.trim() : 'an app');
+  }
+
+  /// "Weather Dashboard (from Weather)".
+  final String label;
+
+  String get text => 'Sent by $label';
+
+  String get semanticLabel => 'Sent by the app $label, after you confirmed it';
+}
+
+/// A photo or file the user attached to a message.
+@immutable
+final class MessageAttachment {
+  const MessageAttachment({
+    required this.kind,
+    required this.name,
+    required this.mimeType,
+    this.size,
+    this.uri,
+    this.data,
+    this.width,
+    this.height,
+    this.originalWidth,
+    this.originalHeight,
+  });
+
+  /// `image`, `text` or `pdf`.
+  final String kind;
+  final String name;
+  final String mimeType;
+  final int? size;
+
+  /// `file://` of a stored photo or PDF (or the `attachment:` id of a text file).
+  final Uri? uri;
+
+  /// Inline image bytes (images that arrived without a file).
+  final Uint8List? data;
+  final int? width;
+  final int? height;
+  final int? originalWidth;
+  final int? originalHeight;
+
+  bool get isImage => kind == 'image';
+
+  /// "1568×1176 · 312 KB" or "12 KB".
+  String get note => [
+        if (width != null && height != null) '$width×$height',
+        if (size != null) _bytes(size!),
+      ].join(' · ');
+
+  String get semanticLabel => switch (kind) {
+        'image' => 'Photo $name${width != null && height != null ? ', $width by $height pixels' : ''}',
+        'pdf' => 'PDF $name${size == null ? '' : ', ${_bytes(size!)}'}',
+        _ => 'Text file $name${size == null ? '' : ', ${_bytes(size!)}'}',
+      };
+
+  /// The uris [m] lists under [kMessageAttachmentsKey].
+  static Set<String> listedUris(Message m) {
+    final listed = m.metadata[kMessageAttachmentsKey];
+    if (listed is! List) return const {};
+    return {
+      for (final e in listed)
+        if (e is Map && e['uri'] is String) e['uri'] as String,
+    };
+  }
+
+  /// [m]'s photos (every [ImagePart]) and attached files (resources listed
+  /// under [kMessageAttachmentsKey]).
+  static List<MessageAttachment> of(Message m) {
+    final byUri = <String, Map<Object?, Object?>>{};
+    final listed = m.metadata[kMessageAttachmentsKey];
+    if (listed is List) {
+      for (final e in listed) {
+        if (e is Map && e['uri'] is String) byUri[e['uri'] as String] = e;
+      }
+    }
+    int? n(Map<Object?, Object?>? e, String k) => e?[k] is num ? (e![k]! as num).toInt() : null;
+    String? str(Map<Object?, Object?>? e, String k) => e?[k] is String ? e![k]! as String : null;
+    final out = <MessageAttachment>[];
+    for (final part in m.content) {
+      switch (part) {
+        case ImagePart(:final uri, :final data, :final mimeType):
+          final e = uri == null ? null : byUri[uri.toString()];
+          out.add(MessageAttachment(
+            kind: 'image',
+            name: str(e, 'name') ?? uri?.pathSegments.lastOrNull ?? 'Image',
+            mimeType: mimeType,
+            size: n(e, 'bytes') ?? data?.length,
+            uri: uri,
+            data: data,
+            width: n(e, 'width'),
+            height: n(e, 'height'),
+            originalWidth: n(e, 'originalWidth'),
+            originalHeight: n(e, 'originalHeight'),
+          ));
+        case EmbeddedResourcePart(:final uri, :final mimeType) when byUri.containsKey(uri):
+          final e = byUri[uri];
+          out.add(MessageAttachment(
+            kind: str(e, 'kind') ?? (mimeType == 'application/pdf' ? 'pdf' : 'text'),
+            name: str(e, 'name') ?? Uri.tryParse(uri)?.pathSegments.lastOrNull ?? 'file',
+            mimeType: mimeType ?? 'application/octet-stream',
+            size: n(e, 'bytes'),
+            uri: Uri.tryParse(uri),
+          ));
+        default:
+          break;
+      }
+    }
+    return out;
+  }
+
+  static String _bytes(int b) => b < 1024
+      ? '$b B'
+      : b < 1024 * 1024
+          ? '${(b / 1024).round()} KB'
+          : '${(b / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
 /// Where a message written by an MCP server's prompt came from.
 @immutable
 final class PromptSource {
@@ -120,9 +258,12 @@ final class AttachedResource {
       }
     }
     final prompt = PromptSource.of(m)?.serverName;
+    // Files the user attached are shown as attachments, not resources.
+    final attached = MessageAttachment.listedUris(m);
     return [
       for (final p in m.content)
         switch (p) {
+          EmbeddedResourcePart(:final uri) when attached.contains(uri) => null,
           EmbeddedResourcePart(:final uri) => AttachedResource(
               uri: uri,
               label: labels[uri] ?? _shortName(uri),
@@ -242,6 +383,12 @@ final class UserItem extends ChatItem {
 
   /// Resources attached to the message.
   List<AttachedResource> get resources => AttachedResource.of(message);
+
+  /// Set when an MCP App view sent this message (the user confirmed it).
+  AppMessageSource? get appSource => AppMessageSource.of(message);
+
+  /// Photos and files the user attached.
+  List<MessageAttachment> get attachments => MessageAttachment.of(message);
 }
 
 /// Optimistic stand-in for the message being sent, shown until the runner
@@ -378,6 +525,16 @@ final class ResourceBlock extends TurnBlock {
   final AttachedResource resource;
 }
 
+/// An MCP Apps view stored in a message ([UiResourcePart]).
+final class AppViewBlock extends TurnBlock {
+  const AppViewBlock({required this.key, required this.messageId, required this.part});
+
+  @override
+  final String key;
+  final String messageId;
+  final UiResourcePart part;
+}
+
 /// Consecutive tool calls with nothing visible between them, rendered as
 /// one "Ran 3 tools" group (a single call renders as a plain card).
 final class ToolGroupBlock extends TurnBlock {
@@ -429,6 +586,7 @@ final class ToolExecutionView {
     this.resultText,
     this.structured,
     this.errorText,
+    this.appResult,
   });
 
   final String callId;
@@ -445,6 +603,10 @@ final class ToolExecutionView {
   final String? resultText;
   final JsonMap? structured;
   final String? errorText;
+
+  /// The result, when its tool declared an MCP Apps view
+  /// ([ToolResultPart.uiResourceUri]): the chat renders the view from it.
+  final ToolResultPart? appResult;
 
   ToolExecutionView copyWith({
     ToolRunStatus? status,
@@ -465,6 +627,7 @@ final class ToolExecutionView {
         resultText: resultText,
         structured: structured,
         errorText: errorText,
+        appResult: appResult,
       );
 
   bool sameAs(ToolExecutionView o) =>
@@ -475,7 +638,9 @@ final class ToolExecutionView {
       o.duration == duration &&
       o.resultText == resultText &&
       o.errorText == errorText &&
-      o.displayName == displayName;
+      o.displayName == displayName &&
+      o.appResult?.uiResourceUri == appResult?.uiResourceUri &&
+      o.appResult?.meta[ToolResultPart.metaServerId] == appResult?.meta[ToolResultPart.metaServerId];
 }
 
 /// Prefixes of the error results `AgentRunner` writes for calls that never
@@ -615,8 +780,9 @@ List<TurnBlock> buildTurnBlocks(List<Message> steps) {
           final resources = AttachedResource.of(m.copyWith(content: [part]));
           if (resources.isEmpty) continue;
           blocks.add(ResourceBlock(key: 'res:${m.id}:$pi', messageId: m.id, resource: resources.single));
+        case UiResourcePart():
+          blocks.add(AppViewBlock(key: 'ui:${m.id}:$pi', messageId: m.id, part: part));
         default:
-          // Images and MCP Apps views arrive in later milestones.
           continue;
       }
     }
@@ -657,6 +823,7 @@ Map<String, ToolExecutionView> toolViewsFromPath(
         resultText: r.isError ? null : text,
         structured: r.structured,
         errorText: r.isError ? text : null,
+        appResult: r.uiResourceUri == null ? null : r,
       );
       final prev = previous[r.callId];
       out[r.callId] = prev != null && prev.sameAs(view) ? prev : view;

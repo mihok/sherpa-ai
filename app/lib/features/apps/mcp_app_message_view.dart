@@ -114,12 +114,26 @@ class _McpAppMessageViewState extends ConsumerState<McpAppMessageView> implement
       _unbind();
       return null;
     }
-    final pool = ref.read(mcpAppViewPoolProvider);
+    final McpAppViewPool pool;
+    try {
+      pool = ref.read(mcpAppViewPoolProvider);
+    } on Object catch (e) {
+      // MCP is not wired (previews, some tests): the text fallback.
+      debugPrint('McpAppMessageView: no view pool ($e)');
+      _unbind();
+      return null;
+    }
     final current = _entry;
     if (current != null && !current.isClosed && current.spec.key == spec.key && identical(pool, _pool)) return current;
     _unbind();
+    final McpAppViewEntry e;
+    try {
+      e = pool.entryFor(spec);
+    } on Object catch (err) {
+      debugPrint('McpAppMessageView: $err');
+      return null;
+    }
     _pool = pool;
-    final e = pool.entryFor(spec);
     e.addListener(_onEntry);
     pool.attach(e, this);
     _entry = e;
@@ -164,6 +178,8 @@ class _McpAppMessageViewState extends ConsumerState<McpAppMessageView> implement
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
+            // The text is the server's too: say whose it is.
+            McpAppSourceLabel(serverName: e.serverName),
             _fallback(context),
             if (e.unavailableReason != null) ...[
               SizedBox(height: t?.space.xs ?? 4),

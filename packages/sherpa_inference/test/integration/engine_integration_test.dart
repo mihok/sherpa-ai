@@ -497,6 +497,78 @@ void main() {
     }
   }, skip: skip, timeout: _timeout);
 
+  test('a draft model chosen by an override is loaded and drafts; lifecycle autotune reports progress', () async {
+    // One model at a time: the harness's warm model goes first.
+    await h.lifecycle.unload(reason: 'draft test');
+    final info = await h.host.start();
+    final store = InMemoryKeyValueStore();
+    final records = <PhaseRecord>[];
+    final lc = ModelLifecycleManager(
+      host: h.host,
+      store: store,
+      backgroundPolicy: BackgroundPolicy.none,
+      onPhase: records.add,
+      autotuner: Autotuner(
+        host: h.host,
+        store: store,
+        environment: AutotuneEnvironment(
+          deviceId: 'host',
+          osVersion: Platform.operatingSystemVersion,
+          appVersion: 'test',
+          engineVersion: info.version,
+          performanceCores: 2,
+        ),
+        sweep: const AutotuneSweep(threads: [1, 2], batchSizes: [64], kvVariants: [(KvType.q8_0, FlashAttention.on)], nPrompt: 16, nGen: 4, nReps: 1),
+      ),
+    )
+      ..register(_spec(testModelPath()!, preferredContext: 2048))
+      // The same file registered as a second model: same vocabulary, so it
+      // can draft for the first.
+      ..register(LocalModelSpec(id: 'qwen3-draft', path: testModelPath()!, preferredContext: 2048, minContext: 1024));
+    try {
+      await lc.start();
+      await lc.autotuner!.setOverrides(_modelId, const AutotuneOverrides(speculative: SpeculativeMode.draft, draftModelId: 'qwen3-draft'));
+      final plan = await lc.plan(_modelId);
+      expect(plan.admitted, isTrue, reason: plan.refusal);
+      expect(plan.config!.speculative, SpeculativeMode.draft);
+      final lease = await lc.acquire(_modelId);
+      try {
+        expect(lease.loaded.loadOptions.draftModelPath, testModelPath());
+        expect(lease.loaded.config.speculative, SpeculativeMode.draft);
+        final items = [for (var i = 1; i <= 12; i++) '$i. Parcel $i goes to dock ${i % 4 + 1}.'];
+        final request = jsonEncode({
+          'messages': [
+            {'role': 'user', 'content': 'Copy this list exactly, with no other text:\n${items.join('\n')}'},
+          ],
+          'max_tokens': 48,
+          'temperature': 0,
+          'seed': 42,
+          'enable_thinking': false,
+          'cache_prompt': false,
+        });
+        final events = await h.host.generate(lease.session, request).toList();
+        expect(events.where((e) => e.type == EngineEventType.error), isEmpty);
+        final perf = events.lastWhere((e) => e.type == EngineEventType.perf);
+        expect(perf.nDrafted, greaterThan(0), reason: 'the draft model proposed tokens');
+        expect(perf.nAccepted, greaterThan(0), reason: 'a copy of itself agrees with the model');
+      } finally {
+        lease.release();
+      }
+
+      final progress = <AutotuneProgress>[];
+      final profile = await lc.autotune(_modelId, force: true, onProgress: progress.add);
+      expect(profile!.source, AutotuneSource.override);
+      expect(profile.candidate.speculative, SpeculativeMode.draft, reason: 'the override survives the sweep');
+      expect(progress.first.done, 0);
+      expect(progress.last.done, lc.autotuner!.sweepSize);
+      expect(progress.where((p) => p.step == AutotuneStep.measured), isNotEmpty);
+      expect(records.map((r) => r.phase), contains(InferencePhase.benchmarking));
+      expect(records.last.phase, InferencePhase.idle);
+    } finally {
+      await lc.dispose();
+    }
+  }, skip: skip, timeout: _timeout);
+
   test('a dead worker isolate surfaces as engineCrashed and the host restarts', () async {
     final lease = await h.lifecycle.acquire(_modelId);
     try {

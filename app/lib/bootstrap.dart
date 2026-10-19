@@ -15,9 +15,13 @@ import 'package:sherpa_data/sherpa_data.dart';
 import 'package:sherpa_platform/sherpa_platform.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
+import 'features/chat/attachments/attachment_store.dart';
 import 'features/chat/state/chat_dependencies.dart';
+import 'features/chat/state/chat_mcp_apps.dart';
 import 'features/context/data/data_erase.dart';
+import 'features/diagnostics/app_error_ring.dart';
 import 'features/mcp/mcp_bootstrap.dart';
+import 'features/mcp/state/mcp_providers.dart' show mcpRuntimeProvider;
 import 'features/models/models_bootstrap.dart';
 import 'features/models/state/local_inference_providers.dart';
 import 'features/models/state/models_providers.dart';
@@ -77,14 +81,25 @@ Future<List<Override>> bootstrap({bool inMemory = false}) async {
     uiPreferencesStoreProvider.overrideWithValue(ui),
     chatScreenBuilderProvider.overrideWithValue(buildChatScreen),
     contextScreensProvider.overrideWithValue(contextScreens),
-    dataEraseHooksProvider.overrideWith((ref) => [() => _eraseModels(ref), () => _eraseLocalInference(ref)]),
+    dataEraseHooksProvider.overrideWith((ref) => [
+          () => _eraseModels(ref),
+          () => _eraseLocalInference(ref),
+          chatAttachmentsEraseHook(ref),
+          () => _eraseMcp(ref),
+        ]),
     chatContextManagerProvider.overrideWith(_contextManager),
     memoryMonitorProvider.overrideWithValue(PlatformMemoryMonitor()),
     ...models,
     ...local,
     ...mcp,
+    ...chatMcpAppOverrides(),
   ];
 }
+
+/// MCP: user-added servers and their sign-in, memory notes, tool pins and
+/// switches, remembered approvals, input data. Runs before the secrets are
+/// wiped, so token revocation can still read the tokens.
+Future<void> _eraseMcp(Ref ref) => ref.read(mcpRuntimeProvider).eraseAll();
 
 /// Saved KV prefixes and engine notes of the on-device provider.
 Future<void> _eraseLocalInference(Ref ref) async => ref.read(localInferenceProvider)?.eraseAll();
@@ -201,11 +216,20 @@ Future<List<Override>> _inMemoryOverrides() async {
     uiPreferencesStoreProvider.overrideWithValue(InMemoryUiPreferencesStore()),
     chatScreenBuilderProvider.overrideWithValue(buildChatScreen),
     contextScreensProvider.overrideWithValue(contextScreens),
-    dataEraseHooksProvider.overrideWith((ref) => [() => _eraseModels(ref), () => _eraseLocalInference(ref)]),
+    dataEraseHooksProvider.overrideWith((ref) => [
+          () => _eraseModels(ref),
+          () => _eraseLocalInference(ref),
+          chatAttachmentsEraseHook(ref),
+          () => _eraseMcp(ref),
+        ]),
     chatContextManagerProvider.overrideWith(_contextManager),
     ...models,
     ...local,
     ...mcp,
+    ...chatMcpAppOverrides(),
+    chatAttachmentStoreProvider.overrideWithValue(
+      ChatAttachmentStore(root: () => Directory.systemTemp.createTemp('sherpa_attachments_')),
+    ),
   ];
 }
 
@@ -214,6 +238,8 @@ Future<List<Override>> _inMemoryOverrides() async {
 void _installErrorHandlers() {
   final previous = FlutterError.onError;
   FlutterError.onError = (details) {
+    // Type and code only, for the diagnostics export.
+    AppErrorRing.instance.record(details.exception, source: 'flutter');
     if (kDebugMode) {
       previous?.call(details);
     } else {
@@ -221,6 +247,7 @@ void _installErrorHandlers() {
     }
   };
   PlatformDispatcher.instance.onError = (error, stack) {
+    AppErrorRing.instance.record(error, source: 'platform');
     debugPrint('Uncaught ${error.runtimeType}');
     return true;
   };

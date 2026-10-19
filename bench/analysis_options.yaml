@@ -1,8 +1,4 @@
-# bench/app holds Flutter test files that bench/app/run_frame_bench.sh
-# copies into app/ for a device run; they only resolve there.
+# bench/ holds pure-Dart tooling (bench/app/timeline_to_result.dart) and the
+# device-class baselines; the frame-timing test itself lives in
+# app/integration_test/ (see bench/app/README.md).
 include: ../analysis_options.yaml
-
-analyzer:
-  exclude:
-    - app/integration_test/**
-    - app/test_driver/**

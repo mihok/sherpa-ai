@@ -1,9 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../design/tokens.dart';
 import '../../../services/mcp/composer_sources.dart';
+import '../attachments/attachment_policy.dart';
+import '../attachments/composer_attachments.dart';
+import '../dictation/dictation.dart';
+import 'attachment_views.dart';
 import 'chat_style.dart';
 import 'source_chips.dart';
 
@@ -41,6 +47,13 @@ class ComposerEditing {
 /// * Typing `@` asks for resource suggestions ([onMentionQuery], answered
 ///   through [mentionSuggestions]); a picked one becomes a chip that is
 ///   sent with the message.
+/// * "Attach" ([onAttach]) adds photos and files to [attachments]; they
+///   show as chips with a remove button and go with the next message.
+///   Sending waits while a photo is being prepared, and is blocked (with
+///   the reason) when the model can't take what is attached.
+/// * The microphone ([dictation]) types what the user says into the field
+///   (on-device recognition where the platform offers it); nothing is sent
+///   until the user taps Send.
 class ChatComposer extends StatefulWidget {
   const ChatComposer({
     super.key,
@@ -60,6 +73,10 @@ class ChatComposer extends StatefulWidget {
     this.mentionSuggestions = const [],
     this.onMentionQuery,
     this.onSendWithMentions,
+    this.attachments,
+    this.attachmentPolicy = AttachmentPolicy.textOnly,
+    this.onAttach,
+    this.dictation,
   });
 
   final TextEditingController controller;
@@ -95,6 +112,18 @@ class ChatComposer extends StatefulWidget {
   /// Sends the text together with the picked resources (falls back to
   /// [onSend] when none are picked).
   final void Function(String text, List<McpResourceSuggestion> mentions)? onSendWithMentions;
+
+  /// Photos and files waiting to be sent; the screen takes them on send.
+  final ComposerAttachments? attachments;
+
+  /// What the chat's model accepts (to explain a blocked send).
+  final AttachmentPolicy attachmentPolicy;
+
+  /// Opens the attach sheet. Null hides the Attach button.
+  final VoidCallback? onAttach;
+
+  /// Dictation into the field. Null hides the microphone.
+  final ComposerDictation? dictation;
 
   @override
   State<ChatComposer> createState() => _ChatComposerState();
@@ -135,7 +164,11 @@ class _ChatComposerState extends State<ChatComposer> {
     super.initState();
     widget.controller.addListener(_onText);
     widget.focusNode.addListener(_onFocus);
+    widget.attachments?.addListener(_onAttachments);
+    widget.dictation?.addListener(_onAttachments);
   }
+
+  void _onAttachments() => setState(() {});
 
   @override
   void didUpdateWidget(ChatComposer oldWidget) {
@@ -148,12 +181,22 @@ class _ChatComposerState extends State<ChatComposer> {
       oldWidget.focusNode.removeListener(_onFocus);
       widget.focusNode.addListener(_onFocus);
     }
+    if (!identical(oldWidget.attachments, widget.attachments)) {
+      oldWidget.attachments?.removeListener(_onAttachments);
+      widget.attachments?.addListener(_onAttachments);
+    }
+    if (!identical(oldWidget.dictation, widget.dictation)) {
+      oldWidget.dictation?.removeListener(_onAttachments);
+      widget.dictation?.addListener(_onAttachments);
+    }
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_onText);
     widget.focusNode.removeListener(_onFocus);
+    widget.attachments?.removeListener(_onAttachments);
+    widget.dictation?.removeListener(_onAttachments);
     super.dispose();
   }
 
@@ -214,7 +257,14 @@ class _ChatComposerState extends State<ChatComposer> {
 
   void _onFocus() => setState(() {});
 
-  bool get _hasText => widget.controller.text.trim().isNotEmpty || _mentions.isNotEmpty;
+  bool get _hasText =>
+      widget.controller.text.trim().isNotEmpty || _mentions.isNotEmpty || (widget.attachments?.isNotEmpty ?? false);
+
+  /// Why the attachments can't go with this model (it changed since).
+  String? get _blocked => widget.attachments?.blockedReason(widget.attachmentPolicy);
+
+  /// A photo is still being prepared, or what is attached can't be sent.
+  bool get _attachmentsHold => (widget.attachments?.busy ?? false) || _blocked != null;
 
   /// Commands matching a leading `/word` (no spaces yet).
   List<SlashCommand> get _matches {
@@ -264,7 +314,7 @@ class _ChatComposerState extends State<ChatComposer> {
   }
 
   void _submit() {
-    if (widget.running || !widget.canSend || !_hasText) return;
+    if (widget.running || !widget.canSend || !_hasText || _attachmentsHold) return;
     final exact = _matches.where((c) => '/${c.name}' == widget.controller.text.trim()).firstOrNull;
     if (exact != null) return _run(exact);
     final prompt = _promptInvocation;
@@ -361,6 +411,8 @@ class _ChatComposerState extends State<ChatComposer> {
     final motion = chatMotionOf(context);
     final matches = _menu;
     final invocation = _promptInvocation;
+    final showAttach = widget.onAttach != null && widget.attachments != null && widget.editing == null;
+    final sendable = widget.canSend && _hasText && !_attachmentsHold;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -373,6 +425,8 @@ class _ChatComposerState extends State<ChatComposer> {
           ),
         if (invocation != null && invocation.command.arguments.isNotEmpty && matches.isEmpty)
           _PromptHint(command: invocation.command, rest: invocation.rest),
+        if (widget.attachments case final attachments? when attachments.isNotEmpty)
+          ComposerAttachmentChips(attachments: attachments, blockedReason: _blocked),
         if (_mentions.isNotEmpty)
           Padding(
             padding: EdgeInsets.only(bottom: tokens.space.xs),
@@ -390,6 +444,8 @@ class _ChatComposerState extends State<ChatComposer> {
               ],
             ),
           ),
+        if (widget.dictation case final d? when d.listening || d.problem != null)
+          _DictationLine(dictation: d),
         if (widget.editing != null)
           Padding(
             padding: EdgeInsets.only(bottom: tokens.space.xs),
@@ -417,10 +473,23 @@ class _ChatComposerState extends State<ChatComposer> {
             ),
           ),
           child: Padding(
-            padding: EdgeInsets.fromLTRB(tokens.space.lg, tokens.space.xxs, tokens.space.xs, tokens.space.xxs),
+            padding: EdgeInsets.fromLTRB(
+              showAttach ? tokens.space.xxs : tokens.space.lg,
+              tokens.space.xxs,
+              tokens.space.xs,
+              tokens.space.xxs,
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
+                if (showAttach)
+                  IconButton(
+                    key: const ValueKey('composer-attach'),
+                    tooltip: 'Attach photos or files',
+                    onPressed: widget.onAttach,
+                    style: IconButton.styleFrom(minimumSize: Size.square(tokens.space.minTouchTarget)),
+                    icon: const Icon(Icons.add_rounded),
+                  ),
                 Expanded(
                   child: Focus(
                     canRequestFocus: false,
@@ -452,6 +521,16 @@ class _ChatComposerState extends State<ChatComposer> {
                     ),
                   ),
                 ),
+                if (widget.dictation case final d?)
+                  IconButton(
+                    key: const ValueKey('composer-dictate'),
+                    tooltip: d.listening ? 'Stop dictation' : 'Dictate',
+                    isSelected: d.listening,
+                    onPressed: () => unawaited(d.toggle()),
+                    style: IconButton.styleFrom(minimumSize: Size.square(tokens.space.minTouchTarget)),
+                    icon: const Icon(Icons.mic_none_rounded),
+                    selectedIcon: Icon(Icons.mic_rounded, color: theme.colorScheme.primary),
+                  ),
                 SizedBox(width: tokens.space.xs),
                 AnimatedSwitcher(
                   duration: motion.fast,
@@ -484,13 +563,13 @@ class _ChatComposerState extends State<ChatComposer> {
                           key: const ValueKey('send'),
                           container: true,
                           button: true,
-                          enabled: widget.canSend && _hasText,
-                          label: 'Send message',
-                          onTap: widget.canSend && _hasText ? _submit : null,
+                          enabled: sendable,
+                          label: (widget.attachments?.busy ?? false) ? 'Send message, waiting for a photo' : 'Send message',
+                          onTap: sendable ? _submit : null,
                           excludeSemantics: true,
                           child: IconButton.filled(
                             tooltip: 'Send',
-                            onPressed: widget.canSend && _hasText ? _submit : null,
+                            onPressed: sendable ? _submit : null,
                             style: IconButton.styleFrom(minimumSize: Size.square(tokens.space.minTouchTarget)),
                             icon: const Icon(Icons.arrow_upward_rounded),
                           ),
@@ -501,6 +580,55 @@ class _ChatComposerState extends State<ChatComposer> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// "Listening…" with what happens to the user's voice, or why dictation
+/// stopped.
+class _DictationLine extends StatelessWidget {
+  const _DictationLine({required this.dictation});
+
+  final ComposerDictation dictation;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    final problem = dictation.problem;
+    final color = problem != null ? tokens.semantic.warning : theme.colorScheme.primary;
+    return Padding(
+      padding: EdgeInsets.only(bottom: tokens.space.xs, left: tokens.space.md, right: tokens.space.xs),
+      child: Semantics(
+        liveRegion: true,
+        container: true,
+        child: Row(
+          children: [
+            Icon(problem != null ? Icons.mic_off_rounded : Icons.mic_rounded, size: ChatIconSize.small, color: color),
+            SizedBox(width: tokens.space.sm),
+            Expanded(
+              child: Text.rich(
+                TextSpan(children: [
+                  if (problem == null) ...[
+                    TextSpan(text: 'Listening… ', style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+                    TextSpan(text: dictation.privacyNote),
+                  ] else
+                    TextSpan(text: problem),
+                ]),
+                style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+            if (problem != null)
+              IconButton(
+                tooltip: 'Dismiss',
+                visualDensity: VisualDensity.compact,
+                iconSize: ChatIconSize.small,
+                onPressed: dictation.dismissProblem,
+                icon: const Icon(Icons.close_rounded),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -157,4 +157,169 @@ void main() {
       expect(call.arguments, isEmpty);
     });
   });
+
+  /// Arguments a non-compliant server sends as a JSON object (not a
+  /// string): decoding the event keeps only the last of two equal keys, so
+  /// the adapters read the object's raw text from the event instead.
+  group('arguments sent as an object', () {
+    const dupArgs = '{"city": "Paris", "unit": "c", "city": "Rome"}';
+
+    test('rawValueAt finds the raw span, last key wins on the path, never throws', () {
+      const doc = '{"a": [1, {"b": {"x":1, "x":2}}, "s"], "e\\u0073c": {"k": true}, "a": [0, {"b": [ ]}]}';
+      expect(ToolArgumentsRepair.rawValueAt(doc, const ['a', 1, 'b']), '[ ]', reason: 'like jsonDecode, the last "a"');
+      expect(ToolArgumentsRepair.rawValueAt(doc, const ['esc', 'k']), 'true', reason: 'escaped keys are decoded');
+      expect(ToolArgumentsRepair.rawValueAt(doc, const []), doc);
+      expect(ToolArgumentsRepair.rawValueAt('{"o": {"x":1, "x":2}}', const ['o']), '{"x":1, "x":2}');
+      expect(ToolArgumentsRepair.rawValueAt('{"s": "a}\\"]{", "n": -1.5e3}', const ['n']), '-1.5e3');
+      for (final path in const [
+        ['missing'],
+        ['a', 5],
+        ['a', 'b'],
+        ['esc', 'k', 'deeper'],
+      ]) {
+        expect(ToolArgumentsRepair.rawValueAt(doc, path), isNull, reason: '$path');
+      }
+      expect(ToolArgumentsRepair.rawValueAt('{"a": ', const ['a']), isNull, reason: 'malformed input');
+      expect(ToolArgumentsRepair.rawValueAt('', const ['a']), isNull);
+    });
+
+    test('Chat SSE: duplicate keys in an arguments object are refused; the other calls stand', () {
+      final p = ChatStreamParser(
+        names: ToolNameMapper(['get_weather', 'get_time']),
+        quirks: ServerQuirks.of(ServerProfile.generic),
+        newCallId: (i) => 'synth_$i',
+      );
+      // A second choice and a non-object entry come first, so the
+      // position of the chosen choice in the raw text is not 0.
+      final chunk = '{"choices": [7, {"index": 1, "delta": {"tool_calls": [{"index": 0, "function": '
+          '{"name": "get_time", "arguments": {"tz": "a", "tz": "b"}}}]}}, {"index": 0, "delta": {"tool_calls": ['
+          '{"index": 0, "id": "c1", "function": {"name": "get_weather", "arguments": $dupArgs}}, '
+          '{"index": 1, "id": "c2", "function": {"name": "get_time", "arguments": {"tz": "UTC", "fmt": {"h": 24}}}}, '
+          '{"index": 2, "id": "c3", "function": {"name": "get_time", "arguments": "{\\"tz\\": \\"CET\\"}"}}]}}]}';
+      final events = [
+        ...p.addEvent(SseEvent(data: chunk)),
+        ...p.addEvent(SseEvent(data: jsonEncode({
+          'choices': [
+            {'index': 0, 'delta': <String, Object?>{}, 'finish_reason': 'tool_calls'},
+          ],
+        }))),
+        ...p.addEvent(const SseEvent(data: '[DONE]')),
+        ...p.finish(),
+      ];
+      final calls = events.whereType<ToolCallComplete>().map((e) => e.call).toList();
+      expect(calls, hasLength(3));
+      expect(calls[0].isValid, isFalse);
+      expect(calls[0].argumentsError, contains('"city" appears twice'));
+      expect(calls[0].arguments, isEmpty);
+      expect(calls[0].rawArguments, dupArgs, reason: 'the raw text, not a re-encoding');
+      expect(calls[1].arguments, {'tz': 'UTC', 'fmt': {'h': 24}});
+      expect(calls[1].isValid, isTrue);
+      expect(calls[1].repaired, isFalse);
+      expect(calls[2].arguments, {'tz': 'CET'});
+      expect(events.whereType<ProviderNotice>().map((n) => n.code), isNot(contains('tool_args_repaired')));
+    });
+
+    test('Chat non-streamed completion: a whole message with an arguments object', () {
+      final p = ChatStreamParser(
+        names: ToolNameMapper(['get_weather']),
+        quirks: ServerQuirks.of(ServerProfile.generic),
+        newCallId: (i) => 'synth_$i',
+      );
+      final body = '{"choices": [{"index": 0, "finish_reason": "tool_calls", "message": {"role": "assistant", '
+          '"tool_calls": [{"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": $dupArgs}}]}}]}';
+      final events = [...p.addChunk(tryDecodeObject(body)!, rawText: body), ...(p..markDone()).finish()];
+      final call = events.whereType<ToolCallComplete>().single.call;
+      expect(call.argumentsError, contains('"city" appears twice'));
+    });
+
+    test('Chat accumulator without the raw text still accepts an object (re-encoded)', () {
+      final a = ToolCallAccumulator(newId: (i) => 'c$i');
+      final events = [
+        ...a.addChatDeltas([
+          {
+            'index': 0,
+            'id': 'c1',
+            'function': {'name': 'get_weather', 'arguments': {'city': 'Paris'}},
+          },
+        ]),
+        ...a.completeAll(),
+      ];
+      expect(events.whereType<ToolCallComplete>().single.call.arguments, {'city': 'Paris'});
+    });
+
+    test('Responses: object arguments in output_item.done and arguments.done are read, duplicates refused', () {
+      final p = ResponsesStreamParser(names: ToolNameMapper(['get_weather']), newCallId: (i) => 'synth_$i');
+      final events = [
+        for (final data in [
+          '{"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "id": "fc_0", '
+              '"call_id": "call_0", "name": "get_weather", "arguments": ""}}',
+          '{"type": "response.output_item.done", "output_index": 0, "item": {"type": "function_call", "id": "fc_0", '
+              '"call_id": "call_0", "name": "get_weather", "arguments": $dupArgs}}',
+          '{"type": "response.output_item.added", "output_index": 1, "item": {"type": "function_call", "id": "fc_1", '
+              '"call_id": "call_1", "name": "get_weather", "arguments": {"city": "Oslo"}}}',
+          '{"type": "response.function_call_arguments.done", "output_index": 1, "arguments": {"city": "Oslo", "city": "Bergen"}}',
+          '{"type": "response.output_item.done", "output_index": 1, "item": {"type": "function_call", "id": "fc_1", '
+              '"call_id": "call_1", "name": "get_weather"}}',
+          '{"type": "response.output_item.added", "output_index": 2, "item": {"type": "function_call", "id": "fc_2", '
+              '"call_id": "call_2", "name": "get_weather", "arguments": {"city": "Oslo"}}}',
+          '{"type": "response.output_item.done", "output_index": 2, "item": {"type": "function_call", "id": "fc_2", '
+              '"call_id": "call_2", "name": "get_weather", "arguments": {"city": "Oslo", "unit": "c"}}}',
+          '{"type": "response.completed", "response": {"status": "completed"}}',
+        ])
+          ...p.addEvent(SseEvent(data: data)),
+        ...p.finish(),
+      ];
+      final calls = events.whereType<ToolCallComplete>().map((e) => e.call).toList();
+      expect(calls, hasLength(3));
+      expect(calls[0].argumentsError, contains('"city" appears twice'));
+      expect(calls[1].argumentsError, contains('"city" appears twice'));
+      expect(calls[2].arguments, {'city': 'Oslo', 'unit': 'c'}, reason: 'objects used to be dropped silently');
+      expect(calls[2].isValid, isTrue);
+    });
+
+    test('Anthropic: input sent whole in content_block_start, or as an object delta', () {
+      List<ToolCall> run(List<String> blockEvents) {
+        final decoder = AnthropicStreamDecoder(providerId: 'a', toolNames: AnthropicToolNames(const ['get_weather']));
+        final events = <ModelEvent>[
+          ...decoder.add(SseEvent(event: 'message_start', data: jsonEncode({
+            'type': 'message_start',
+            'message': {'id': 'm', 'model': 'claude', 'usage': {'input_tokens': 1, 'output_tokens': 1}},
+          }))),
+          for (final data in blockEvents) ...decoder.add(SseEvent(data: data)),
+          ...decoder.add(SseEvent(data: jsonEncode({
+            'type': 'message_delta',
+            'delta': {'stop_reason': 'tool_use'},
+            'usage': {'output_tokens': 5},
+          }))),
+          ...decoder.add(SseEvent(data: jsonEncode({'type': 'message_stop'}))),
+          ...decoder.close(),
+        ];
+        return events.whereType<ToolCallComplete>().map((e) => e.call).toList();
+      }
+
+      String start(int i, String input) => '{"type": "content_block_start", "index": $i, "content_block": '
+          '{"type": "tool_use", "id": "tu$i", "name": "get_weather", "input": $input}}';
+      String stop(int i) => '{"type": "content_block_stop", "index": $i}';
+
+      final calls = run([
+        start(0, dupArgs),
+        stop(0),
+        start(1, '{"city": "Oslo", "nested": {"a": 1}}'),
+        stop(1),
+        start(2, '{}'),
+        '{"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": $dupArgs}}',
+        stop(2),
+        start(3, '{}'),
+        '{"type": "content_block_delta", "index": 3, "delta": {"type": "input_json_delta", "partial_json": {"city": "Oslo"}}}',
+        stop(3),
+      ]);
+      expect(calls, hasLength(4));
+      expect(calls[0].argumentsError, contains('"city" appears twice'));
+      expect(calls[0].arguments, isEmpty);
+      expect(calls[1].arguments, {'city': 'Oslo', 'nested': {'a': 1}});
+      expect(calls[1].isValid, isTrue);
+      expect(calls[2].argumentsError, contains('"city" appears twice'));
+      expect(calls[3].arguments, {'city': 'Oslo'});
+    });
+  });
 }

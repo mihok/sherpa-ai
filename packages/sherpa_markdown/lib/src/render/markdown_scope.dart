@@ -10,9 +10,12 @@ import 'markdown_style.dart';
 /// a callback's identity changed.
 final class MarkdownCallbacks {
   void Function(Uri uri)? onLinkTap;
+  void Function(Uri uri)? onLinkLongPress;
   void Function(String code)? onCopyCode;
 
   void linkTap(Uri uri) => onLinkTap?.call(uri);
+
+  void linkLongPress(Uri uri) => onLinkLongPress?.call(uri);
 
   void copiedCode(String code) => onCopyCode?.call(code);
 }

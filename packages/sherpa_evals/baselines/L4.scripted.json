@@ -18,7 +18,7 @@
     "ledger_read_only_entries": 392,
     "ledger_unnamed_targets": 0,
     "ledger_evicted_effects": 0,
-    "summary_tokens_mean": 2054.654762,
+    "summary_tokens_mean": 2078.547619,
     "compactions_skipped": 0,
     "unhandled_errors": 0,
     "deferred.c0/constraints": 1,
