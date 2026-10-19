@@ -67,8 +67,11 @@ Future<McpAppResource> loadMcpAppResource(
 
 /// [McpAppHostCallbacks] for an app of [serverId]:
 ///
-/// - `lookupTool` reads the server's tool list from [manager] and exposes
-///   its `_meta.ui.visibility` (the bridge enforces it);
+/// - `lookupTool` reads the tool from the router's cache
+///   ([McpToolRouter.appTool], no `tools/list` round trip per call),
+///   falling back to the server's tool list from [manager] when the router
+///   has not listed it yet, and exposes its `_meta.ui.visibility` (the
+///   bridge enforces it);
 /// - `callTool` runs through [McpToolRouter.executeForApp] (same server,
 ///   visibility re-checked, hygiene / schema validation / result limits);
 /// - [approveToolCall] is the app's approval policy (an app can trigger
@@ -94,17 +97,18 @@ McpAppHostCallbacks mcpRouterAppCallbacks({
 }) =>
     McpAppHostCallbacks(
       lookupTool: (name) async {
-        final tools = await manager.listTools(serverId);
-        for (final t in tools) {
-          if (t.name != name) continue;
-          return McpAppTool(
-            name: t.name,
-            visibility: t.uiVisibility,
-            title: t.title,
-            description: t.description,
-            annotations: t.annotations,
-            definition: router.appToolDefinition(serverId, t.name),
-          );
+        McpAppTool of(McpTool t) => McpAppTool(
+              name: t.name,
+              visibility: t.uiVisibility,
+              title: t.title,
+              description: t.description,
+              annotations: t.annotations,
+              definition: router.appToolDefinition(serverId, t.name),
+            );
+        final cached = router.appTool(serverId, name);
+        if (cached != null) return of(cached);
+        for (final t in await manager.listTools(serverId)) {
+          if (t.name == name) return of(t);
         }
         return null;
       },
@@ -133,8 +137,16 @@ McpAppHostCallbacks mcpRouterAppCallbacks({
       linkPolicy: linkPolicy,
     );
 
-/// The MCP tool definition JSON for `hostContext.toolInfo.tool`.
-Future<Map<String, Object?>?> mcpToolJson(McpServerManager manager, String serverId, String toolName) async {
+/// The MCP tool definition JSON for `hostContext.toolInfo.tool`; from
+/// [router]'s cache when given, else the server's tool list.
+Future<Map<String, Object?>?> mcpToolJson(
+  McpServerManager manager,
+  String serverId,
+  String toolName, {
+  McpToolRouter? router,
+}) async {
+  final cached = router?.appTool(serverId, toolName);
+  if (cached != null) return cached.raw;
   for (final t in await manager.listTools(serverId)) {
     if (t.name == toolName) return t.raw;
   }

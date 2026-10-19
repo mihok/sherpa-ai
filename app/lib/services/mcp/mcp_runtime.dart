@@ -11,7 +11,10 @@ import 'package:sherpa_net/sherpa_net.dart' show Backoff, UrlPolicy;
 import '../../app_info.dart';
 import 'auth/mcp_oauth.dart';
 import 'auth/oauth_platform.dart';
-import 'input_handler.dart';
+import 'input/host_settings.dart';
+import 'input/input_history.dart';
+import 'input/input_queue.dart';
+import 'input/interactive_handler.dart';
 import 'mcp_records.dart';
 
 /// The app's MCP host: built-in and remote servers, tool hygiene, the tool
@@ -32,6 +35,13 @@ import 'mcp_records.dart';
 /// * **OAuth.** [McpOAuthService] supplies bearer tokens and turns 401/403
 ///   challenges into consent requests for the UI; after the user signs in,
 ///   the server reconnects.
+/// * **Input (M5).** Elicitation, URL consent and sampling go to the
+///   [InteractiveInputHandler]: requests wait in [inputQueue] for the UI
+///   and end up, redacted, in [inputHistory]. What each server may ask for
+///   is declared per server from [hostSettings]: sampling only when the
+///   user turned it on (off by default), the MCP Apps extension unless the
+///   user turned apps off for that server. Changing either reconnects the
+///   server so the new capabilities apply.
 /// * **Lifecycle.** [start] lists every server's tools without blocking
 ///   the app; [ready] completes when that is done (await it before
 ///   `AgentRunner.resume`, whose first step looks tools up synchronously;
@@ -47,6 +57,9 @@ final class McpRuntime {
     required this.onDevice,
     required this.clock,
     required this.startupTimeout,
+    required this.hostSettings,
+    required this.inputQueue,
+    required this.inputHistory,
   });
 
   static const String memoryServerId = 'memory';
@@ -73,6 +86,7 @@ final class McpRuntime {
     Backoff? backoff,
     Duration startupTimeout = const Duration(seconds: 8),
     AuthLogger? authLogger,
+    Duration inputTimeout = const Duration(minutes: 5),
   }) async {
     final configs = McpServerConfigStore(records);
     final enablement = await PersistentToolEnablement.load(records);
@@ -87,6 +101,9 @@ final class McpRuntime {
       onDevice: onDevice,
       clock: clock,
       startupTimeout: startupTimeout,
+      hostSettings: await McpHostSettingsStore.load(records, clock: clock),
+      inputQueue: McpInputQueue(clock: clock, timeout: inputTimeout),
+      inputHistory: McpInputHistory(),
     );
 
     bool storedEnabled(String id) => stored.where((s) => s.$1.id == id).firstOrNull?.$1.enabled ?? true;
@@ -119,18 +136,31 @@ final class McpRuntime {
       policy: authPolicy,
       logger: authLogger,
     );
+    final connect = connector ?? (c, o, t) => McpConnection.connect(c, options: o, transport: t);
     rt.manager = McpServerManager(
       servers: [memory, device, ...remote],
       options: McpClientOptions(
         httpClient: httpClient,
         clientInfo: const McpImplementation(name: 'sherpa', title: 'Sherpa', version: AppInfo.version),
-        inputHandler: inputHandler ?? DecliningInputHandler(onDeclined: rt._declinedInput),
+        // Per server in _optionsFor: sampling only when allowed, apps unless off.
+        capabilities: const McpClientCapabilities(mcpApps: true),
+        inputHandler: inputHandler ??
+            InteractiveInputHandler(
+              queue: rt.inputQueue,
+              settings: rt.hostSettings,
+              history: rt.inputHistory,
+              isTrusted: (id) => rt.manager.config(id)?.trusted ?? false,
+              completions: (id) =>
+                  rt.manager.connectedOrNull(id)?.changes.where((c) => c is McpElicitationCompleted).cast<McpElicitationCompleted>() ??
+                  const Stream.empty(),
+              clock: clock,
+            ),
         authHook: rt.oauth,
         clock: clock,
         urlPolicy: urlPolicy,
         logLevel: McpLogLevel.info,
       ),
-      connector: connector,
+      connector: (config, options, transport) => connect(config, rt._optionsFor(config.id, options), transport),
       transportFactory: onDevice.transportFor,
       backoff: backoff,
       clock: clock,
@@ -168,8 +198,20 @@ final class McpRuntime {
       rt.hygiene.changes.listen((_) => rt._emit()),
       enablement.changes.listen((_) => rt._emit()),
       rt.oauth.changes.listen((_) => rt._emit()),
+      rt.hostSettings.changes.listen((_) => rt._emit()),
+      rt.inputHistory.changes.listen((_) => rt._emit()),
     ]);
     return rt;
+  }
+
+  /// What [serverId] may ask for: elicitation always (the only
+  /// non-deprecated client feature), sampling only when the user allowed
+  /// it, the MCP Apps extension unless apps are off for it.
+  McpClientOptions _optionsFor(String serverId, McpClientOptions base) {
+    final s = hostSettings.of(serverId);
+    return base.copyWith(
+      capabilities: base.capabilities.copyWith(sampling: s.samplingDeclared, mcpApps: s.appsEnabled),
+    );
   }
 
   final McpRecords records;
@@ -180,6 +222,16 @@ final class McpRuntime {
   final Clock clock;
   final Duration startupTimeout;
 
+  /// Sampling permission and limits, MCP Apps switches and app network
+  /// consents, per server.
+  final McpHostSettingsStore hostSettings;
+
+  /// Input requests waiting for the user (the UI answers them).
+  final McpInputQueue inputQueue;
+
+  /// What servers asked for and how it ended (redacted; the console).
+  final McpInputHistory inputHistory;
+
   late final McpServerManager manager;
   late final ApprovalPolicy policy;
   late final ToolHygiene hygiene;
@@ -188,7 +240,6 @@ final class McpRuntime {
 
   final List<StreamSubscription<Object?>> _subs = [];
   final StreamController<void> _changes = StreamController.broadcast();
-  final Map<String, List<McpDeclinedInput>> _declined = {};
   Future<void>? _ready;
   AppLifecycleListener? _lifecycle;
   StreamSubscription<bool>? _network;
@@ -208,15 +259,39 @@ final class McpRuntime {
     });
   }
 
-  void _declinedInput(McpDeclinedInput d) {
-    final list = _declined.putIfAbsent(d.serverId, () => []);
-    list.add(d);
-    if (list.length > 20) list.removeAt(0);
-    _emit();
+  /// What [serverId] asked for (forms, web pages, model use) and how each
+  /// request ended, oldest first. Redacted: never the answers.
+  List<McpInputRecord> inputRecords(String serverId) => inputHistory.of(serverId);
+
+  // ---------------------------------------------------------------- host settings
+
+  McpServerHostSettings hostSettingsOf(String serverId) => hostSettings.of(serverId);
+
+  /// For "Delete all data": sampling and MCP Apps settings, app network
+  /// consents, and the input history; pending requests are declined.
+  Future<void> eraseInputData() async {
+    for (final c in servers) {
+      inputQueue.dropServer(c.id);
+      inputHistory.forget(c.id);
+    }
+    await hostSettings.eraseAll();
   }
 
-  /// Requests the server made that Sherpa declined (M4 has no forms yet).
-  List<McpDeclinedInput> declinedInputs(String serverId) => List.unmodifiable(_declined[serverId] ?? const []);
+  /// Saves [next] for [serverId]. When what the server may ask for changes
+  /// (sampling declared or not, MCP Apps on or off) the server reconnects,
+  /// so the capabilities it sees change (and it may offer other tools).
+  Future<void> updateHostSettings(String serverId, McpServerHostSettings next) async {
+    final before = hostSettings.of(serverId);
+    await hostSettings.update(serverId, next);
+    final redeclare = before.samplingDeclared != next.samplingDeclared || before.appsEnabled != next.appsEnabled;
+    final status = manager.config(serverId) == null ? null : manager.health(serverId).status;
+    // Connected or connecting (a connect in flight still uses the old
+    // capabilities): reconnect. Idle servers pick them up on first use.
+    if (redeclare && status != null && status != McpServerStatus.idle && status != McpServerStatus.disabled) {
+      await reconnect(serverId);
+    }
+    _emit();
+  }
 
   // ---------------------------------------------------------------- lifecycle
 
@@ -378,7 +453,9 @@ final class McpRuntime {
       // Nothing stored, or the store is unavailable: nothing to wipe.
     }
     oauth.forget(id);
-    _declined.remove(id);
+    inputHistory.forget(id);
+    await hostSettings.forgetServer(id);
+    inputQueue.dropServer(id);
     await enablement.forgetServer(id, toolNames);
     policy.revokeWhere((g) => toolNames.contains(g.toolName));
     _emit();
@@ -488,6 +565,9 @@ final class McpRuntime {
     await hygiene.dispose();
     await enablement.dispose();
     await oauth.dispose();
+    inputQueue.dispose();
+    await hostSettings.dispose();
+    await inputHistory.dispose();
     await _changes.close();
   }
 }

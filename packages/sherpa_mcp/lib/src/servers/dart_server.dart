@@ -18,7 +18,15 @@ import '../transport/in_process.dart';
 
 /// What a tool handler gets besides its arguments.
 final class DartToolContext {
-  DartToolContext._(this._session, this.cancel, this.meta, this._progressToken, this._logLevel);
+  DartToolContext._(
+    this._session,
+    this.cancel,
+    this.meta,
+    this._progressToken,
+    this._logLevel, {
+    this.inputResponses,
+    this.requestState,
+  });
 
   final DartMcpSession _session;
 
@@ -29,6 +37,18 @@ final class DartToolContext {
   final JsonMap meta;
   final Object? _progressToken;
   final McpLogLevel? _logLevel;
+
+  /// MRTR retry: the client's answers to the input requests of the previous
+  /// [DartToolResult.inputRequired], keyed as they were asked (bare
+  /// `ElicitResult` / `CreateMessageResult` objects). Null on a first call.
+  final JsonMap? inputResponses;
+
+  /// MRTR retry: the `requestState` echoed back exactly.
+  final String? requestState;
+
+  /// What the client declared for THIS request (2026-07-28: per request).
+  /// A server must not ask for input the client did not declare.
+  JsonMap get clientCapabilities => asMap(meta[McpMetaKeys.clientCapabilities]) ?? const {};
 
   /// Sherpa's advisory idempotency key (`<session>:<callId>`), if sent: a
   /// handler with side effects can use it to dedupe a re-sent call.
@@ -59,7 +79,19 @@ final class DartToolContext {
 /// The result of a tool handler.
 @immutable
 final class DartToolResult {
-  const DartToolResult({this.content = const [], this.structuredContent, this.isError = false});
+  const DartToolResult({this.content = const [], this.structuredContent, this.isError = false})
+      : inputRequests = null,
+        requestState = null;
+
+  /// An `InputRequiredResult` (MRTR, basic/patterns/mrtr.md): the client
+  /// fulfils every request in [inputRequests] (`{method, params}` maps
+  /// such as `elicitation/create` or `sampling/createMessage`) and calls
+  /// the tool again with the answers in [DartToolContext.inputResponses]
+  /// and [requestState] echoed in [DartToolContext.requestState].
+  const DartToolResult.inputRequired(Map<String, JsonMap> this.inputRequests, {this.requestState})
+      : content = const [],
+        structuredContent = null,
+        isError = false;
 
   factory DartToolResult.text(String text, {Object? structuredContent}) =>
       DartToolResult(content: [McpTextContent(text)], structuredContent: structuredContent);
@@ -76,12 +108,18 @@ final class DartToolResult {
   final Object? structuredContent;
   final bool isError;
 
-  JsonMap toJson() => {
-        'resultType': 'complete',
-        'content': [for (final c in content) c.toJson()],
-        if (structuredContent != null) 'structuredContent': structuredContent,
-        if (isError) 'isError': true,
-      };
+  /// Set for [DartToolResult.inputRequired].
+  final Map<String, JsonMap>? inputRequests;
+  final String? requestState;
+
+  JsonMap toJson() => inputRequests != null
+      ? {'resultType': 'input_required', 'inputRequests': inputRequests, 'requestState': ?requestState}
+      : {
+          'resultType': 'complete',
+          'content': [for (final c in content) c.toJson()],
+          if (structuredContent != null) 'structuredContent': structuredContent,
+          if (isError) 'isError': true,
+        };
 }
 
 typedef DartToolHandler = Future<DartToolResult> Function(JsonMap arguments, DartToolContext context);
@@ -501,6 +539,8 @@ final class DartMcpSession {
       meta,
       meta[McpMetaKeys.progressToken],
       McpLogLevel.tryParse(meta[McpMetaKeys.logLevel]),
+      inputResponses: asMap(params['inputResponses']),
+      requestState: asString(params['requestState']),
     );
     try {
       final result = await tool.handler(args, ctx);

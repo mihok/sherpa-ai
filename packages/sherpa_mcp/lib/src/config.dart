@@ -190,6 +190,18 @@ final class McpClientCapabilities {
   final bool tasks;
   final Map<String, JsonMap> extraExtensions;
 
+  McpClientCapabilities copyWith({bool? elicitationForm, bool? elicitationUrl, bool? sampling, bool? mcpApps}) =>
+      McpClientCapabilities(
+        elicitationForm: elicitationForm ?? this.elicitationForm,
+        elicitationUrl: elicitationUrl ?? this.elicitationUrl,
+        sampling: sampling ?? this.sampling,
+        samplingTools: samplingTools,
+        roots: roots,
+        mcpApps: mcpApps ?? this.mcpApps,
+        tasks: tasks,
+        extraExtensions: extraExtensions,
+      );
+
   /// The `ClientCapabilities` object. Input capabilities are declared only
   /// when there is a handler to serve them.
   JsonMap toJson({required McpEra era, required bool hasHandler}) {
@@ -338,4 +350,22 @@ final class McpClientOptions {
   /// Serve a stale list when a re-fetch fails at the transport level
   /// (caching.md: clients MAY).
   final bool serveStaleOnError;
+
+  /// These options with other [capabilities] or [inputHandler] (e.g. what
+  /// one server may ask for, decided per server by the host).
+  McpClientOptions copyWith({McpClientCapabilities? capabilities, InputRequestHandler? inputHandler}) => McpClientOptions(
+        httpClient: httpClient,
+        clientInfo: clientInfo,
+        capabilities: capabilities ?? this.capabilities,
+        inputHandler: inputHandler ?? this.inputHandler,
+        authHook: authHook,
+        clock: clock,
+        timeouts: timeouts,
+        limits: limits,
+        verdictCache: verdictCache,
+        urlPolicy: urlPolicy,
+        logLevel: logLevel,
+        legacyListCacheTtl: legacyListCacheTtl,
+        serveStaleOnError: serveStaleOnError,
+      );
 }

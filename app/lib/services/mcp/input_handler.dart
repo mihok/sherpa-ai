@@ -14,9 +14,10 @@ final class McpDeclinedInput {
   final String? originName;
 }
 
-/// The M4 [InputRequestHandler]: politely declines every server → client
-/// request, because the native elicitation forms, the URL-consent dialog
-/// and sampling approval are M5.
+/// A headless [InputRequestHandler] that politely declines every server →
+/// client request: for runs without a UI (evals, background tools, tests).
+/// The app uses `InteractiveInputHandler` (native forms, the URL-consent
+/// sheet and sampling approval; `input/interactive_handler.dart`).
 ///
 /// * Elicitation is answered `decline` (the spec's "the user said no"), so
 ///   the server decides what its tool returns; the router tells the model
@@ -24,9 +25,6 @@ final class McpDeclinedInput {
 /// * Sampling and roots are refused with a reason the server (and, through
 ///   the router, the model) can read. Sampling is off by default anyway
 ///   (PLAN §7 Q5) and roots are not declared.
-///
-/// TODO(M5): replace with the real handler (native forms, URL consent,
-/// sampling approval sheet) and declare the capabilities it serves.
 final class DecliningInputHandler implements InputRequestHandler {
   const DecliningInputHandler({this.onDeclined});
 
@@ -34,7 +32,7 @@ final class DecliningInputHandler implements InputRequestHandler {
   final void Function(McpDeclinedInput input)? onDeclined;
 
   static const String samplingReason =
-      'Sherpa does not let tool servers use its model yet (sampling is not supported), so this request was declined.';
+      'Sherpa cannot ask the user right now whether this tool server may use the model, so this request was declined.';
   static const String rootsReason = 'Sherpa does not share folders with tool servers.';
 
   void _note(McpInputContext context, String kind) => onDeclined?.call(McpDeclinedInput(

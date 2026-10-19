@@ -18,6 +18,8 @@ import '../../services/mcp/mcp_runtime.dart';
 import '../../state/connectivity.dart' show NetworkStatus, statusFor;
 import '../../state/providers.dart';
 import '../../state/sessions.dart' show sessionDeletedHooksProvider;
+import '../apps/state/apps_providers.dart' show mcpAppModelContextsProvider, mcpAppViewPoolProvider;
+import 'state/input_providers.dart';
 import 'state/mcp_providers.dart';
 
 /// `ProviderScope` overrides that wire MCP: built-in and remote tool
@@ -40,9 +42,11 @@ import 'state/mcp_providers.dart';
 /// Overrides `toolRouterProvider` (built-ins + MCP) and
 /// `approvalPolicyProvider` (one policy, trusting the user's trusted
 /// servers), plus `mcpRuntimeProvider`, `mcpHttpClientProvider`,
-/// `toolsReadyProvider`, `toolsUserTurnHookProvider` and
-/// `sessionDeletedHooksProvider` (a deleted chat's tool switches and router
-/// state are forgotten). Start-up lists
+/// `toolsReadyProvider`, `toolsUserTurnHookProvider`,
+/// `sessionDeletedHooksProvider` (a deleted chat's tool switches,
+/// sampling grants and app views are forgotten) and `mcpInputQueueProvider` (requests
+/// for elicitation and sampling, answered through `McpInputHost`).
+/// Start-up lists
 /// every server's tools in the background; launch is not blocked (await
 /// `toolsReadyProvider` before resuming a run).
 Future<List<Override>> mcpFeatureOverrides({
@@ -91,13 +95,18 @@ List<Override> mcpRuntimeOverrides(McpRuntime runtime, {http.Client? httpClient}
       toolRouterProvider.overrideWith((ref) => runtime.toolRouter(ref.watch(sessionStoreProvider))),
       toolsReadyProvider.overrideWithValue(() => runtime.ready),
       toolsUserTurnHookProvider.overrideWithValue(runtime.onUserTurn),
-      // A deleted chat's tool switches and router state go with it.
+      // A deleted chat's tool switches, router state, sampling grants and
+      // app views go with it.
       sessionDeletedHooksProvider.overrideWith((ref) => [
             (id) async {
               runtime.router.forgetSession(id);
+              runtime.hostSettings.forgetSession(id);
+              ref.read(mcpAppViewPoolProvider).closeSession(id);
+              ref.read(mcpAppModelContextsProvider).take(id);
               await runtime.enablement.forgetSession(id);
             },
           ]),
+      mcpInputQueueProvider.overrideWithValue(runtime.inputQueue),
       if (httpClient != null) mcpHttpClientProvider.overrideWithValue(httpClient),
     ];
 

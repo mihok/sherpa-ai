@@ -206,6 +206,7 @@ Future<McpRuntime> fakeRuntime({
   BrowserLauncher? browser,
   Clock? clock,
   NoteStorage? notes,
+  Duration inputTimeout = const Duration(minutes: 5),
 }) =>
     McpRuntime.create(
       records: records ?? InMemoryMcpRecords(),
@@ -220,6 +221,7 @@ Future<McpRuntime> fakeRuntime({
       authPolicy: const AuthNetworkPolicy(publicPolicy: UrlPolicy(resolver: fakeResolver)),
       canInteract: () => true,
       startupTimeout: const Duration(seconds: 5),
+      inputTimeout: inputTimeout,
     );
 
 /// Polls [test] until it holds (real time; use inside `runAsync`).

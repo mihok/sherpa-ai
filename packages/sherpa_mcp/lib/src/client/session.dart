@@ -189,12 +189,15 @@ abstract base class EraSession {
 }
 
 final class _InFlight {
-  _InFlight(this.method, this.name, this.timer, this.cancel);
+  _InFlight(this.method, this.name, this.timer, this.cancel, this.origin);
 
   final String method;
   final String? name;
   final RequestTimer timer;
   final CancellationToken cancel;
+
+  /// [McpCallOrigin.current] when the request was sent.
+  final McpCallOrigin? origin;
 }
 
 /// Ids, round trips, progress, timers, input dispatch, inbound routing.
@@ -278,7 +281,7 @@ final class SessionCore {
       throw CancelledException(token.reason ?? 'cancelled');
     }
     unawaited(token.whenCancelled.then(doCancel));
-    _inFlight[id] = _InFlight(method, name, timer, token);
+    _inFlight[id] = _InFlight(method, name, timer, token, McpCallOrigin.current);
     if (progressToken != null) {
       _progress[progressToken] = (p) {
         timer.touch();
@@ -341,6 +344,9 @@ final class SessionCore {
       originMethod: originMethod ?? f?.method,
       originName: originName ?? f?.name,
       cancel: cancel ?? f?.cancel ?? CancellationToken(),
+      // Legacy: the related request's origin; modern: this zone's (the
+      // input round runs inside the call).
+      origin: f?.origin ?? McpCallOrigin.current,
     );
   }
 

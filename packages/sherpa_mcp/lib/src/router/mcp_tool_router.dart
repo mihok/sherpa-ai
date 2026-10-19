@@ -29,6 +29,7 @@ import 'package:sherpa_net/sherpa_net.dart' show Redactor;
 
 import '../config.dart';
 import '../errors.dart';
+import '../protocol/input.dart' show McpCallOrigin;
 import '../protocol/primitives.dart';
 import 'bm25.dart';
 import 'budget.dart';
@@ -948,6 +949,12 @@ final class McpToolRouter implements ToolRouter {
     return e != null && e.tool.appCallable ? e.definition : null;
   }
 
+  /// The cached [McpTool] of [serverId] by wire [name], whatever its
+  /// visibility (an MCP App view checks it), from the last listing — no
+  /// `tools/list` round trip. Null when the server was not listed yet or
+  /// has no such tool.
+  McpTool? appTool(String serverId, String name) => _byKey[McpToolKey(serverId, name)]?.tool;
+
   /// Unwraps `call_tool` to its target and reports whether the router will
   /// refuse the call — for the approval layer and the UI, which must show
   /// (and decide on) the real tool, never the proxy.
@@ -1087,18 +1094,23 @@ final class McpToolRouter implements ToolRouter {
     }
     final budget = budgetFor(ctx.sessionId);
     try {
-      final r = await manager.callTool(
-        e.server.id,
-        e.tool.name,
-        arguments: arguments,
-        cancel: ctx.cancel,
-        timeout: ctx.timeout,
-        maxTimeout: ctx.timeout,
-        onProgress: ctx.onProgress,
-        // Call ids repeat across turns (`call_0`); the loop's key is unique.
-        idempotencyKey: ctx.idempotencyKey ?? '${ctx.sessionId}:${call.id}',
-        // Only TRUSTED hints count (the effective annotations).
-        retryOnReconnect: e.definition.annotations.isIdempotent,
+      // The origin lets an elicitation / sampling request the server makes
+      // while answering be attributed to this chat (McpInputContext.origin).
+      final r = await McpCallOrigin.run(
+        McpCallOrigin(sessionId: ctx.sessionId, toolName: e.modelName, fromApp: !forModel),
+        () => manager.callTool(
+          e.server.id,
+          e.tool.name,
+          arguments: arguments,
+          cancel: ctx.cancel,
+          timeout: ctx.timeout,
+          maxTimeout: ctx.timeout,
+          onProgress: ctx.onProgress,
+          // Call ids repeat across turns (`call_0`); the loop's key is unique.
+          idempotencyKey: ctx.idempotencyKey ?? '${ctx.sessionId}:${call.id}',
+          // Only TRUSTED hints count (the effective annotations).
+          retryOnReconnect: e.definition.annotations.isIdempotent,
+        ),
       );
       final result = r.toToolResult(toolUiResourceUri: e.tool.uiResourceUri);
       final tagged = ToolResult(

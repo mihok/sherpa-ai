@@ -13,12 +13,14 @@ import '../../services/mcp/server_probe.dart';
 import '../../state/ui_preferences.dart';
 import '../settings/settings_page.dart';
 import 'consent_sheet.dart';
+import 'server_host_sections.dart';
 import 'state/mcp_providers.dart';
 import 'widgets/mcp_widgets.dart';
 
 /// One server: health, trust, its tools (declared hints, hygiene, switches),
-/// resources and prompts, the debug console, and reconnect / sign out /
-/// remove.
+/// MCP Apps (on/off, network consents) and use of the user's model
+/// (sampling), resources and prompts, the debug console, and reconnect /
+/// sign out / remove.
 class ServerDetailScreen extends ConsumerWidget {
   const ServerDetailScreen({super.key, required this.serverId});
 
@@ -200,6 +202,10 @@ class ServerDetailScreen extends ConsumerWidget {
               title: Text(f.message),
               subtitle: f.excerpt == null ? null : Text(f.excerpt!, maxLines: 3, overflow: TextOverflow.ellipsis),
             ),
+        ],
+        if (!v.builtIn) ...[
+          McpAppsSection(serverId: v.id),
+          McpSamplingSection(serverId: v.id),
         ],
         if (v.config.enabled) ...[
           const SectionHeader('Resources and prompts'),

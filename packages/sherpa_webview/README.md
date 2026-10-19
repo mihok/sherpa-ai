@@ -12,7 +12,7 @@ is not used.
 | `McpAppsBridge` | The View protocol (`ui/initialize`, host context, tool data, `tools/call`, `ui/message`, `ui/open-link`, …). It is pure Dart over an injectable `McpAppChannel`. |
 | `McpAppCsp`, `DeclaredDomains`, `CspOrigin`, `LinkPolicy`, `McpAppLimits` | Policy. |
 | `McpAppResource` | A validated `ui://` resource (mime type, UTF-8 HTML, `_meta.ui`, SHA-256). |
-| `package:sherpa_webview/mcp.dart` | sherpa_mcp glue: `loadMcpAppResource`, `mcpRouterAppCallbacks` (`McpToolRouter.executeForApp` / `appToolDefinition`), `mcpToolJson`. |
+| `package:sherpa_webview/mcp.dart` | sherpa_mcp glue: `loadMcpAppResource`, `mcpRouterAppCallbacks` (`McpToolRouter.executeForApp` / `appToolDefinition`; tools are looked up in the router's cache with `McpToolRouter.appTool`, so a View's call costs no `tools/list`), `mcpToolJson`. |
 | `package:sherpa_webview/testing.dart` | `FakeMcpAppChannel` (a scriptable shell) and `FakeMcpAppPlatform` (a widget instead of a WebView). |
 | `assets/mcp_app_shell.html` | The trusted shell page. Native code loads it from the app's Flutter assets, never from the network. |
 
@@ -83,6 +83,9 @@ A View cannot forge an envelope, because the shell wraps everything it relays.
 
 ## Using it from the app (chat)
 
+The app wraps all of this in `McpAppMessageView` (`app/lib/features/apps/`), with a view pool, the
+approval policy, consent persistence and the app's sheets. The steps below are what it does.
+
 A tool result renders as an app when its `ToolResultPart.uiResourceUri` is set. `AgentRunner` fills it from the result's or the tool's `_meta.ui.resourceUri`, and puts the server in `meta[ToolResultPart.metaServerId]`. A stored `UiResourcePart` (`resourceUri`, `serverId`, `callId`) works the same way.
 
 ```dart
@@ -103,7 +106,7 @@ final controller = McpAppController(
     serverId: serverId,
     serverName: manager.config(serverId)!.name,
     resource: resource,
-    tool: wireName == null ? null : await mcpToolJson(manager, serverId, wireName),   // toolInfo.tool
+    tool: wireName == null ? null : await mcpToolJson(manager, serverId, wireName, router: router),   // toolInfo.tool
     callId: part.callId,
   ),
   callbacks: mcpRouterAppCallbacks(

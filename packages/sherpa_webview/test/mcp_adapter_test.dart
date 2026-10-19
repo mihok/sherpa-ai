@@ -237,4 +237,30 @@ void main() {
     // Unknown on this server.
     expect(((await call(4, 'nope'))['error']! as Map)['code'], RpcCode.invalidParams);
   });
+
+  test('app tool lookups come from the router cache, not a tools/list per call', () async {
+    final rig = _Rig();
+    addTearDown(rig.close);
+    await rig.router.toolsForTurn(sessionId: 's');
+    expect(rig.router.appTool('weather', 'refresh')?.uiVisibility, ['app']);
+    expect(rig.router.appTool('weather', 'model_only')?.uiVisibility, ['model'], reason: 'any visibility');
+    expect(rig.router.appTool('weather', 'nope'), isNull);
+    expect(rig.router.appTool('other', 'refresh'), isNull);
+    final callbacks = mcpRouterAppCallbacks(
+      router: rig.router,
+      manager: rig.manager,
+      serverId: 'weather',
+      sessionId: 's',
+      approveToolCall: (_) async => true,
+    );
+    // A server that would fail any further listing: lookups still work.
+    final conn = await rig.manager.connection('weather');
+    rig.server.setTools(const []);
+    await _settle();
+    final tool = await callbacks.lookupTool('refresh');
+    expect(tool?.visibility, ['app']);
+    expect(tool?.definition, isNotNull);
+    expect(await mcpToolJson(rig.manager, 'weather', 'get_weather', router: rig.router), containsPair('name', 'get_weather'));
+    expect(conn.isClosed, isFalse);
+  });
 }

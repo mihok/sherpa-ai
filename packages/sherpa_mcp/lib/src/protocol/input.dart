@@ -7,6 +7,8 @@
 /// approval sheet, the URL-consent dialog — is written once.
 library;
 
+import 'dart:async';
+
 import 'package:meta/meta.dart';
 import 'package:sherpa_core/sherpa_core.dart' show CancellationToken, FormatError, JsonMap, compact;
 
@@ -26,6 +28,43 @@ final class InputRequestDeclined implements Exception {
   String toString() => 'InputRequestDeclined: $reason';
 }
 
+/// Who a request was sent for: the chat and tool behind a `tools/call`.
+///
+/// [McpToolRouter] runs each call inside [run] (a zone value); the
+/// connection captures [current] with every request it sends, so an
+/// elicitation or sampling request the server makes while answering it can
+/// be attributed to that chat (and a grant scoped to it) in BOTH eras: in
+/// 2026-07-28 the input round runs inside the call itself; in the legacy
+/// era the server's request names the request it relates to.
+@immutable
+final class McpCallOrigin {
+  const McpCallOrigin({this.sessionId, this.toolName, this.fromApp = false});
+
+  /// The chat (agent session) the call belongs to.
+  final String? sessionId;
+
+  /// Model-facing name of the tool that was called.
+  final String? toolName;
+
+  /// The call came from the server's MCP App view, not from the model.
+  final bool fromApp;
+
+  static final Object _zoneKey = Object();
+
+  /// The origin of the code running now, if any.
+  static McpCallOrigin? get current {
+    final v = Zone.current[_zoneKey];
+    return v is McpCallOrigin ? v : null;
+  }
+
+  /// Runs [body] with [origin] as [current].
+  static Future<T> run<T>(McpCallOrigin origin, Future<T> Function() body) =>
+      runZoned(body, zoneValues: {_zoneKey: origin});
+
+  @override
+  String toString() => 'McpCallOrigin(${sessionId ?? '-'}, ${toolName ?? '-'}${fromApp ? ', app' : ''})';
+}
+
 /// Where an input request came from, for the consent UI.
 @immutable
 final class McpInputContext {
@@ -36,6 +75,7 @@ final class McpInputContext {
     required this.cancel,
     this.originMethod,
     this.originName,
+    this.origin,
   });
 
   /// The configured server (show it: "which server is asking" is a MUST).
@@ -49,6 +89,10 @@ final class McpInputContext {
 
   /// The tool / prompt name or resource URI of that request, when known.
   final String? originName;
+
+  /// The chat and tool the request was sent for, when known (see
+  /// [McpCallOrigin]).
+  final McpCallOrigin? origin;
 
   /// Fires when the originating request is cancelled; the UI should close.
   final CancellationToken cancel;

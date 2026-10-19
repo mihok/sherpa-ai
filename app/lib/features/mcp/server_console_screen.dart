@@ -5,6 +5,7 @@ import 'package:sherpa_mcp/sherpa_mcp.dart';
 
 import '../../design/tokens.dart';
 import '../../design/widgets/state_views.dart';
+import '../../services/mcp/input/input_history.dart';
 import 'state/mcp_providers.dart';
 import 'widgets/mcp_widgets.dart';
 
@@ -23,6 +24,15 @@ class ServerConsoleScreen extends ConsumerWidget {
         '${e.level}: ${e.message}';
   }
 
+  /// One redacted input request: when, what kind, how it ended, what was
+  /// asked (field names, the page without its query, counts).
+  static String formatInput(McpInputRecord r) {
+    final at = r.at.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(at.hour)}:${two(at.minute)}:${two(at.second)} ${r.kindLabel} ${r.outcomeLabel}'
+        '${r.toolName == null ? '' : ' (${r.toolName})'}: ${r.summary}${r.reason == null ? '' : ' — ${r.reason}'}';
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(mcpRevisionProvider);
@@ -30,7 +40,7 @@ class ServerConsoleScreen extends ConsumerWidget {
     final t = SherpaTokens.of(context);
     final config = rt.server(serverId);
     final logs = config == null ? const <McpLogEntry>[] : rt.manager.logs(serverId);
-    final declined = rt.declinedInputs(serverId);
+    final inputs = config == null ? const <McpInputRecord>[] : rt.inputRecords(serverId);
     final text = logs.map(format).join('\n');
     return Scaffold(
       appBar: AppBar(
@@ -67,14 +77,17 @@ class ServerConsoleScreen extends ConsumerWidget {
                   text: 'Tokens, keys and passwords are removed from these lines. Lines marked "server" come from '
                       'the server itself and may be wrong or misleading.',
                 ),
-                if (declined.isNotEmpty) ...[
+                if (inputs.isNotEmpty) ...[
                   SizedBox(height: t.space.md),
-                  NoteBox(
-                    tone: NoteTone.warning,
-                    icon: Icons.block_rounded,
-                    text: 'The server asked for input Sherpa cannot give yet (forms, web pages, its own model use) '
-                        '${declined.length} time${declined.length == 1 ? '' : 's'}; each was declined.',
+                  Semantics(headingLevel: 2, child: Text('Requests for your input', style: Theme.of(context).textTheme.titleSmall)),
+                  SizedBox(height: t.space.xs),
+                  Text(
+                    'Forms, web pages and model use this server asked for, newest first. Your answers are never '
+                    'recorded here.',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
+                  SizedBox(height: t.space.xs),
+                  MonoBlock(inputs.reversed.map(formatInput).join('\n'), semanticsLabel: 'Input requests'),
                 ],
                 SizedBox(height: t.space.md),
                 if (logs.isEmpty) const Text('Nothing logged yet.') else MonoBlock(text, semanticsLabel: 'Log lines'),

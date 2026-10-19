@@ -42,6 +42,8 @@ dependencies:
   sherpa_net: any
   sherpa_platform: any
   sherpa_providers: any
+  sherpa_webview: any
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
