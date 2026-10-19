@@ -473,7 +473,7 @@ class _ChatComposerState extends State<ChatComposer> {
             ),
           ),
           child: Padding(
-            padding: EdgeInsets.fromLTRB(
+            padding: EdgeInsetsDirectional.fromSTEB(
               showAttach ? tokens.space.xxs : tokens.space.lg,
               tokens.space.xxs,
               tokens.space.xs,
@@ -598,7 +598,7 @@ class _DictationLine extends StatelessWidget {
     final problem = dictation.problem;
     final color = problem != null ? tokens.semantic.warning : theme.colorScheme.primary;
     return Padding(
-      padding: EdgeInsets.only(bottom: tokens.space.xs, left: tokens.space.md, right: tokens.space.xs),
+      padding: EdgeInsetsDirectional.only(bottom: tokens.space.xs, start: tokens.space.md, end: tokens.space.xs),
       child: Semantics(
         liveRegion: true,
         container: true,
@@ -621,7 +621,6 @@ class _DictationLine extends StatelessWidget {
             if (problem != null)
               IconButton(
                 tooltip: 'Dismiss',
-                visualDensity: VisualDensity.compact,
                 iconSize: ChatIconSize.small,
                 onPressed: dictation.dismissProblem,
                 icon: const Icon(Icons.close_rounded),
@@ -764,8 +763,11 @@ class _PromptHint extends StatelessWidget {
     ];
     final color = missing.isEmpty ? theme.colorScheme.onSurfaceVariant : tokens.semantic.warning;
     return Padding(
-      padding: EdgeInsets.only(bottom: tokens.space.xs, left: tokens.space.md, right: tokens.space.md),
+      padding: EdgeInsets.fromLTRB(tokens.space.md, 0, tokens.space.md, tokens.space.xs),
+      // Its own node: a live region without `container` would merge into
+      // (and re-announce) the screen around it.
       child: Semantics(
+        container: true,
         liveRegion: true,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,

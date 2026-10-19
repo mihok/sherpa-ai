@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../state/chat_controller.dart';
 import '../state/chat_dependencies.dart';
 import '../state/chat_view_state.dart';
@@ -126,10 +128,10 @@ class ApprovalCard extends ConsumerWidget {
         }
         return KeyEventResult.ignored;
       },
-      child: Semantics(
-        container: true,
-        explicitChildNodes: true,
-        label: 'Approval needed. $title ${risk.label}.${approval.isFromApp ? ' Requested by an app, not by the model.' : ''}',
+      // The heading says what is asked ("Approval needed. Allow …?"); the
+      // risk, the requester and the arguments follow as their own nodes, in
+      // the order they are drawn.
+      child: HeadingGroup(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -146,7 +148,13 @@ class ApprovalCard extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Semantics(headingLevel: 2, child: Text(title, style: theme.textTheme.titleMedium)),
+                      Heading(
+                        child: Semantics(
+                          label: 'Approval needed. $title',
+                          excludeSemantics: true,
+                          child: Text(title, style: theme.textTheme.titleMedium),
+                        ),
+                      ),
                       SizedBox(height: tokens.space.xxs),
                       Text(
                         '${approval.call.name} · ${approval.sourceLabel}',
@@ -433,7 +441,7 @@ class ApprovalReminderBar extends StatelessWidget {
           side: BorderSide(color: risk.color.withValues(alpha: 0.6)),
         ),
         child: Padding(
-          padding: EdgeInsets.fromLTRB(tokens.space.lg, tokens.space.xs, tokens.space.xs, tokens.space.xs),
+          padding: EdgeInsetsDirectional.fromSTEB(tokens.space.lg, tokens.space.xs, tokens.space.xs, tokens.space.xs),
           child: Row(
             children: [
               Icon(Icons.shield_outlined, color: risk.color),
@@ -467,6 +475,7 @@ class ApprovalSheet extends ConsumerWidget {
         isScrollControlled: true,
         useSafeArea: true,
         showDragHandle: true,
+        sheetAnimationStyle: motionStyleOf(context),
         builder: (_) => ApprovalSheet(sessionId: sessionId),
       );
 

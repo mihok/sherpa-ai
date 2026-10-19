@@ -95,7 +95,9 @@ class _ReasoningRegionState extends State<ReasoningRegion> {
                     ),
                     if (_canExpand)
                       AnimatedRotation(
-                        turns: _expanded ? 0.25 : 0,
+                        // The chevron mirrors in RTL (it points to the start
+                        // edge), so it turns the other way to point down.
+                        turns: _expanded ? (Directionality.of(context) == TextDirection.rtl ? -0.25 : 0.25) : 0,
                         duration: motion.fast,
                         child: Icon(Icons.chevron_right_rounded, size: ChatIconSize.medium, color: dim),
                       ),

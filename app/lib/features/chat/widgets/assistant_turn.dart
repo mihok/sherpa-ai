@@ -117,12 +117,9 @@ class AssistantTurnTile extends StatelessWidget {
       child: ReadableWidth(
         child: Padding(
           padding: EdgeInsets.only(top: tokens.space.md, bottom: tokens.space.xs),
-          child: Semantics(
-            container: true,
-            explicitChildNodes: true,
-            headingLevel: 2,
-            label: 'Sherpa',
-            customSemanticsActions: item.showActions
+          child: TurnHeading(
+            speaker: 'Sherpa',
+            actions: item.showActions
                 ? {
                     const CustomSemanticsAction(label: 'Copy reply'): () => callbacks.onCopy(item),
                     if (!runActive) const CustomSemanticsAction(label: 'Retry'): () => callbacks.onRetry(item),

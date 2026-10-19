@@ -5,7 +5,9 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/section_header.dart';
 import '../../design/widgets/skeleton.dart';
 import '../../design/widgets/state_views.dart';
@@ -145,7 +147,9 @@ class _DismissibleSession extends ConsumerWidget {
     void archive() => archiveSessionWithUndo(context, ref, session, openSessionId: openSessionId);
     void delete() => deleteSessionWithUndo(context, ref, session, openSessionId: openSessionId);
 
-    Widget swipeBackground(Color bg, Color fg, IconData icon, String label, Alignment align) => Container(
+    // Archive is revealed at the start edge (a swipe towards the end), delete
+    // at the end edge, in either reading direction.
+    Widget swipeBackground(Color bg, Color fg, IconData icon, String label, AlignmentDirectional align) => Container(
           decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(t.radius.md)),
           padding: EdgeInsets.symmetric(horizontal: t.space.xl),
           alignment: align,
@@ -155,21 +159,26 @@ class _DismissibleSession extends ConsumerWidget {
           ),
         );
 
+    final motion = t.motion;
     return Dismissible(
       key: ValueKey('dismiss:${session.id}'),
+      // The framework's own timings (200 ms back or out, 300 ms to close
+      // the gap), none under reduced motion.
+      movementDuration: motion.scale(const Duration(milliseconds: 200)),
+      resizeDuration: motion.reduced ? null : const Duration(milliseconds: 300),
       background: swipeBackground(
         scheme.secondaryContainer,
         scheme.onSecondaryContainer,
         session.archived ? Icons.unarchive_outlined : Icons.archive_outlined,
         session.archived ? 'Unarchive' : 'Archive',
-        Alignment.centerLeft,
+        AlignmentDirectional.centerStart,
       ),
       secondaryBackground: swipeBackground(
         scheme.errorContainer,
         scheme.onErrorContainer,
         Icons.delete_outline,
         'Delete',
-        Alignment.centerRight,
+        AlignmentDirectional.centerEnd,
       ),
       onDismissed: (direction) {
         if (direction == DismissDirection.endToStart) {
@@ -194,30 +203,48 @@ class _DismissibleSession extends ConsumerWidget {
     );
   }
 
+  /// Long press: the same actions as the swipes, under the chat's title so
+  /// it is clear (and announced) which chat they apply to.
   void _showActions(BuildContext context, {required VoidCallback archive, required VoidCallback delete}) {
+    final t = SherpaTokens.of(context);
     unawaited(showModalBottomSheet<void>(
       context: context,
+      sheetAnimationStyle: motionStyleOf(context),
       builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(session.archived ? Icons.unarchive_outlined : Icons.archive_outlined),
-              title: Text(session.archived ? 'Unarchive' : 'Archive'),
-              onTap: () {
-                Navigator.pop(sheet);
-                archive();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('Delete'),
-              onTap: () {
-                Navigator.pop(sheet);
-                delete();
-              },
-            ),
-          ],
+        child: HeadingGroup(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(t.space.lg, t.space.lg, t.space.lg, t.space.xs),
+                child: Heading(
+                  child: Text(
+                    session.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(sheet).textTheme.titleMedium,
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: Icon(session.archived ? Icons.unarchive_outlined : Icons.archive_outlined),
+                title: Text(session.archived ? 'Unarchive' : 'Archive'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  archive();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Delete'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  delete();
+                },
+              ),
+            ],
+          ),
         ),
       ),
     ));

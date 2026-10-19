@@ -98,7 +98,9 @@ class _JsonPreviewState extends State<JsonPreview> {
     final tokens = SherpaTokens.of(context);
     final theme = Theme.of(context);
     final text = _expanded ? _full : _short;
-    Widget body = SelectableText(text, style: chatMonoStyle(context));
+    // Selectable without being a text field: a SelectableText is a focusable
+    // node whose long-press target is one line tall; Copy takes it all.
+    Widget body = SelectionArea(child: Text(text, style: chatMonoStyle(context)));
     if (_expanded && widget.maxHeight != null) {
       body = ConstrainedBox(
         constraints: BoxConstraints(maxHeight: widget.maxHeight!),
@@ -111,7 +113,7 @@ class _JsonPreviewState extends State<JsonPreview> {
         borderRadius: BorderRadius.circular(tokens.radius.sm),
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(tokens.space.md, tokens.space.sm, tokens.space.xs, tokens.space.sm),
+        padding: EdgeInsetsDirectional.fromSTEB(tokens.space.md, tokens.space.sm, tokens.space.xs, tokens.space.sm),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

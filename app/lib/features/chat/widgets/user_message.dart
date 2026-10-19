@@ -1,6 +1,7 @@
 import 'package:flutter/semantics.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
 import '../state/transcript_model.dart';
 import 'attachment_views.dart';
@@ -23,7 +24,8 @@ class UserMessageCallbacks {
   final void Function(UserItem item, bool forward) onSwitch;
 }
 
-/// A message the user sent: a right-aligned bubble.
+/// A message the user sent: a bubble at the end edge (right in LTR, left
+/// in RTL).
 ///
 /// Long-press (or right-click) opens Edit / Copy; screen readers get the
 /// same as custom actions. Branch switcher below when edits exist.
@@ -51,6 +53,7 @@ class UserMessageTile extends StatelessWidget {
     final choice = await showMenu<String>(
       context: context,
       position: position,
+      popUpAnimationStyle: motionStyleOf(context),
       items: [
         PopupMenuItem(
           value: 'edit',
@@ -86,12 +89,9 @@ class UserMessageTile extends StatelessWidget {
       child: ReadableWidth(
         child: Padding(
           padding: EdgeInsets.only(top: tokens.space.lg, bottom: tokens.space.xs),
-          child: Semantics(
-            container: true,
-            explicitChildNodes: true,
-            headingLevel: 2,
-            label: 'You',
-            customSemanticsActions: {
+          child: TurnHeading(
+            speaker: 'You',
+            actions: {
               if (!runActive) const CustomSemanticsAction(label: 'Edit message'): () => callbacks.onEdit(item),
               const CustomSemanticsAction(label: 'Copy text'): () => callbacks.onCopy(item),
             },
@@ -207,11 +207,8 @@ class PendingUserTile extends StatelessWidget {
     return ReadableWidth(
       child: Padding(
         padding: EdgeInsets.only(top: tokens.space.lg, bottom: tokens.space.xs),
-        child: Semantics(
-          container: true,
-          headingLevel: 2,
-          label: 'You',
-          explicitChildNodes: true,
+        child: TurnHeading(
+          speaker: 'You',
           child: Align(alignment: AlignmentDirectional.centerEnd, child: UserBubble(text: text)),
         ),
       ),

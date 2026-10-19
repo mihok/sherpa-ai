@@ -6,7 +6,9 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../services/background/background_providers.dart';
 import '../../services/mcp/composer_sources.dart';
@@ -400,6 +402,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final tokens = SherpaTokens.of(context);
     final width = MediaQuery.sizeOf(context).width;
     final ready = availability == ProviderAvailability.ready || availability == ProviderAvailability.loading;
+    // On a phone at large text the bar can't hold the title beside the
+    // model chip, the ring and the menu (at 2× on a 360 dp phone the title
+    // was squeezed to nothing): the chip moves to a row of its own below.
+    final chipBelow = width < kCompactApprovalBreakpoint && MediaQuery.textScalerOf(context).scale(1) >= 1.2;
+    final chipRowHeight = tokens.space.minTouchTarget + tokens.space.sm;
+    final modelChip = ModelChip(
+      selection: model,
+      onTap: () => unawaited(_pickModel()),
+      maxWidth: chipBelow ? width - 2 * tokens.space.md : width * 0.45,
+    );
 
     final commands = [
       const SlashCommand(name: 'new', description: 'Start a new chat', icon: Icons.edit_square),
@@ -500,16 +512,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         autofocus: true,
         child: Scaffold(
           appBar: PreferredSize(
-            preferredSize: const Size.fromHeight(kToolbarHeight),
+            preferredSize: Size.fromHeight(kToolbarHeight + (chipBelow ? chipRowHeight : 0)),
             child: MediaQuery.withClampedTextScaling(
               maxScaleFactor: kChromeMaxTextScale,
               child: AppBar(
-                title: Semantics(
-                  headingLevel: 1,
+                title: Heading(
+                  level: 1,
                   child: Text(title.isEmpty ? 'New chat' : title, maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
+                bottom: chipBelow
+                    ? PreferredSize(
+                        preferredSize: Size.fromHeight(chipRowHeight),
+                        child: Padding(
+                          padding: EdgeInsetsDirectional.only(start: tokens.space.xs),
+                          child: SizedBox(
+                            height: chipRowHeight,
+                            child: Align(alignment: AlignmentDirectional.centerStart, child: modelChip),
+                          ),
+                        ),
+                      )
+                    : null,
                 actions: [
-                  ModelChip(selection: model, onTap: () => unawaited(_pickModel()), maxWidth: width * 0.45),
+                  if (!chipBelow) modelChip,
                   ContextRing(
                     budget: budget,
                     level: level,
@@ -586,31 +610,32 @@ class _EmptyChat extends StatelessWidget {
     return Center(
       child: SingleChildScrollView(
         padding: EdgeInsets.all(tokens.space.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.terrain_rounded, size: tokens.space.xxxl, color: theme.colorScheme.primary),
-            SizedBox(height: tokens.space.lg),
-            Semantics(
-              headingLevel: 2,
-              child: Text('What are we working on?', style: theme.textTheme.headlineSmall, textAlign: TextAlign.center),
-            ),
-            if (ready && m != null) ...[
-              SizedBox(height: tokens.space.md),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(child: PrivacyBadge(location: m.location, host: m.host)),
-                ],
+        child: HeadingGroup(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.terrain_rounded, size: tokens.space.xxxl, color: theme.colorScheme.primary),
+              SizedBox(height: tokens.space.lg),
+              Heading(
+                child: Text('What are we working on?', style: theme.textTheme.headlineSmall, textAlign: TextAlign.center),
               ),
-              SizedBox(height: tokens.space.xs),
-              Text(
-                m.privacy.description,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-              ),
+              if (ready && m != null) ...[
+                SizedBox(height: tokens.space.md),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(child: PrivacyBadge(location: m.location, host: m.host)),
+                  ],
+                ),
+                SizedBox(height: tokens.space.xs),
+                Text(
+                  m.privacy.description,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -633,6 +658,7 @@ class _ChatOverflowMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) => PopupMenuButton<_ChatMenu>(
         tooltip: 'More',
+        popUpAnimationStyle: motionStyleOf(context),
         icon: const Icon(Icons.more_vert_rounded),
         onSelected: onSelected,
         itemBuilder: (_) => [
@@ -669,6 +695,7 @@ class _FetchingPromptLine extends StatelessWidget {
     final tokens = SherpaTokens.of(context);
     final theme = Theme.of(context);
     return Semantics(
+      container: true,
       liveRegion: true,
       child: Padding(
         padding: EdgeInsets.symmetric(horizontal: tokens.space.md),

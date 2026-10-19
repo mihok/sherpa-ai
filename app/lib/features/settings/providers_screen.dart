@@ -232,6 +232,7 @@ class _ProviderRow extends ConsumerWidget {
             ),
           ),
           trailing: PopupMenuButton<String>(
+            popUpAnimationStyle: motionStyleOf(context),
             tooltip: 'More for ${config.displayName}',
             onSelected: (v) => switch (v) {
               'check' => ref.invalidate(providerStatusProvider(config.id)),

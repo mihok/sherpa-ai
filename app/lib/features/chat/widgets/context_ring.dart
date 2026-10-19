@@ -3,7 +3,9 @@ import 'dart:math' as math;
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../state/model_selection.dart';
 import 'chat_style.dart';
 
@@ -171,6 +173,7 @@ class ContextBudgetSheet extends StatelessWidget {
         showDragHandle: true,
         useSafeArea: true,
         isScrollControlled: true,
+        sheetAnimationStyle: motionStyleOf(context),
         builder: (sheet) => ContextBudgetSheet(
           budget: budget,
           level: level,
@@ -194,62 +197,64 @@ class ContextBudgetSheet extends StatelessWidget {
     final (color, words) = contextLevelStyle(context, level);
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(tokens.space.xl, 0, tokens.space.xl, tokens.space.xl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Semantics(headingLevel: 2, child: Text('Context window', style: theme.textTheme.titleLarge)),
-          SizedBox(height: tokens.space.xs),
-          Text(
-            b == null
-                ? 'Sherpa measures how much of the model\'s memory this chat uses before each reply. '
-                    'Send a message to see it.'
-                : 'How much of ${modelName ?? 'the model'}\'s context the next request uses'
-                    '${estimate || !b.exact ? ' (estimated)' : ''}.',
-            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-          if (b != null) ...[
-            SizedBox(height: tokens.space.lg),
-            Row(
-              children: [
-                Icon(
-                  level == ContextLevel.overflow ? Icons.error_outline_rounded : Icons.data_usage_rounded,
-                  color: color,
-                ),
-                SizedBox(width: tokens.space.sm),
-                Expanded(
-                  child: Text(
-                    '${(math.min(b.ratio, 9.99) * 100).round()}% used · $words',
-                    style: theme.textTheme.titleMedium,
+      child: HeadingGroup(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Heading(child: Text('Context window', style: theme.textTheme.titleLarge)),
+            SizedBox(height: tokens.space.xs),
+            Text(
+              b == null
+                  ? 'Sherpa measures how much of the model\'s memory this chat uses before each reply. '
+                      'Send a message to see it.'
+                  : 'How much of ${modelName ?? 'the model'}\'s context the next request uses'
+                      '${estimate || !b.exact ? ' (estimated)' : ''}.',
+              style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            if (b != null) ...[
+              SizedBox(height: tokens.space.lg),
+              Row(
+                children: [
+                  Icon(
+                    level == ContextLevel.overflow ? Icons.error_outline_rounded : Icons.data_usage_rounded,
+                    color: color,
                   ),
-                ),
-              ],
-            ),
-            SizedBox(height: tokens.space.md),
-            _BudgetBar(budget: b),
-            SizedBox(height: tokens.space.lg),
-            _row(context, 'System prompt', b.systemTokens, swatch: 0),
-            _row(context, 'Tool definitions', b.toolTokens, swatch: 1),
-            if (b.pinnedTokens > 0) _row(context, 'Pinned', b.pinnedTokens, swatch: 2),
-            _row(context, 'Conversation', b.historyTokens, swatch: 3),
-            const Divider(),
-            _row(context, 'Reserved for the reply', b.outputReserve),
-            if (b.safetyMargin > 0) _row(context, 'Safety margin (estimate)', b.safetyMargin),
-            _row(context, 'Free', math.max(0, b.remaining)),
-            _row(context, 'Window', b.limit, bold: true),
-          ],
-          if (lastChange != null) _LastChange(change: lastChange!),
-          if (onInspect != null) ...[
-            SizedBox(height: tokens.space.lg),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.tonalIcon(
-                onPressed: onInspect,
-                icon: const Icon(Icons.manage_search_rounded),
-                label: const Text('See what the model sees'),
+                  SizedBox(width: tokens.space.sm),
+                  Expanded(
+                    child: Text(
+                      '${(math.min(b.ratio, 9.99) * 100).round()}% used · $words',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                ],
               ),
-            ),
+              SizedBox(height: tokens.space.md),
+              _BudgetBar(budget: b),
+              SizedBox(height: tokens.space.lg),
+              _row(context, 'System prompt', b.systemTokens, swatch: 0),
+              _row(context, 'Tool definitions', b.toolTokens, swatch: 1),
+              if (b.pinnedTokens > 0) _row(context, 'Pinned', b.pinnedTokens, swatch: 2),
+              _row(context, 'Conversation', b.historyTokens, swatch: 3),
+              const Divider(),
+              _row(context, 'Reserved for the reply', b.outputReserve),
+              if (b.safetyMargin > 0) _row(context, 'Safety margin (estimate)', b.safetyMargin),
+              _row(context, 'Free', math.max(0, b.remaining)),
+              _row(context, 'Window', b.limit, bold: true),
+            ],
+            if (lastChange != null) _LastChange(change: lastChange!),
+            if (onInspect != null) ...[
+              SizedBox(height: tokens.space.lg),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.tonalIcon(
+                  onPressed: onInspect,
+                  icon: const Icon(Icons.manage_search_rounded),
+                  label: const Text('See what the model sees'),
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -318,7 +323,7 @@ class _BudgetBar extends StatelessWidget {
               if (w <= 0) break;
               children.add(Container(
                 width: w,
-                margin: EdgeInsets.only(right: t.space.xxs),
+                margin: EdgeInsetsDirectional.only(end: t.space.xxs),
                 decoration: BoxDecoration(color: segmentColor(context, i), borderRadius: BorderRadius.circular(t.space.xxs)),
               ));
               used += w + t.space.xxs;

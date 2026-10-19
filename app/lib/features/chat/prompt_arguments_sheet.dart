@@ -1,6 +1,8 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../services/mcp/composer_sources.dart';
 
 /// The arguments of an MCP prompt, as a form: shown when a slash command
@@ -31,6 +33,7 @@ class PromptArgumentsSheet extends StatefulWidget {
         isScrollControlled: true,
         useSafeArea: true,
         showDragHandle: true,
+        sheetAnimationStyle: motionStyleOf(context),
         builder: (_) => PromptArgumentsSheet(command: command, initial: initial, missing: missing),
       );
 
@@ -72,57 +75,59 @@ class _PromptArgumentsSheetState extends State<PromptArgumentsSheet> {
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SingleChildScrollView(
         padding: EdgeInsets.fromLTRB(t.space.xl, 0, t.space.xl, t.space.xl),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Semantics(headingLevel: 2, child: Text('/${c.command}', style: theme.textTheme.titleLarge)),
-            SizedBox(height: t.space.xs),
-            Row(
-              children: [
-                Icon(c.trusted ? Icons.extension_outlined : Icons.gpp_maybe_outlined, size: 16, color: c.trusted ? theme.colorScheme.onSurfaceVariant : t.semantic.warning),
-                SizedBox(width: t.space.xs),
-                Expanded(
-                  child: Text(
-                    c.trusted
-                        ? 'A prompt from ${c.serverName}.'
-                        : 'A prompt from ${c.serverName}. Its text is treated as untrusted content.',
-                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        child: HeadingGroup(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Heading(child: Text('/${c.command}', style: theme.textTheme.titleLarge)),
+              SizedBox(height: t.space.xs),
+              Row(
+                children: [
+                  Icon(c.trusted ? Icons.extension_outlined : Icons.gpp_maybe_outlined, size: 16, color: c.trusted ? theme.colorScheme.onSurfaceVariant : t.semantic.warning),
+                  SizedBox(width: t.space.xs),
+                  Expanded(
+                    child: Text(
+                      c.trusted
+                          ? 'A prompt from ${c.serverName}.'
+                          : 'A prompt from ${c.serverName}. Its text is treated as untrusted content.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+                ],
+              ),
+              if (c.description != null) ...[
+                SizedBox(height: t.space.sm),
+                Text(c.description!, style: theme.textTheme.bodyMedium),
+              ],
+              SizedBox(height: t.space.lg),
+              for (final (i, a) in c.arguments.indexed) ...[
+                TextField(
+                  controller: _fields[a.name],
+                  autofocus: i == 0 || (missing.isNotEmpty && a.name == missing.first),
+                  textInputAction: i == c.arguments.length - 1 ? TextInputAction.done : TextInputAction.next,
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: (_) => i == c.arguments.length - 1 ? _submit() : null,
+                  decoration: InputDecoration(
+                    labelText: '${a.title ?? a.name}${a.required ? '' : ' (optional)'}',
+                    helperText: a.description,
+                    helperMaxLines: 3,
+                    errorText: _tried && missing.contains(a.name) ? 'Required' : null,
+                    border: const OutlineInputBorder(),
                   ),
                 ),
+                SizedBox(height: t.space.md),
               ],
-            ),
-            if (c.description != null) ...[
-              SizedBox(height: t.space.sm),
-              Text(c.description!, style: theme.textTheme.bodyMedium),
-            ],
-            SizedBox(height: t.space.lg),
-            for (final (i, a) in c.arguments.indexed) ...[
-              TextField(
-                controller: _fields[a.name],
-                autofocus: i == 0 || (missing.isNotEmpty && a.name == missing.first),
-                textInputAction: i == c.arguments.length - 1 ? TextInputAction.done : TextInputAction.next,
-                onChanged: (_) => setState(() {}),
-                onSubmitted: (_) => i == c.arguments.length - 1 ? _submit() : null,
-                decoration: InputDecoration(
-                  labelText: '${a.title ?? a.name}${a.required ? '' : ' (optional)'}',
-                  helperText: a.description,
-                  helperMaxLines: 3,
-                  errorText: _tried && missing.contains(a.name) ? 'Required' : null,
-                  border: const OutlineInputBorder(),
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: FilledButton.icon(
+                  onPressed: _submit,
+                  icon: const Icon(Icons.arrow_upward_rounded),
+                  label: const Text('Send'),
                 ),
               ),
-              SizedBox(height: t.space.md),
             ],
-            Align(
-              alignment: AlignmentDirectional.centerEnd,
-              child: FilledButton.icon(
-                onPressed: _submit,
-                icon: const Icon(Icons.arrow_upward_rounded),
-                label: const Text('Send'),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

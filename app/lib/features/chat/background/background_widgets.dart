@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../../services/background/background_providers.dart';
 import '../../../services/background/run_activity.dart';
 import '../../../state/ui_preferences.dart';
@@ -24,11 +25,10 @@ class BackgroundNotificationsPrompt extends ConsumerWidget {
     final theme = Theme.of(context);
     final activity = ref.read(runActivityProvider);
     final fg = theme.colorScheme.onSecondaryContainer;
-    return Semantics(
-      container: true,
+    return HeadingGroup(
       child: Container(
         width: double.infinity,
-        padding: EdgeInsets.fromLTRB(tokens.space.lg, tokens.space.md, tokens.space.sm, tokens.space.sm),
+        padding: EdgeInsetsDirectional.fromSTEB(tokens.space.lg, tokens.space.md, tokens.space.sm, tokens.space.sm),
         decoration: BoxDecoration(
           color: theme.colorScheme.secondaryContainer,
           borderRadius: BorderRadius.circular(tokens.radius.lg),
@@ -46,8 +46,7 @@ class BackgroundNotificationsPrompt extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Semantics(
-                        header: true,
+                      Heading(
                         child: Text('Keep you posted?', style: theme.textTheme.titleSmall?.copyWith(color: fg)),
                       ),
                       SizedBox(height: tokens.space.xxs),

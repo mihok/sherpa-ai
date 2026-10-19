@@ -195,6 +195,7 @@ class _ToolCallCardState extends ConsumerState<ToolCallCard> {
           '${exec?.duration == null ? '' : ', took ${formatToolDuration(exec!.duration!)}'}',
       hint: _expanded ? 'Hide details' : 'Show details',
       excludeSemantics: !_expanded,
+      explicitChildNodes: _expanded,
       onTap: _toggle,
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -207,7 +208,8 @@ class _ToolCallCardState extends ConsumerState<ToolCallCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              header,
+              // Said by the card's node above (with its tap and state).
+              ExcludeSemantics(child: header),
               if (running || (exec?.progressMessage != null && status.isActive))
                 Padding(
                   padding: EdgeInsets.fromLTRB(tokens.space.md, 0, tokens.space.md, tokens.space.sm),
@@ -281,10 +283,12 @@ class _ToolCallCardState extends ConsumerState<ToolCallCard> {
           ],
           if (exec?.errorText != null) ...[
             label(exec!.status == ToolRunStatus.failed ? 'Error' : 'Why it did not run'),
-            SelectableText(
-              exec.errorText!,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: exec.status == ToolRunStatus.failed ? tokens.semantic.danger : theme.colorScheme.onSurfaceVariant,
+            SelectionArea(
+              child: Text(
+                exec.errorText!,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: exec.status == ToolRunStatus.failed ? tokens.semantic.danger : theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           ],
@@ -365,7 +369,7 @@ class _ResultTextState extends State<_ResultText> {
         borderRadius: BorderRadius.circular(tokens.radius.sm),
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(tokens.space.md, tokens.space.sm, tokens.space.xs, tokens.space.sm),
+        padding: EdgeInsetsDirectional.fromSTEB(tokens.space.md, tokens.space.sm, tokens.space.xs, tokens.space.sm),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -375,7 +379,7 @@ class _ResultTextState extends State<_ResultText> {
                 Expanded(
                   child: Padding(
                     padding: EdgeInsets.only(top: tokens.space.xs),
-                    child: SelectableText(shown, style: chatMonoStyle(context)),
+                    child: SelectionArea(child: Text(shown, style: chatMonoStyle(context))),
                   ),
                 ),
                 IconButton(

@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../routing/routes.dart';
 import '../../shell/shell_layout.dart';
 import '../../state/sessions.dart';
@@ -23,7 +25,7 @@ class SessionsScreen extends ConsumerWidget {
     final archived = ref.watch(showArchivedProvider);
     return Scaffold(
       appBar: AppBar(
-        title: Semantics(headingLevel: 1, child: Text(archived ? 'Archived chats' : 'Chats')),
+        title: Heading(level: 1, child: Text(archived ? 'Archived chats' : 'Chats')),
         actions: [
           const _ArchivedToggle(),
           // With a rail, Settings is a rail destination instead.
@@ -70,12 +72,12 @@ class SessionsPane extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: EdgeInsets.fromLTRB(t.space.lg, t.space.sm, t.space.xs, 0),
+              padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, t.space.sm, t.space.xs, 0),
               child: Row(
                 children: [
                   Expanded(
-                    child: Semantics(
-                      headingLevel: 1,
+                    child: Heading(
+                      level: 1,
                       child: Text(archived ? 'Archived chats' : 'Chats', style: theme.textTheme.titleLarge),
                     ),
                   ),
@@ -117,6 +119,7 @@ class _HomeOverflow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => PopupMenuButton<String>(
         tooltip: 'More',
+        popUpAnimationStyle: motionStyleOf(context),
         icon: const Icon(Icons.more_vert_rounded),
         onSelected: (route) => unawaited(context.push<void>(route)),
         itemBuilder: (_) => const [

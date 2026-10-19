@@ -72,7 +72,10 @@ class SessionTile extends ConsumerWidget {
         'No model available',
     ].join('. ');
 
+    // Its own node with the tap: the ListTile's semantics are replaced by
+    // this one, and without `container` the row would merge into the list.
     return Semantics(
+      container: true,
       label: spoken,
       selected: selected,
       button: true,

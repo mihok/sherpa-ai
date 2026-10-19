@@ -374,7 +374,6 @@ class McpAppSourceLabel extends StatelessWidget {
           if (onExpand != null)
             IconButton(
               tooltip: 'Open full screen',
-              visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.open_in_full, size: 18),
               onPressed: onExpand,
             ),

@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../attachments/attachment_policy.dart';
 import '../attachments/attachment_store.dart';
 import '../attachments/composer_attachments.dart';
@@ -48,8 +50,9 @@ class ComposerAttachmentChips extends StatelessWidget {
           ),
           if (blockedReason != null)
             Padding(
-              padding: EdgeInsets.only(top: t.space.xs, left: t.space.sm),
+              padding: EdgeInsetsDirectional.only(top: t.space.xs, start: t.space.sm),
               child: Semantics(
+                container: true,
                 liveRegion: true,
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -154,7 +157,6 @@ class _AttachmentChip extends StatelessWidget {
                   ),
                   IconButton(
                     tooltip: 'Remove ${a.name}',
-                    visualDensity: VisualDensity.compact,
                     iconSize: ChatIconSize.small,
                     onPressed: onRemove,
                     icon: const Icon(Icons.close_rounded),
@@ -188,6 +190,7 @@ class AttachSheet extends StatelessWidget {
     showDragHandle: true,
     useSafeArea: true,
     isScrollControlled: true,
+    sheetAnimationStyle: motionStyleOf(context),
     builder: (_) => AttachSheet(policy: policy, destination: destination),
   );
 
@@ -214,27 +217,29 @@ class AttachSheet extends StatelessWidget {
         );
     return SingleChildScrollView(
       padding: EdgeInsets.only(bottom: t.space.lg),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: t.space.xl),
-            child: Semantics(headingLevel: 2, child: Text('Attach', style: theme.textTheme.titleLarge)),
-          ),
-          SizedBox(height: t.space.sm),
-          option(AttachSource.photos, Icons.photo_library_outlined, 'Photos', photoNote, enabled: policy.imagesAllowed),
-          option(AttachSource.camera, Icons.photo_camera_outlined, 'Camera', photoNote, enabled: policy.imagesAllowed),
-          option(AttachSource.files, Icons.attach_file_rounded, 'Files', fileNote, enabled: true),
-          Padding(
-            padding: EdgeInsets.fromLTRB(t.space.xl, t.space.sm, t.space.xl, 0),
-            child: Text(
-              'Up to ${AttachmentPolicy.maxPerMessage} attachments per message, '
-              '${formatBytes(AttachmentPolicy.maxTotalBytes)} in all. $destination',
-              style: theme.textTheme.bodySmall?.copyWith(color: muted),
+      child: HeadingGroup(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: t.space.xl),
+              child: Heading(child: Text('Attach', style: theme.textTheme.titleLarge)),
             ),
-          ),
-        ],
+            SizedBox(height: t.space.sm),
+            option(AttachSource.photos, Icons.photo_library_outlined, 'Photos', photoNote, enabled: policy.imagesAllowed),
+            option(AttachSource.camera, Icons.photo_camera_outlined, 'Camera', photoNote, enabled: policy.imagesAllowed),
+            option(AttachSource.files, Icons.attach_file_rounded, 'Files', fileNote, enabled: true),
+            Padding(
+              padding: EdgeInsets.fromLTRB(t.space.xl, t.space.sm, t.space.xl, 0),
+              child: Text(
+                'Up to ${AttachmentPolicy.maxPerMessage} attachments per message, '
+                '${formatBytes(AttachmentPolicy.maxTotalBytes)} in all. $destination',
+                style: theme.textTheme.bodySmall?.copyWith(color: muted),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

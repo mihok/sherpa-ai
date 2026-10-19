@@ -2,7 +2,7 @@
 
 Status: **done for every screen outside chat, home and the shell** (2026-10-19). Those three are not
 covered here; they were being changed while this audit ran, and their findings are listed at the end for
-that work. Everything was checked by widget tests in this container. Nothing has been checked with
+that work. They have since been audited and fixed the same way: see [Chat, home and shell](#chat-home-and-shell). Everything was checked by widget tests in this container. Nothing has been checked with
 TalkBack or VoiceOver yet; see [What needs a device](#what-needs-a-device).
 
 ## What was audited
@@ -323,3 +323,178 @@ These came from the same rules, run over `app/lib/features/chat/**`, `app/lib/fe
   - `home/sessions_pane.dart:26` and `:78`.
 - **Excluded from the source rules.** To cover these paths, remove them from `_audited` in
   `source_rules_test.dart` once the issues above are fixed.
+
+## Chat, home and shell
+
+Status: **done** (2026-10-19), with the same helper, matrix and rules as above. Every finding listed in
+the previous section is fixed, and the audit found more, listed below. As before, nothing has been
+checked with TalkBack or VoiceOver yet; see [What needs a device](#what-needs-a-device-1).
+
+### What was audited
+
+There are 31 more `auditScreen` entries, so 147 more audit tests. 5 of them are skipped (see
+[Outside these areas](#outside-these-areas)).
+
+- **Chat** (`test/a11y/audit_chat_test.dart`, over `ChatHarness` with the app's `SherpaTheme`; the rig is
+  `test/a11y/support/chat_rig.dart`):
+  - a new chat; no model set up;
+  - a reply streaming (mid-reply, Stop showing);
+  - tool cards: one opened, and a group of three opened;
+  - an approval: a sheet on phones, docked on tablets;
+  - an approval waiting: the reminder bar after the sheet is swiped away (phone views only: tablets
+    keep the card docked);
+  - an MCP App view on sherpa_webview's fake platform (the rig moved to
+    `test/features/chat/support/app_chat.dart`);
+  - attachments: a sent photo and file under the bubble, and both waiting in the composer;
+  - the composer: the command menu, mention suggestions with a picked chip, and a prompt's argument
+    hint;
+  - notices (a cut-off tool call), a stopped reply, an error with Details open, an interrupted run;
+  - sheets: the attach sheet, prompt arguments, the model picker (also with models on this device), the
+    context ring sheet, and the link confirm sheet.
+- **Home and the shell** (`test/a11y/audit_home_test.dart`, the real router and shell over `Harness`):
+  - the chats list. On tablets this is the rail, the sessions pane and the "pick a chat" pane;
+  - nothing set up; the first chat; a search with no matches; no archived chats;
+  - a chat's actions (long press);
+  - a chat open: the real chat screen, full screen on phones and beside the list on tablets;
+  - offline (the banner);
+  - Settings from the rail (tablet views only: phones have no rail);
+  - the rail beside one pane, at a medium 720 × 1000 window, 1× and 2×. The matrix's phone and large
+    tablet never show this layout.
+
+**Where pixel contrast was skipped, and why.** The exact check still runs on every one of these and
+passes. For example, the context sheet's token counts are `#171d1d` on `#eff5f5` (16:1), but at 14 px
+the thin digits of "111" leave fewer glyph pixels than anti-aliasing shades.
+
+| Screens | Views | What the sample picks up |
+|---|---|---|
+| An approval | 1× | 12 px risk detail in a tinted box: the tint and its border |
+| Attach sheet; a stopped reply; link confirm sheet; home's first chat | 1× (link sheet and home tablet only) | 12 px text: an anti-aliasing shade |
+| Context ring sheet | 1× | 14 px digits ("111 tokens") |
+
+**Other tests:**
+- `test/a11y/chat_semantics_test.dart`:
+  - **Streaming.** A reply streams 20 tokens. The only things any live region says are "Assistant is
+    responding" and, once it ends, "Response complete". The reply text is never in a live region.
+  - **Turns.** Each turn is a level-2 heading ("You", "Sherpa") with its actions, and the message is a
+    separate node under it.
+  - **Approval.** The approval heading comes before the risk.
+  - **Model chip.** At large text on a phone, the model chip moves below the title.
+- `test/a11y/rtl_test.dart`:
+  - the chat, audited right to left: the user's bubble is at the left (trailing) edge, replies start at
+    the right, and the composer is mirrored;
+  - home, audited right to left: a swipe towards the end edge reveals Archive at the start edge;
+  - the rail sits at the start edge, and with a notch on each side every pane keeps only its outer inset
+    (LTR and RTL).
+- `test/a11y/reduced_motion_test.dart`: the model picker, the chat's More menu and a chat's long-press
+  actions open at once under reduced motion.
+
+### What was fixed
+
+- **Reduced motion:**
+  - Every sheet passes `sheetAnimationStyle: motionStyleOf(context)`: the model picker, prompt
+    arguments, the link sheet, the approval sheet, the attach sheet, the context sheet and a chat's
+    actions. Prompt arguments was missed by the source rule, which did not read nested type arguments
+    (`showModalBottomSheet<Map<String, String>>`).
+  - Popup menus ignore `disableAnimations` too. The chat's More menu, home's More menu and a message's
+    Edit/Copy menu pass `popUpAnimationStyle`.
+  - A chat's swipe uses the framework's timings, or none under reduced motion.
+  - These areas have no dialogs, expansion tiles or `MaterialPageRoute`.
+- **Right to left:**
+  - Every listed padding and alignment is directional (`EdgeInsetsDirectional`, `AlignmentDirectional`);
+    symmetric `fromLTRB` stays.
+  - The user's bubble stays at the end edge in both directions; its tail corner was already directional.
+  - Found by re-grepping:
+    - **The shell's insets.** The shell removed the rail's right inset and the detail pane's left one,
+      so in RTL each pane lost its outer inset and kept its inner one. It now picks the side from the
+      text direction.
+    - **The reasoning chevron.** It mirrors in RTL, so it pointed up when opened; it now turns the other
+      way.
+    - **The archived empty state** said "Swipe a chat to the right"; it now follows the text direction.
+- **Headings:**
+  - Every `Semantics(headingLevel:)` is a `Heading`, and so is the notifications prompt's
+    `header: true`. In 3.47 `header: true` alone is not announced.
+  - **Turns.** "You" and "Sherpa" go through a new `TurnHeading` (`chat/widgets/transcript.dart`): a
+    level-2 heading that carries the turn's actions, with the message, chips and buttons as separate
+    nodes under it.
+  - **`HeadingGroup` wraps:**
+    - the empty chat;
+    - the sheets: link, prompt arguments, attach and context;
+    - the model picker's provider and on-device sections;
+    - the error card and the setup panel;
+    - the notifications prompt;
+    - the approval card.
+  - **The approval card's heading** now says "Approval needed. Allow “…”?". The group around it is no
+    longer labelled, so the heading is read first, not after a summary.
+  - **A chat's actions sheet** now has the chat's title as its heading, so it says which chat it acts
+    on. This is a visual change.
+- **Semantics** (found by the audit):
+  - **The transcript's label.** The transcript was a container labelled "Conversation", so every turn's
+    heading was read after it. It is now unlabelled; the turns name themselves.
+  - **Live regions with `container`.** Three live regions had no `container`, so their text merged into
+    the screen around them: the prompt argument hint, the blocked-attachment reason and "Getting
+    /prompt…". The hint was read before the empty chat's heading.
+  - **Session rows.** Each row used `excludeSemantics` with a tap but no `container`, like the M6 model
+    cards; it now has `container`.
+  - **Jump to latest** keeps its action while hidden; `ExcludeSemantics` already removes it then.
+  - **Tool cards.** An open tool card's details are separate nodes, and its header is excluded, because
+    the card's own node already says the header and toggles it.
+  - **Selectable text.** Tool results, JSON previews, error details and a link's full address were
+    `SelectableText`: a focusable text-field node one line tall, whose long-press target failed 48 dp.
+    They are now `Text` in a `SelectionArea`: still selectable, and Copy buttons cover all of them.
+- **Tap targets.** The remove buttons on the composer's attachment and resource chips, and the
+  dictation line's Dismiss, used compact density (40 dp). They are now 48 dp, which makes those chips
+  4 dp taller.
+- **Large text** (real problems):
+  - **The chat's title.** In the shell at 2× on a 360 dp phone, the back button, the model chip, the
+    context ring and the menu left the title 42 dp, and it drew nothing at all. At 1.2× and above on a
+    phone, the model chip now has its own row under the title. This is a visual change, only at large
+    text.
+  - **Loading rows.** "Checking which models fit…" and "Loading models…" overflowed the model picker at
+    2× (by 81 px); their text now wraps.
+
+**Source rules.** Chat, home and the shell are no longer in `_audited`'s exclusions; only `lib/state/` and
+`lib/services/`, which draw no UI, still are. The rules changed in these ways:
+
+- **The call scanner.** It reads nested type arguments, and a self-test covers it.
+- **Left/right on whole calls.** `EdgeInsets.only`, `Border`, `BorderRadius.only` and `Positioned` are
+  checked on their top-level arguments, so a call split over lines is still caught.
+- **One physical side.** A literal `SafeArea(left/right: false)` or `removePadding(removeLeft/Right:
+  true)` on one side only fails; this would have caught the shell.
+- **`header: true`** without `Heading` fails.
+- **SnackBar display times** split over lines are not taken for animation durations.
+
+**Goldens.** None were regenerated. All of them, the chat goldens included, are unchanged: the RTL and
+padding fixes are invisible in LTR, and none of the visual changes above (the large-text chip row, the
+48 dp chip buttons, the actions sheet's title) is in a golden.
+
+### Outside these areas
+
+These were found but not changed, because they are outside chat, home and the shell:
+
+- **The MCP App view's "Open full screen" button.** In `packages/sherpa_webview/lib/src/widget/view.dart`
+  (`McpAppSourceLabel`), it is 40 dp (`VisualDensity.compact`). With the standard density, the
+  "chat: an MCP App view" audit passes in all five views. That was checked, then reverted. Until it is
+  fixed, the entry is skipped by `_webviewExpandButtonAt40dp` in `audit_chat_test.dart`.
+- **Settings › Model providers.** The More menu (`features/settings/providers_screen.dart`) has no
+  `popUpAnimationStyle`. A source rule for popup menus would flag it, so none was added.
+- **Snack bars** slide in under reduced motion. `MaterialApp.snackBarAnimationStyle` is not set
+  (`lib/app.dart`).
+
+### What needs a device
+
+- **Streaming.** Check that TalkBack and VoiceOver say "Assistant is responding" once, stay quiet while
+  the reply streams, and say "Response complete" when it ends. Also check this while the user is reading
+  an earlier message.
+- **Turns.** Check heading navigation (TalkBack's reading control, the VoiceOver rotor) from turn to
+  turn. Also check that a turn's custom actions (Copy, Edit, Retry) are offered on its heading.
+- **The approval sheet.** Check that focus moves to "Approval needed…" when the sheet opens by itself,
+  and back to the composer when it closes. Check the same for the reminder bar's Review.
+- **Swipes.** Check a chat's custom actions (Archive, Delete) and its long press with a screen reader,
+  and the swipe with Switch Access.
+- **Selection.** `SelectionArea` in tool results and error details, with TalkBack's and VoiceOver's text
+  selection.
+- **The model chip row** at real 130–200 % font sizes, on a small and a large phone.
+- **RTL.** A real RTL locale for the chat, the sessions list and the rail. Check a notch in landscape on
+  both sides.
+- **MCP App views.** The WebView's own accessibility: the platform view's content is not in Flutter's
+  semantics tree.

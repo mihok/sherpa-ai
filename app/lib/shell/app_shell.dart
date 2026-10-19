@@ -71,9 +71,9 @@ class _AppShellState extends ConsumerState<AppShell> {
         body: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            MediaQuery.removePadding(
-              context: context,
-              removeRight: true,
+            _withoutInsets(
+              context,
+              end: true,
               child: _Rail(
                 selectedIndex: inSettings ? 1 : 0,
                 onNewChat: _newChat,
@@ -85,10 +85,10 @@ class _AppShellState extends ConsumerState<AppShell> {
             if (showList) ...[
               SizedBox(
                 width: paneWidth,
-                child: MediaQuery.removePadding(
-                  context: context,
-                  removeLeft: true,
-                  removeRight: true,
+                child: _withoutInsets(
+                  context,
+                  start: true,
+                  end: true,
                   child: SessionsPane(selectedId: Routes.chatIdOf(widget.location)),
                 ),
               ),
@@ -98,9 +98,7 @@ class _AppShellState extends ConsumerState<AppShell> {
               else
                 SizedBox(width: layout.separator!.width),
             ],
-            Expanded(
-              child: MediaQuery.removePadding(context: context, removeLeft: true, child: widget.child),
-            ),
+            Expanded(child: _withoutInsets(context, start: true, child: widget.child)),
           ],
         ),
       );
@@ -112,6 +110,20 @@ class _AppShellState extends ConsumerState<AppShell> {
       child: AppShortcuts(onNewChat: _newChat, onSettings: _settings, child: body),
     );
   }
+}
+
+/// [child] without the system insets (a notch or rounded corner in
+/// landscape) on its [start] and/or [end] side: the sides that face another
+/// pane rather than the screen edge. The rail is at the start edge in both
+/// reading directions, so which physical side that is follows them.
+Widget _withoutInsets(BuildContext context, {bool start = false, bool end = false, required Widget child}) {
+  final rtl = Directionality.of(context) == TextDirection.rtl;
+  return MediaQuery.removePadding(
+    context: context,
+    removeLeft: rtl ? end : start,
+    removeRight: rtl ? start : end,
+    child: child,
+  );
 }
 
 class _Rail extends StatelessWidget {
@@ -131,7 +143,6 @@ class _Rail extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = SherpaTokens.of(context);
     return SafeArea(
-      right: false,
       child: SizedBox(
         width: AppShell.railWidth,
         child: NavigationRail(

@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../state/chat_errors.dart';
 import '../state/chat_view_state.dart';
 import 'chat_style.dart';
@@ -121,9 +122,7 @@ class _ChatErrorCardState extends State<ChatErrorCard> {
     return ReadableWidth(
       child: Padding(
         padding: EdgeInsets.symmetric(vertical: tokens.space.sm),
-        child: Semantics(
-          container: true,
-          liveRegion: false,
+        child: HeadingGroup(
           child: DecoratedBox(
             decoration: BoxDecoration(
               color: tokens.semantic.danger.withValues(alpha: 0.08),
@@ -131,7 +130,12 @@ class _ChatErrorCardState extends State<ChatErrorCard> {
               border: Border.all(color: tokens.semantic.danger.withValues(alpha: 0.5)),
             ),
             child: Padding(
-              padding: EdgeInsets.fromLTRB(tokens.space.lg, tokens.space.md, tokens.space.xs, tokens.space.md),
+              padding: EdgeInsetsDirectional.fromSTEB(
+                tokens.space.lg,
+                tokens.space.md,
+                tokens.space.xs,
+                tokens.space.md,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -147,7 +151,7 @@ class _ChatErrorCardState extends State<ChatErrorCard> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Semantics(headingLevel: 3, child: Text(e.title, style: theme.textTheme.titleSmall)),
+                            Heading(level: 3, child: Text(e.title, style: theme.textTheme.titleSmall)),
                             SizedBox(height: tokens.space.xs),
                             Text(e.message, style: theme.textTheme.bodyMedium),
                           ],
@@ -183,8 +187,8 @@ class _ChatErrorCardState extends State<ChatErrorCard> {
                   ),
                   if (_details && e.detail != null)
                     Padding(
-                      padding: EdgeInsets.only(top: tokens.space.sm, right: tokens.space.md),
-                      child: SelectableText(e.detail!, style: chatMonoStyle(context)),
+                      padding: EdgeInsetsDirectional.only(top: tokens.space.sm, end: tokens.space.md),
+                      child: SelectionArea(child: Text(e.detail!, style: chatMonoStyle(context))),
                     ),
                 ],
               ),
@@ -257,8 +261,7 @@ class SetupPanel extends StatelessWidget {
           Icons.tune_rounded,
         ),
     };
-    return Semantics(
-      container: true,
+    return HeadingGroup(
       child: Container(
         width: double.infinity,
         padding: EdgeInsets.all(tokens.space.lg),
@@ -270,7 +273,7 @@ class SetupPanel extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Semantics(headingLevel: 2, child: Text(title, style: theme.textTheme.titleMedium)),
+            Heading(child: Text(title, style: theme.textTheme.titleMedium)),
             SizedBox(height: tokens.space.xs),
             Text(body, style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             SizedBox(height: tokens.space.md),
@@ -315,7 +318,7 @@ class InterruptedBanner extends StatelessWidget {
       container: true,
       child: Container(
         width: double.infinity,
-        padding: EdgeInsets.fromLTRB(tokens.space.lg, tokens.space.md, tokens.space.sm, tokens.space.sm),
+        padding: EdgeInsetsDirectional.fromSTEB(tokens.space.lg, tokens.space.md, tokens.space.sm, tokens.space.sm),
         decoration: BoxDecoration(
           color: theme.colorScheme.secondaryContainer,
           borderRadius: BorderRadius.circular(tokens.radius.lg),

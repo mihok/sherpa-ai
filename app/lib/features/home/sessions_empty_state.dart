@@ -24,9 +24,11 @@ class SessionsEmptyState extends ConsumerWidget {
     final onDevice = ref.watch(localModelsProvider).value ?? const [];
     final showingArchived = ref.watch(showArchivedProvider);
     if (showingArchived) {
+      // Archiving is a swipe towards the end edge: rightwards only in LTR.
+      final towards = Directionality.of(context) == TextDirection.rtl ? 'left' : 'right';
       return StateView(
         title: 'No archived chats',
-        message: 'Swipe a chat to the right to archive it.',
+        message: 'Swipe a chat to the $towards to archive it.',
         icon: Icons.archive_outlined,
         primaryAction: TextButton(
           onPressed: () => ref.read(showArchivedProvider.notifier).toggle(),

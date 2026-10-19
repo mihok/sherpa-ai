@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../routing/routes.dart';
 import '../../services/inference/local_inference.dart';
@@ -82,64 +83,67 @@ class _LocalModelPickerSectionState extends ConsumerState<LocalModelPickerSectio
     final system = ref.watch(systemModelOptionsProvider).value ?? const <SystemModelOption>[];
     return Padding(
       padding: EdgeInsets.only(bottom: tokens.space.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: tokens.space.sm, vertical: tokens.space.xs),
-            child: Wrap(
-              spacing: tokens.space.md,
-              runSpacing: tokens.space.xs,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Semantics(headingLevel: 3, child: Text('On this device', style: theme.textTheme.titleSmall)),
-                const PrivacyBadge(location: ExecutionLocation.onDevice),
-              ],
+      child: HeadingGroup(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: tokens.space.sm, vertical: tokens.space.xs),
+              child: Wrap(
+                spacing: tokens.space.md,
+                runSpacing: tokens.space.xs,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Heading(level: 3, child: Text('On this device', style: theme.textTheme.titleSmall)),
+                  const PrivacyBadge(location: ExecutionLocation.onDevice),
+                ],
+              ),
             ),
-          ),
-          if (status.state == LocalEngineState.starting) line(Icons.hourglass_top_rounded, 'Starting the on-device engine…'),
-          if (status.unavailableMessage != null)
-            line(Icons.memory_rounded, status.unavailableMessage!, color: tokens.semantic.warning),
-          if (crash != null) line(Icons.report_problem_outlined, 'Last time: ${crash.description}', color: tokens.semantic.warning),
-          if (list == null && options.hasError)
-            line(Icons.error_outline_rounded, "Couldn't read the models on this phone.")
-          else if (list == null)
-            Padding(
-              padding: EdgeInsets.all(tokens.space.md),
-              child: Row(
-                children: [
-                  SizedBox.square(dimension: ChatIconSize.medium, child: const CircularProgressIndicator(strokeWidth: 2)),
-                  SizedBox(width: tokens.space.md),
-                  const Text('Checking which models fit…'),
-                ],
-              ),
-            )
-          else if (list.isEmpty && system.isEmpty)
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: tokens.space.sm),
-              child: Row(
-                children: [
-                  Expanded(child: Text('No models on this phone yet.', style: muted)),
-                  TextButton(onPressed: _browse, child: const Text('Browse models')),
-                ],
-              ),
-            )
-          else
-            for (final o in list)
-              _LocalModelRow(
-                key: ValueKey('local-model-${o.model.id}'),
+            if (status.state == LocalEngineState.starting) line(Icons.hourglass_top_rounded, 'Starting the on-device engine…'),
+            if (status.unavailableMessage != null)
+              line(Icons.memory_rounded, status.unavailableMessage!, color: tokens.semantic.warning),
+            if (crash != null) line(Icons.report_problem_outlined, 'Last time: ${crash.description}', color: tokens.semantic.warning),
+            if (list == null && options.hasError)
+              line(Icons.error_outline_rounded, "Couldn't read the models on this phone.")
+            else if (list == null)
+              Padding(
+                padding: EdgeInsets.all(tokens.space.md),
+                child: Row(
+                  children: [
+                    SizedBox.square(dimension: ChatIconSize.medium, child: const CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(width: tokens.space.md),
+                    // Wraps at large text instead of running off the sheet.
+                    const Expanded(child: Text('Checking which models fit…')),
+                  ],
+                ),
+              )
+            else if (list.isEmpty && system.isEmpty)
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: tokens.space.sm),
+                child: Row(
+                  children: [
+                    Expanded(child: Text('No models on this phone yet.', style: muted)),
+                    TextButton(onPressed: _browse, child: const Text('Browse models')),
+                  ],
+                ),
+              )
+            else
+              for (final o in list)
+                _LocalModelRow(
+                  key: ValueKey('local-model-${o.model.id}'),
+                  option: o,
+                  selected: widget.current == o.choice,
+                  onTap: o.selectable ? () => widget.onPick(o.choice) : null,
+                ),
+            for (final o in system)
+              _SystemModelRow(
+                key: ValueKey('system-model-${o.providerId}'),
                 option: o,
                 selected: widget.current == o.choice,
                 onTap: o.selectable ? () => widget.onPick(o.choice) : null,
               ),
-          for (final o in system)
-            _SystemModelRow(
-              key: ValueKey('system-model-${o.providerId}'),
-              option: o,
-              selected: widget.current == o.choice,
-              onTap: o.selectable ? () => widget.onPick(o.choice) : null,
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:url_launcher/url_launcher.dart' as launcher;
 
+import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../../mcp/widgets/mcp_widgets.dart' show NoteBox, NoteTone;
 import '../state/chat_dependencies.dart';
 import '../widgets/chat_style.dart';
@@ -169,6 +171,7 @@ class ReplyLinkSheet extends StatelessWidget {
         showDragHandle: true,
         useSafeArea: true,
         isScrollControlled: true,
+        sheetAnimationStyle: motionStyleOf(context),
         builder: (_) => ReplyLinkSheet(uri: uri, kind: kind),
       );
 
@@ -182,63 +185,68 @@ class ReplyLinkSheet extends StatelessWidget {
     final full = uri.toString();
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(t.space.xl, 0, t.space.xl, t.space.xl),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Semantics(
-            headingLevel: 2,
-            child: Text(email ? 'Write an email?' : 'Open this link?', style: theme.textTheme.titleLarge),
-          ),
-          SizedBox(height: t.space.md),
-          Text(
-            email ? 'To' : 'Site',
-            style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-          Semantics(
-            label: '${email ? 'To' : 'Site'}: $site',
-            excludeSemantics: true,
-            child: Text(site, key: const ValueKey('reply-link-site'), style: theme.textTheme.headlineSmall),
-          ),
-          SizedBox(height: t.space.sm),
-          Text('Full address', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-          SelectableText(
-            full.length > 2000 ? '${full.substring(0, 2000)}…' : full,
-            key: const ValueKey('reply-link-full'),
-            style: chatMonoStyle(context),
-          ),
-          for (final w in warnings) ...[
+      child: HeadingGroup(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Heading(
+              child: Text(email ? 'Write an email?' : 'Open this link?', style: theme.textTheme.titleLarge),
+            ),
+            SizedBox(height: t.space.md),
+            Text(
+              email ? 'To' : 'Site',
+              style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            Semantics(
+              label: '${email ? 'To' : 'Site'}: $site',
+              excludeSemantics: true,
+              child: Text(site, key: const ValueKey('reply-link-site'), style: theme.textTheme.headlineSmall),
+            ),
             SizedBox(height: t.space.sm),
-            NoteBox(text: w, tone: NoteTone.warning, icon: Icons.warning_amber_rounded),
-          ],
-          SizedBox(height: t.space.md),
-          Text(
-            email
-                ? 'The model wrote this link. Nothing is sent until you send the email yourself.'
-                : 'The model wrote this link, and it may come from a web page or tool. Nothing is loaded until you '
-                      'choose Open; the page opens in a secure browser window outside Sherpa.',
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-          SizedBox(height: t.space.lg),
-          Wrap(
-            alignment: WrapAlignment.end,
-            spacing: t.space.sm,
-            runSpacing: t.space.sm,
-            children: [
-              TextButton.icon(
-                onPressed: () => Navigator.of(context).pop(ReplyLinkChoice.copy),
-                icon: const Icon(Icons.copy_rounded),
-                label: const Text('Copy link'),
+            Text('Full address', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            // Selectable, but not a one-line text field node: Copy link
+            // copies all of it.
+            SelectionArea(
+              child: Text(
+                full.length > 2000 ? '${full.substring(0, 2000)}…' : full,
+                key: const ValueKey('reply-link-full'),
+                style: chatMonoStyle(context),
               ),
-              OutlinedButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
-              FilledButton.icon(
-                onPressed: () => Navigator.of(context).pop(ReplyLinkChoice.open),
-                icon: Icon(email ? Icons.mail_outline_rounded : Icons.open_in_browser_rounded),
-                label: Text(email ? 'Write email' : 'Open'),
-              ),
+            ),
+            for (final w in warnings) ...[
+              SizedBox(height: t.space.sm),
+              NoteBox(text: w, tone: NoteTone.warning, icon: Icons.warning_amber_rounded),
             ],
-          ),
-        ],
+            SizedBox(height: t.space.md),
+            Text(
+              email
+                  ? 'The model wrote this link. Nothing is sent until you send the email yourself.'
+                  : 'The model wrote this link, and it may come from a web page or tool. Nothing is loaded until you '
+                        'choose Open; the page opens in a secure browser window outside Sherpa.',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            SizedBox(height: t.space.lg),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: t.space.sm,
+              runSpacing: t.space.sm,
+              children: [
+                TextButton.icon(
+                  onPressed: () => Navigator.of(context).pop(ReplyLinkChoice.copy),
+                  icon: const Icon(Icons.copy_rounded),
+                  label: const Text('Copy link'),
+                ),
+                OutlinedButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+                FilledButton.icon(
+                  onPressed: () => Navigator.of(context).pop(ReplyLinkChoice.open),
+                  icon: Icon(email ? Icons.mail_outline_rounded : Icons.open_in_browser_rounded),
+                  label: Text(email ? 'Write email' : 'Open'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

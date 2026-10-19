@@ -6,7 +6,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
+import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../state/providers.dart';
 import '../../state/services.dart';
@@ -42,6 +44,7 @@ class ModelPickerSheet extends ConsumerStatefulWidget {
         isScrollControlled: true,
         useSafeArea: true,
         showDragHandle: true,
+        sheetAnimationStyle: motionStyleOf(context),
         builder: (_) => ModelPickerSheet(current: current),
       );
 
@@ -96,7 +99,7 @@ class _ModelPickerSheetState extends ConsumerState<ModelPickerSheet> {
         children: [
           Padding(
             padding: EdgeInsets.symmetric(horizontal: tokens.space.sm),
-            child: Semantics(headingLevel: 2, child: Text('Choose a model', style: theme.textTheme.titleLarge)),
+            child: Heading(child: Text('Choose a model', style: theme.textTheme.titleLarge)),
           ),
           SizedBox(height: tokens.space.xs),
           Padding(
@@ -189,85 +192,87 @@ class _ProviderSection extends StatelessWidget {
     final privacy = privacyForConfig(config);
     return Padding(
       padding: EdgeInsets.only(bottom: tokens.space.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: tokens.space.sm, vertical: tokens.space.xs),
-            child: Wrap(
-              spacing: tokens.space.md,
-              runSpacing: tokens.space.xs,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Semantics(headingLevel: 3, child: Text(config.displayName, style: theme.textTheme.titleSmall)),
-                PrivacyBadge(location: privacy.location, host: privacy.host),
-              ],
-            ),
-          ),
-          FutureBuilder<List<ModelDescriptor>>(
-            future: models,
-            builder: (context, snap) {
-              if (snap.connectionState != ConnectionState.done) {
-                return Padding(
-                  padding: EdgeInsets.all(tokens.space.md),
-                  child: Row(
-                    children: [
-                      SizedBox.square(
-                        dimension: ChatIconSize.medium,
-                        child: const CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      SizedBox(width: tokens.space.md),
-                      const Text('Loading models…'),
-                    ],
-                  ),
-                );
-              }
-              final list = [...?snap.data];
-              final failed = snap.hasError;
-              final fallback = config.defaultModelId;
-              if (fallback != null && !list.any((m) => m.id == fallback)) {
-                list.add(ModelDescriptor(
-                  id: fallback,
-                  providerId: config.id,
-                  displayName: fallback,
-                  capabilities: config.modelOverrides[fallback] ?? ModelCapabilities.unknown,
-                  description: failed ? 'Configured default' : null,
-                ));
-              }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: HeadingGroup(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: tokens.space.sm, vertical: tokens.space.xs),
+              child: Wrap(
+                spacing: tokens.space.md,
+                runSpacing: tokens.space.xs,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  if (failed)
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: tokens.space.sm),
-                      child: Row(
-                        children: [
-                          Icon(Icons.cloud_off_rounded, size: ChatIconSize.medium, color: theme.colorScheme.onSurfaceVariant),
-                          SizedBox(width: tokens.space.sm),
-                          Expanded(
-                            child: Text("Couldn't load this provider's models.", style: theme.textTheme.bodySmall),
-                          ),
-                          TextButton(onPressed: onRetry, child: const Text('Retry')),
-                        ],
-                      ),
-                    ),
-                  if (!failed && list.isEmpty)
-                    Padding(
-                      padding: EdgeInsets.all(tokens.space.sm),
-                      child: Text('No models offered.', style: theme.textTheme.bodySmall),
-                    ),
-                  for (final m in list)
-                    _ModelRow(
-                      model: m,
-                      privacy: privacy,
-                      selected: current?.providerId == config.id && current?.modelId == m.id,
-                      onTap: () => onPick(m.id),
-                    ),
+                  Heading(level: 3, child: Text(config.displayName, style: theme.textTheme.titleSmall)),
+                  PrivacyBadge(location: privacy.location, host: privacy.host),
                 ],
-              );
-            },
-          ),
-        ],
+              ),
+            ),
+            FutureBuilder<List<ModelDescriptor>>(
+              future: models,
+              builder: (context, snap) {
+                if (snap.connectionState != ConnectionState.done) {
+                  return Padding(
+                    padding: EdgeInsets.all(tokens.space.md),
+                    child: Row(
+                      children: [
+                        SizedBox.square(
+                          dimension: ChatIconSize.medium,
+                          child: const CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: tokens.space.md),
+                        const Expanded(child: Text('Loading models…')),
+                      ],
+                    ),
+                  );
+                }
+                final list = [...?snap.data];
+                final failed = snap.hasError;
+                final fallback = config.defaultModelId;
+                if (fallback != null && !list.any((m) => m.id == fallback)) {
+                  list.add(ModelDescriptor(
+                    id: fallback,
+                    providerId: config.id,
+                    displayName: fallback,
+                    capabilities: config.modelOverrides[fallback] ?? ModelCapabilities.unknown,
+                    description: failed ? 'Configured default' : null,
+                  ));
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (failed)
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: tokens.space.sm),
+                        child: Row(
+                          children: [
+                            Icon(Icons.cloud_off_rounded, size: ChatIconSize.medium, color: theme.colorScheme.onSurfaceVariant),
+                            SizedBox(width: tokens.space.sm),
+                            Expanded(
+                              child: Text("Couldn't load this provider's models.", style: theme.textTheme.bodySmall),
+                            ),
+                            TextButton(onPressed: onRetry, child: const Text('Retry')),
+                          ],
+                        ),
+                      ),
+                    if (!failed && list.isEmpty)
+                      Padding(
+                        padding: EdgeInsets.all(tokens.space.sm),
+                        child: Text('No models offered.', style: theme.textTheme.bodySmall),
+                      ),
+                    for (final m in list)
+                      _ModelRow(
+                        model: m,
+                        privacy: privacy,
+                        selected: current?.providerId == config.id && current?.modelId == m.id,
+                        onTap: () => onPick(m.id),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }

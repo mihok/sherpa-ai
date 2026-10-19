@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../design/tokens.dart';
+import '../../../design/widgets/a11y.dart';
 import '../state/chat_controller.dart';
 import '../state/chat_errors.dart';
 import '../state/chat_view_state.dart';
@@ -106,6 +107,26 @@ class ChatRunScope extends InheritedWidget {
 
   @override
   bool updateShouldNotify(ChatRunScope oldWidget) => oldWidget.running != running;
+}
+
+/// One turn of the conversation for screen readers: who speaks it ("You",
+/// "Sherpa") as a level-2 heading, so heading navigation steps from turn to
+/// turn, carrying the turn's own actions (copy, edit, retry).
+///
+/// The message, its chips and its buttons stay separate nodes under the
+/// heading (`explicitChildNodes`), read after the speaker, never merged
+/// into it.
+class TurnHeading extends StatelessWidget {
+  const TurnHeading({super.key, required this.speaker, this.actions, required this.child});
+
+  final String speaker;
+  final Map<CustomSemanticsAction, VoidCallback>? actions;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Heading(
+        child: Semantics(label: speaker, explicitChildNodes: true, customSemanticsActions: actions, child: child),
+      );
 }
 
 /// The conversation.
@@ -300,9 +321,11 @@ class ChatTranscriptState extends ConsumerState<ChatTranscript> {
           onNotification: _onScroll,
           child: Stack(
             children: [
+              // Its own group, unlabelled: each turn is named by its heading
+              // ("You", "Sherpa"), and a label here would be read before
+              // the first of them (and again on every way back in).
               Semantics(
                 container: true,
-                label: 'Conversation',
                 explicitChildNodes: true,
                 child: CustomScrollView(
                   controller: _scroll,
@@ -378,7 +401,9 @@ class JumpToLatestButton extends StatelessWidget {
                   container: true,
                   button: true,
                   label: follow.unread ? 'Jump to latest, new messages below' : 'Jump to latest',
-                  onTap: visible ? onPressed : null,
+                  // While hidden the whole button is out of the semantics
+                  // tree (ExcludeSemantics above), so the action can stay.
+                  onTap: onPressed,
                   excludeSemantics: true,
                   child: Badge(
                     isLabelVisible: follow.unread,

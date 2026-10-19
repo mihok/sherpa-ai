@@ -69,7 +69,6 @@ class ResourceChip extends StatelessWidget {
                 if (onRemove != null)
                   IconButton(
                     tooltip: 'Remove $label',
-                    visualDensity: VisualDensity.compact,
                     iconSize: ChatIconSize.small,
                     onPressed: onRemove,
                     icon: const Icon(Icons.close_rounded),
