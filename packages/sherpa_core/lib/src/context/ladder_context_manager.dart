@@ -564,10 +564,8 @@ final class _Pass {
     limit = manager.memoryPolicy.appliesTo(loc)
         ? manager.memoryPolicy.effectiveContextLength(caps.contextLength, request.memory)
         : caps.contextLength;
-    final reserveSetting = settings.outputReserveTokens;
-    reserve = caps.maxOutputTokens == null || caps.maxOutputTokens! > reserveSetting
-        ? reserveSetting
-        : caps.maxOutputTokens!;
+    // Scales with the (memory-adjusted) window unless set explicitly.
+    reserve = settings.outputReserveFor(limit, maxOutput: caps.maxOutputTokens);
     final fraction = WindowProfile.safetyFraction(
       counter,
       denseShare: _denseShare(),

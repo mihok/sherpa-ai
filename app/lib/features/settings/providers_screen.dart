@@ -4,6 +4,7 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 import '../../design/tokens.dart';
@@ -34,6 +35,7 @@ class _ProvidersScreenState extends ConsumerState<ProvidersScreen> {
   @override
   Widget build(BuildContext context) {
     final configs = ref.watch(providerConfigsProvider);
+    final onDevice = ref.watch(localModelsProvider).value ?? const [];
     final list = [
       for (final c in configs.value ?? const <ProviderConfig>[])
         if (!_removing.contains(c.id)) c,
@@ -49,12 +51,19 @@ class _ProvidersScreenState extends ConsumerState<ProvidersScreen> {
         body: EmptyState(
           icon: Icons.dns_outlined,
           title: 'No providers yet',
-          message: 'Connect a cloud service with your own key, or a model server on your network.',
+          message: onDevice.isEmpty
+              ? 'Connect a cloud service with your own key, or a model server on your network.'
+              : 'Connect a cloud service with your own key, or a model server on your network. '
+                  '${onDevice.length == 1 ? 'The model' : 'The ${onDevice.length} models'} on this phone '
+                  'work without one.',
           primaryAction: FilledButton.icon(
             onPressed: () => context.go(Routes.newProvider),
             icon: const Icon(Icons.add),
             label: const Text('Add provider'),
           ),
+          secondaryAction: onDevice.isEmpty
+              ? null
+              : TextButton(onPressed: () => context.go(Routes.models), child: const Text('On-device models')),
         ),
       );
     }
@@ -76,6 +85,7 @@ class _ProvidersScreenState extends ConsumerState<ProvidersScreen> {
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.only(bottom: 96),
               children: [
+                if (onDevice.isNotEmpty) _OnDeviceRow(count: onDevice.length),
                 for (final c in list)
                   _ProviderRow(
                     config: c,
@@ -86,6 +96,35 @@ class _ProvidersScreenState extends ConsumerState<ProvidersScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The built-in on-device provider: not editable here (its models live in
+/// the model library), but listed so every place models come from is.
+class _OnDeviceRow extends StatelessWidget {
+  const _OnDeviceRow({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = SherpaTokens.of(context);
+    return ListTile(
+      onTap: () => context.go(Routes.models),
+      title: const Text('On this device'),
+      subtitle: Padding(
+        padding: EdgeInsets.only(top: t.space.xxs),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Built in · $count ${count == 1 ? 'model' : 'models'}'),
+            SizedBox(height: t.space.xs),
+            const PrivacyBadge(location: ExecutionLocation.onDevice),
+          ],
+        ),
+      ),
+      trailing: const Icon(Icons.chevron_right),
     );
   }
 }

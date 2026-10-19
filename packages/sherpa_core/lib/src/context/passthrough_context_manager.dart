@@ -97,11 +97,7 @@ final class PassthroughContextManager implements ContextManager {
       }
     }
     final limit = r.capabilities.contextLength;
-    final reserve = r.capabilities.maxOutputTokens == null
-        ? r.settings.outputReserveTokens
-        : (r.capabilities.maxOutputTokens! < r.settings.outputReserveTokens
-            ? r.capabilities.maxOutputTokens!
-            : r.settings.outputReserveTokens);
+    final reserve = r.settings.outputReserveFor(limit, maxOutput: r.capabilities.maxOutputTokens);
     return ContextBudget(
       limit: limit,
       outputReserve: reserve,

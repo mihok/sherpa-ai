@@ -192,6 +192,36 @@ final List<StateTask> l3Tasks = [
     },
   ),
   StateTask(
+    // The recorded trajectory replays Qwen3-0.6B's slip (README finding 4):
+    // two identical create_note calls in one reply, with distinct call ids.
+    // The harness must run the action once (same-reply dedupe) and answer
+    // the copy, so the append still finds exactly one note.
+    id: 'notes.parallel_duplicate_create',
+    servers: ['notes'],
+    worldSeed: 11,
+    seed: (w) => w..addNote('Ideas', 'Bike to work on Fridays.'),
+    instruction: 'Create a note titled "Trip checklist" with the text "tickets, adapter, umbrella". '
+        'Then add "snacks" to it on a new line.',
+    ideal: [
+      AgentTurn([
+        [
+          _a('create', 'notes__create_note', (_) => {'title': 'Trip checklist', 'body': 'tickets, adapter, umbrella'}),
+          _a('create_again', 'notes__create_note', (_) => {'title': 'Trip checklist', 'body': 'tickets, adapter, umbrella'}),
+        ],
+        [_a('append', 'notes__update_note', (s) => {'note_id': s.handle('create', 'note_id'), 'append': 'snacks'})],
+      ], 'Created "Trip checklist" and added snacks.'),
+    ],
+    verify: (w, s) {
+      final hits = w.notesTitled('Trip checklist').toList();
+      if (hits.length != 1) return ['expected one "Trip checklist" note, found ${hits.length}'];
+      return [
+        for (final x in ['tickets', 'adapter', 'umbrella', 'snacks'])
+          if (!mentions(hits.single.body, x)) 'note body lacks $x',
+        ...otherNotesUnchanged(w, s, added: 1),
+      ];
+    },
+  ),
+  StateTask(
     id: 'notes.edit_existing',
     servers: ['notes'],
     worldSeed: 2,

@@ -9,6 +9,7 @@ import 'package:sherpa/features/chat/model_picker_sheet.dart';
 import 'package:sherpa/features/models/state/local_inference_providers.dart';
 import 'package:sherpa/features/models/state/local_model_fit.dart';
 import 'package:sherpa/features/models/state/models_providers.dart';
+import 'package:sherpa/features/settings/default_model_sheet.dart';
 import 'package:sherpa/services/device/device_profile_source.dart';
 import 'package:sherpa/services/inference/local_inference.dart';
 import 'package:sherpa/services/inference/local_provider_registry.dart';
@@ -172,6 +173,47 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Last time: The app was stopped'), findsOneWidget);
     expect(find.textContaining('while loading Small model (8192-token context)'), findsOneWidget);
+  });
+
+  testWidgets('the default model sheet offers the models on this phone too', (tester) async {
+    await setUpRig(tester);
+    tester.view.physicalSize = const Size(420, 1000) * tester.view.devicePixelRatio;
+    addTearDown(tester.view.resetPhysicalSize);
+    final prefs = FakePreferences();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        providerRegistryProvider.overrideWithValue(LocalProviderRegistry(
+          FakeProviderRegistry(configs: [kCloudConfig], providers: {kProviderId: StubRemoteProvider(kCloudConfig)}),
+          rig.local,
+        )),
+        preferencesProvider.overrideWithValue(prefs),
+        localInferenceProvider.overrideWithValue(rig.local),
+        modelLibraryProvider.overrideWithValue(rig.library),
+        modelStorageLayoutProvider.overrideWithValue(rig.layout),
+        deviceProfileSourceProvider.overrideWithValue(FixedDeviceProfileSource(phone12gb)),
+        localModelShapeProvider.overrideWith((ref, path) async => llama1bLikeShape),
+      ],
+      child: MaterialApp(
+        theme: chatTestTheme(Brightness.light),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: FilledButton(onPressed: () => showDefaultModelSheet(context), child: const Text('Default')),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('Default'));
+    await tester.pumpAndSettle();
+    expect(find.text('Default model'), findsOneWidget);
+    expect(find.text('On this device'), findsOneWidget);
+    expect(find.text('Small model'), findsOneWidget);
+    expect(find.text('Test Cloud'), findsOneWidget, reason: 'remote providers are still listed');
+    await tester.tap(find.text('Small model'));
+    await tester.pumpAndSettle();
+    expect(prefs.defaultModel, const ModelChoice(providerId: localProviderId, modelId: 'small'));
+    expect(find.text('Default model'), findsNothing, reason: 'picking closes the sheet');
   });
 
   testWidgets('without on-device inference wired there is no local section', (tester) async {

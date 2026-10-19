@@ -241,6 +241,12 @@ final class LocalInference {
   /// Context caps recorded after live engine crashes, by model id.
   final Map<String, int> _caps = {};
 
+  /// Speculative decoding chosen per model in the performance lab.
+  final Map<String, SpeculativeMode> _speculative = {};
+
+  final StreamController<LocalGenerationReport> _generations = StreamController.broadcast();
+  LocalGenerationReport? _lastGeneration;
+
   /// The last busy phase the lifecycle entered, and when it went idle.
   PhaseRecord? _lastBusy;
   DateTime? _idleSince;
@@ -263,6 +269,25 @@ final class LocalInference {
   AutotuneScheduler? get autotune => _autotune;
 
   PrefixCacheStore get prefixCache => _prefix;
+
+  /// The engine's notes store (autotune profiles, crash downgrades; the
+  /// performance lab's run history). "Delete all data" clears it.
+  KeyValueStore get store => _store;
+
+  /// The most recent on-device generation's engine report, if any.
+  LocalGenerationReport? get lastGeneration => _lastGeneration;
+
+  /// Every on-device generation's report as it finishes (broadcast).
+  Stream<LocalGenerationReport> get generations => _generations.stream;
+
+  /// Called by [LocalModelProvider] when a generation reports its PERF
+  /// event (the performance lab's live monitor reads it).
+  void recordGeneration(String modelId, PerfSample perf, {Usage? usage, bool background = false}) {
+    if (_disposed) return;
+    final r = LocalGenerationReport(modelId: modelId, at: _clock.now(), perf: perf, usage: usage, background: background);
+    _lastGeneration = r;
+    if (!_generations.isClosed) _generations.add(r);
+  }
 
   /// The warm model's library id, if any.
   String? get loadedModelId => _lifecycle?.loaded?.spec.id;
@@ -449,7 +474,39 @@ final class LocalInference {
       } on Object {
         // No cap.
       }
+      try {
+        final mode = (await _store.read(_speculativeKey(m.id)))?.opt<String>('mode');
+        final parsed = SpeculativeMode.values.where((v) => v.name == mode).firstOrNull;
+        if (parsed != null) _speculative[m.id] = parsed;
+      } on Object {
+        // App default (off).
+      }
     }
+  }
+
+  static String _speculativeKey(String modelId) => 'sherpa.app.speculative.$modelId';
+
+  /// The speculative decoding mode chosen for [modelId] in the performance
+  /// lab; null = the app default (off).
+  SpeculativeMode? speculativeFor(String modelId) => _speculative[modelId];
+
+  /// Persists [mode] for [modelId] (null or [SpeculativeMode.none] resets
+  /// it) and re-registers the model, so its next load uses it. A draft
+  /// model is refused: a [LocalModelSpec] can't carry a draft path yet.
+  Future<void> setSpeculative(String modelId, SpeculativeMode? mode) async {
+    if (mode == SpeculativeMode.draft) {
+      throw ArgumentError.value(mode, 'mode', 'chats cannot load a draft model yet');
+    }
+    if (mode == null || mode == SpeculativeMode.none) {
+      _speculative.remove(modelId);
+      await _store.delete(_speculativeKey(modelId));
+    } else {
+      _speculative[modelId] = mode;
+      await _store.write(_speculativeKey(modelId), {'mode': mode.name});
+    }
+    final m = library.byId(modelId);
+    final lifecycle = _lifecycle;
+    if (m != null && lifecycle != null && isRunnableLocally(m)) lifecycle.register(_spec(m));
   }
 
   /// The context cap recorded for [modelId] after a live engine crash.
@@ -577,8 +634,11 @@ final class LocalInference {
     return cap == null ? config.maxContext : math.min(cap, config.maxContext);
   }
 
-  LocalModelSpec _spec(LibraryModel m) =>
-      localModelSpec(m, layout, sessionDefaults: config.sessionDefaults, maxContext: _maxContextFor(m.id));
+  LocalModelSpec _spec(LibraryModel m) {
+    final speculative = _speculative[m.id];
+    final defaults = speculative == null ? config.sessionDefaults : config.sessionDefaults.copyWith(speculative: speculative);
+    return localModelSpec(m, layout, sessionDefaults: defaults, maxContext: _maxContextFor(m.id));
+  }
 
   /// Library models the engine can run, with what is known about them.
   Future<List<ModelDescriptor>> listModels() async {
@@ -664,6 +724,12 @@ final class LocalInference {
     await _prefix.clear();
     final store = _store;
     if (store is RecordKeyValueStore) await store.clear();
+    _lastGeneration = null;
+    if (_speculative.isNotEmpty) {
+      _speculative.clear();
+      final lifecycle = _lifecycle;
+      if (lifecycle != null) _syncSpecs(lifecycle, library.models);
+    }
   }
 
   Future<void> dispose() async {
@@ -685,5 +751,28 @@ final class LocalInference {
     }
     await _statusChanges.close();
     await _modelChanges.close();
+    await _generations.close();
   }
+}
+
+/// What one on-device generation reported at its end: the engine's PERF
+/// event (time to first token, prefill and decode speed, draft acceptance,
+/// backend) and USAGE.
+@immutable
+final class LocalGenerationReport {
+  const LocalGenerationReport({
+    required this.modelId,
+    required this.at,
+    required this.perf,
+    this.usage,
+    this.background = false,
+  });
+
+  final String modelId;
+  final DateTime at;
+  final PerfSample perf;
+  final Usage? usage;
+
+  /// Background work (a summary), not a reply the user watched.
+  final bool background;
 }

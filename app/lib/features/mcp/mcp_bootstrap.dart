@@ -17,6 +17,7 @@ import '../../services/mcp/mcp_records.dart';
 import '../../services/mcp/mcp_runtime.dart';
 import '../../state/connectivity.dart' show NetworkStatus, statusFor;
 import '../../state/providers.dart';
+import '../../state/sessions.dart' show sessionDeletedHooksProvider;
 import 'state/mcp_providers.dart';
 
 /// `ProviderScope` overrides that wire MCP: built-in and remote tool
@@ -39,7 +40,9 @@ import 'state/mcp_providers.dart';
 /// Overrides `toolRouterProvider` (built-ins + MCP) and
 /// `approvalPolicyProvider` (one policy, trusting the user's trusted
 /// servers), plus `mcpRuntimeProvider`, `mcpHttpClientProvider`,
-/// `toolsReadyProvider` and `toolsUserTurnHookProvider`. Start-up lists
+/// `toolsReadyProvider`, `toolsUserTurnHookProvider` and
+/// `sessionDeletedHooksProvider` (a deleted chat's tool switches and router
+/// state are forgotten). Start-up lists
 /// every server's tools in the background; launch is not blocked (await
 /// `toolsReadyProvider` before resuming a run).
 Future<List<Override>> mcpFeatureOverrides({
@@ -88,6 +91,13 @@ List<Override> mcpRuntimeOverrides(McpRuntime runtime, {http.Client? httpClient}
       toolRouterProvider.overrideWith((ref) => runtime.toolRouter(ref.watch(sessionStoreProvider))),
       toolsReadyProvider.overrideWithValue(() => runtime.ready),
       toolsUserTurnHookProvider.overrideWithValue(runtime.onUserTurn),
+      // A deleted chat's tool switches and router state go with it.
+      sessionDeletedHooksProvider.overrideWith((ref) => [
+            (id) async {
+              runtime.router.forgetSession(id);
+              await runtime.enablement.forgetSession(id);
+            },
+          ]),
       if (httpClient != null) mcpHttpClientProvider.overrideWithValue(httpClient),
     ];
 

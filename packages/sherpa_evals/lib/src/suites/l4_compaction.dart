@@ -44,18 +44,26 @@ const List<int> l4CompactionCounts = [0, 1, 2, 4];
 enum L4Variant {
   /// On-device tool budget: the 16 tools exceed it, so the router defers
   /// and every call goes through `call_tool`. Wiring as
-  /// `app/lib/bootstrap.dart` (`toolLookup` only).
+  /// `app/lib/bootstrap.dart`: `toolLookup` plus
+  /// `ApprovalPolicy.annotationsFor` (trust-aware hints).
   deferred,
 
-  /// Deferred, plus `ApprovalPolicy.annotationsFor` wired into the ladder.
-  deferredPolicy,
+  /// Deferred, `toolLookup` only (no trust-aware view: every MCP hint is
+  /// untrusted, so declared reads stay in the ledger). The harness must
+  /// still never let them push out a completed write.
+  deferredLookupOnly,
 
   /// Remote tool budget (20 tools): direct calls; wiring as the app.
   directApp,
 
-  /// Direct calls, plus `ApprovalPolicy.annotationsFor` (trust-aware hints)
-  /// wired into the ladder.
-  directPolicy,
+  /// Direct calls, `toolLookup` only.
+  directLookupOnly;
+
+  /// Whether `annotationsFor` is wired into the ladder (as the app does).
+  bool get trustAware => this == deferred || this == directApp;
+
+  /// Remote tool budget: direct calls.
+  bool get direct => this == directApp || this == directLookupOnly;
 }
 
 /// Tools that never change state.
@@ -336,6 +344,7 @@ final class L4Run {
   int ledgerEntries = 0;
   int ledgerReadOnly = 0;
   int ledgerUnnamed = 0;
+  int ledgerFolded = 0;
   int effectsEvicted = 0;
   int unhandled = 0;
   final List<String> problems = [];
@@ -363,6 +372,7 @@ final class L4Run {
           'entries': ledgerEntries,
           'readOnly': ledgerReadOnly,
           'unnamedTargets': ledgerUnnamed,
+          'foldedCalls': ledgerFolded,
           'effectsEvicted': effectsEvicted,
         },
         if (problems.isNotEmpty) 'problems': problems,
@@ -395,12 +405,12 @@ Future<L4Run> runL4Session(
     strategy: strategy,
     clock: clock,
     toolLookup: env.router.lookup,
-    annotationsFor: variant == L4Variant.directPolicy || variant == L4Variant.deferredPolicy ? approvals.annotationsFor : null,
+    annotationsFor: variant.trustAware ? approvals.annotationsFor : null,
   );
   // Thresholds out of reach: only the forced compactions happen.
   const settings = ContextSettings(autoCompact: false);
   final caps = ModelCapabilities(contextLength: window);
-  final remote = variant == L4Variant.directApp || variant == L4Variant.directPolicy;
+  final remote = variant.direct;
   final state = _PolicyState();
   final provider = policyProvider(
     (r) => _sessionPolicy(s, r, state),
@@ -582,9 +592,10 @@ void _retention(L4Run run, L4Session s, Map<L4Plant, String?> handles, ModelRequ
   }
 }
 
-/// Ledger diagnostics from the latest summary: entries for read-only
-/// calls, entries whose rendered line does not name the tool that ran, and
-/// completed effects in neither the ledger nor the kept transcript.
+/// Ledger diagnostics from the latest summary: read-only calls in it,
+/// entries whose rendered line does not name the tool that ran, calls
+/// folded into per-tool aggregate lines, and completed effects in neither
+/// the ledger nor the kept transcript.
 Future<void> _ledger(L4Run run, L4Session s, SessionStore store, String sid, ModelRequest probe) async {
   final ranges = (await store.overlays(sid)).whereType<CompactedRange>().toList();
   if (ranges.isEmpty) return;
@@ -597,11 +608,13 @@ Future<void> _ledger(L4Run run, L4Session s, SessionStore store, String sid, Mod
   final rendered = summary.render().split('\n');
   final ledgered = <String>{};
   for (final e in summary.sideEffectLedger) {
-    ledgered.add(e.callId);
+    ledgered.addAll(e.allCallIds);
     run.ledgerEntries++;
     final tool = target[e.callId] ?? e.tool;
-    if (l4ReadTools.contains(tool)) run.ledgerReadOnly++;
-    final line = rendered.firstWhere((l) => l.contains('(call ${e.callId},'), orElse: () => '');
+    if (l4ReadTools.contains(tool)) run.ledgerReadOnly += e.count;
+    if (e.isAggregate) run.ledgerFolded += e.count;
+    final marker = e.isAggregate ? '${e.allCallIds.first} … ${e.allCallIds.last})' : '(call ${e.callId},';
+    final line = rendered.firstWhere((l) => l.contains(marker), orElse: () => '');
     if (!line.contains(tool)) run.ledgerUnnamed++;
   }
   final tail = {for (final m in probe.messages) ...m.toolCalls.map((c) => c.id)};
@@ -801,6 +814,8 @@ final class L4Suite implements EvalSuite {
           description: 'ledger lines that do not name the tool that actually ran'),
       Metric('ledger_evicted_effects', sum(compacted, (r) => r.effectsEvicted).toDouble(), unit: 'count', better: Better.lower,
           description: 'completed actions in neither the ledger nor the kept transcript'),
+      Metric('ledger_folded_calls', sum(compacted, (r) => r.ledgerFolded).toDouble(), unit: 'count',
+          description: 'calls the ledger folded into per-tool aggregate lines (count and key arguments) to fit its cap'),
       Metric('summary_tokens_mean', tokens.isEmpty ? 0 : mean(tokens), unit: 'tokens', better: Better.lower,
           description: 'rendered summary size per compaction (4 chars per token)'),
       Metric('summary_tokens_max', tokens.isEmpty ? 0 : tokens.reduce((a, b) => a > b ? a : b).toDouble(), unit: 'tokens'),

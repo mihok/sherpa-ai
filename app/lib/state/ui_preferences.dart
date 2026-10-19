@@ -5,7 +5,8 @@ import 'package:material_ui/material_ui.dart' show ThemeMode, immutable;
 
 import '../design/haptics.dart';
 
-/// Device-local look-and-feel preferences.
+/// Device-local preferences: look and feel, plus how long chats are
+/// summarized ([modelSummaries]).
 ///
 /// Kept apart from `PreferencesStore` on purpose: that interface is a shared
 /// contract with other implementations (Drift, test fakes), and adding
@@ -16,6 +17,7 @@ final class UiSettings {
     this.hapticsEnabled = true,
     this.dynamicColor = true,
     this.themeMode = ThemeMode.system,
+    this.modelSummaries = false,
   });
 
   final bool hapticsEnabled;
@@ -24,22 +26,34 @@ final class UiSettings {
   final bool dynamicColor;
   final ThemeMode themeMode;
 
-  UiSettings copyWith({bool? hapticsEnabled, bool? dynamicColor, ThemeMode? themeMode}) => UiSettings(
+  /// "Let the chat's model write summaries": when a chat on a model that
+  /// isn't built into Sherpa gets long, its older messages are sent to that
+  /// provider once more to be summarized. Off (the default): summaries are
+  /// extractive, made on this phone. On-device chats always summarize with
+  /// their own model, whatever this says (PLAN §7 decision 9: no remote
+  /// compaction without opt-in).
+  final bool modelSummaries;
+
+  UiSettings copyWith({bool? hapticsEnabled, bool? dynamicColor, ThemeMode? themeMode, bool? modelSummaries}) =>
+      UiSettings(
         hapticsEnabled: hapticsEnabled ?? this.hapticsEnabled,
         dynamicColor: dynamicColor ?? this.dynamicColor,
         themeMode: themeMode ?? this.themeMode,
+        modelSummaries: modelSummaries ?? this.modelSummaries,
       );
 
   Map<String, Object?> toJson() => {
         'hapticsEnabled': hapticsEnabled,
         'dynamicColor': dynamicColor,
         'themeMode': themeMode.name,
+        'modelSummaries': modelSummaries,
       };
 
   static UiSettings fromJson(Map<String, Object?> j) => UiSettings(
         hapticsEnabled: j['hapticsEnabled'] as bool? ?? true,
         dynamicColor: j['dynamicColor'] as bool? ?? true,
         themeMode: ThemeMode.values.asNameMap()[j['themeMode']] ?? ThemeMode.system,
+        modelSummaries: j['modelSummaries'] as bool? ?? false,
       );
 
   @override
@@ -47,10 +61,11 @@ final class UiSettings {
       other is UiSettings &&
       other.hapticsEnabled == hapticsEnabled &&
       other.dynamicColor == dynamicColor &&
-      other.themeMode == themeMode;
+      other.themeMode == themeMode &&
+      other.modelSummaries == modelSummaries;
 
   @override
-  int get hashCode => Object.hash(hapticsEnabled, dynamicColor, themeMode);
+  int get hashCode => Object.hash(hapticsEnabled, dynamicColor, themeMode, modelSummaries);
 }
 
 /// Persistence for [UiSettings]. `toJson`/`fromJson` make a key-value or

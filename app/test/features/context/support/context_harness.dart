@@ -102,6 +102,7 @@ final class ContextHarness {
     ContextManager? manager,
     bool configured = true,
     this.scanner,
+    this.extra = const [],
   }) {
     provider = ScriptedProvider(turns, info: kCloudInfo, capabilitiesValue: caps);
     router = LocalToolRouter(tools);
@@ -122,6 +123,9 @@ final class ContextHarness {
   final InMemorySecretStore secrets = InMemorySecretStore();
   final InMemoryUiPreferencesStore ui = InMemoryUiPreferencesStore();
   final Future<String?> Function(BuildContext context)? scanner;
+
+  /// More overrides (seams a test replaces).
+  final List<Override> extra;
   late final ScriptedProvider provider;
   late final LocalToolRouter router;
   late final FakeProviderRegistry registry;
@@ -145,6 +149,7 @@ final class ContextHarness {
         handoffPlatformProvider.overrideWithValue(platform),
         contextScreensProvider.overrideWithValue(contextScreens),
         if (scanner != null) handoffScannerProvider.overrideWithValue(scanner!),
+        ...extra,
       ];
 
   ChatController get chat => container.read(chatControllerProvider(kSession).notifier);

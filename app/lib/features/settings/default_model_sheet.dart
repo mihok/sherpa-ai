@@ -10,11 +10,13 @@ import '../../state/provider_location.dart';
 import '../../state/providers.dart';
 import '../../state/services.dart';
 import '../../state/ui_preferences.dart';
+import '../chat/local_model_picker_section.dart';
 
-/// Chooses the model new chats start with, across every provider.
+/// Chooses the model new chats start with: the models on this phone (with
+/// their fit, [LocalModelPickerSection]) and every provider's.
 ///
-/// Each provider is a section headed by its privacy badge, so choosing a
-/// default is also choosing where new chats go.
+/// Each section is headed by its privacy badge, so choosing a default is
+/// also choosing where new chats go.
 Future<void> showDefaultModelSheet(BuildContext context) => showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -29,7 +31,14 @@ class _DefaultModelSheet extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final t = SherpaTokens.of(context);
     final configs = ref.watch(providerConfigsProvider).value ?? const <ProviderConfig>[];
+    final onDevice = ref.watch(localModelsProvider).value ?? const [];
     final current = ref.watch(defaultModelProvider).value;
+    void choose(ModelChoice choice) {
+      ref.read(hapticsProvider).selection();
+      ref.read(preferencesProvider).setDefaultModel(choice).ignore();
+      Navigator.pop(context);
+    }
+
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.7,
@@ -38,10 +47,7 @@ class _DefaultModelSheet extends ConsumerWidget {
       builder: (context, scroll) => RadioGroup<ModelChoice>(
         groupValue: current,
         onChanged: (choice) {
-          if (choice == null) return;
-          ref.read(hapticsProvider).selection();
-          ref.read(preferencesProvider).setDefaultModel(choice).ignore();
-          Navigator.pop(context);
+          if (choice != null) choose(choice);
         },
         child: ListView(
           controller: scroll,
@@ -54,10 +60,14 @@ class _DefaultModelSheet extends ConsumerWidget {
                 child: Text('Default model', style: Theme.of(context).textTheme.titleLarge),
               ),
             ),
-            if (configs.isEmpty)
+            Padding(
+              padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.lg, 0),
+              child: LocalModelPickerSection(current: current, onPick: choose),
+            ),
+            if (configs.isEmpty && onDevice.isEmpty)
               Padding(
                 padding: EdgeInsets.all(t.space.xl),
-                child: const Text('Connect a provider first.'),
+                child: const Text('Connect a provider or download a model for this phone first.'),
               ),
             for (final c in configs) _ProviderModels(config: c),
           ],

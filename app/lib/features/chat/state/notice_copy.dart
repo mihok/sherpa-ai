@@ -1,5 +1,6 @@
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../../services/inference/local_model_provider.dart' show kEngineCrashNoticeCode;
 import 'chat_view_state.dart';
 
 // What the transcript says about runner and provider notices. Their own
@@ -41,6 +42,13 @@ ChatNotice? providerNoticeFor(ProviderNotice notice) => switch (notice.code) {
               "so Sherpa didn't run it.",
           dismissible: true,
         ),
+      // Delivered once, with the first on-device reply after a crash.
+      kEngineCrashNoticeCode => ChatNotice(
+          code: notice.code,
+          message: _crashCopy(notice.message),
+          kind: ChatNoticeKind.warning,
+          dismissible: true,
+        ),
       'anthropic.schema_relaxed' => ChatNotice(
           code: notice.code,
           message: "Anthropic can't enforce every rule of the requested output format"
@@ -49,6 +57,18 @@ ChatNotice? providerNoticeFor(ProviderNotice notice) => switch (notice.code) {
         ),
       _ => null,
     };
+
+/// The crash report's sentence ("The app was stopped (possibly by the system
+/// for using too much memory) while generating a reply with X (8192-token
+/// context).") with what it means and what to do.
+String _crashCopy(String report) {
+  final what = report.trim();
+  return [
+    'The on-device model stopped unexpectedly last time.',
+    if (what.isNotEmpty) what.endsWith('.') ? what : '$what.',
+    'Your chats are safe. If it happens again, try a smaller model or close other apps.',
+  ].join(' ');
+}
 
 String _retryingCopy(String message) {
   if (message.startsWith('${ProviderErrorKind.rateLimited.name}:')) return 'Rate limited — retrying shortly…';

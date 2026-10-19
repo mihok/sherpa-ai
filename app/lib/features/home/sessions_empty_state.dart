@@ -21,6 +21,7 @@ class SessionsEmptyState extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final configs = ref.watch(providerConfigsProvider).value ?? const [];
+    final onDevice = ref.watch(localModelsProvider).value ?? const [];
     final showingArchived = ref.watch(showArchivedProvider);
     if (showingArchived) {
       return StateView(
@@ -33,7 +34,7 @@ class SessionsEmptyState extends ConsumerWidget {
         ),
       );
     }
-    if (configs.isEmpty) {
+    if (configs.isEmpty && onDevice.isEmpty) {
       return StateView(
         illustration: const SherpaMark(),
         title: 'Connect a model to start',
@@ -49,8 +50,12 @@ class SessionsEmptyState extends ConsumerWidget {
     return StateView(
       illustration: const SherpaMark(),
       title: 'Start your first chat',
-      message: 'Ask, plan, draft or code. Sherpa runs the agent on your phone '
-          'and shows you whenever data leaves it.',
+      message: configs.isEmpty
+          ? 'Ask, plan, draft or code. '
+              '${onDevice.length == 1 ? 'The model on this phone is' : 'The ${onDevice.length} models on this phone are'} '
+              'ready, and chats with ${onDevice.length == 1 ? 'it' : 'them'} stay on your phone.'
+          : 'Ask, plan, draft or code. Sherpa runs the agent on your phone '
+              'and shows you whenever data leaves it.',
       primaryAction: FilledButton.icon(
         onPressed: () => unawaited(startNewChat(context, ref)),
         icon: const Icon(Icons.edit_square),
@@ -69,6 +74,7 @@ class _DefaultModelLine extends ConsumerWidget {
     final choice = ref.watch(defaultModelProvider).value;
     if (choice == null) return const SizedBox.shrink();
     final privacy = ref.watch(providerPrivacyProvider(choice.providerId));
+    final name = ref.watch(modelDisplayNameProvider(choice));
     final t = SherpaTokens.of(context);
     return Padding(
       padding: EdgeInsets.only(top: t.space.md),
@@ -78,7 +84,7 @@ class _DefaultModelLine extends ConsumerWidget {
         spacing: t.space.sm,
         runSpacing: t.space.xs,
         children: [
-          Text('New chats use ${choice.modelId}', style: Theme.of(context).textTheme.bodySmall),
+          Text('New chats use $name', style: Theme.of(context).textTheme.bodySmall),
           if (privacy != null) PrivacyBadge(location: privacy.location, host: privacy.host),
         ],
       ),

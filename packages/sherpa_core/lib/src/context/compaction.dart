@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:meta/meta.dart';
 
 import '../common/cancellation.dart';
@@ -6,6 +8,7 @@ import '../model/message.dart';
 import '../model/tool.dart';
 import '../provider/model_provider.dart';
 import '../session/plan.dart';
+import 'digest.dart';
 import 'text.dart';
 import 'untrusted.dart';
 
@@ -27,26 +30,47 @@ abstract final class Provenance {
 /// responsible for carrying [the handle] forward"). Harness-extracted [H].
 @immutable
 final class StateHandle {
-  const StateHandle({required this.key, required this.value, this.tool, this.callId});
+  const StateHandle({required this.key, required this.value, this.tool, this.callId, this.label});
 
   factory StateHandle.fromJson(JsonMap j) => StateHandle(
     key: j.req<String>('key'),
     value: j.req<String>('value'),
     tool: j.opt<String>('tool'),
     callId: j.opt<String>('callId'),
+    label: j.opt<String>('label'),
   );
 
   final String key;
   final String value;
+
+  /// The tool that returned the handle (for a proxied call, the tool that
+  /// actually ran, not the proxy).
   final String? tool;
   final String? callId;
 
+  /// What the handle identifies, in a few words (the title or name of the
+  /// note, event, basket…), from the result that returned it or the call
+  /// that created it. Without it a reader holding several `note_id`s
+  /// cannot tell which is which and has to search again. Tool data, like
+  /// the handle: rendered inside the untrusted-data wrapper.
+  final String? label;
+
   String get dedupeKey => '${key.toLowerCase()}=$value';
 
-  StateHandle map(String Function(String) f) =>
-      StateHandle(key: f(key), value: f(value), tool: tool == null ? null : f(tool!), callId: callId);
+  StateHandle map(String Function(String) f) => StateHandle(
+    key: f(key),
+    value: f(value),
+    tool: tool == null ? null : f(tool!),
+    callId: callId,
+    label: label == null ? null : f(label!),
+  );
 
-  JsonMap toJson() => compact({'key': key, 'value': value, 'tool': tool, 'callId': callId});
+  /// This handle, labelled [label] when it has no label of its own.
+  StateHandle orLabel(String? label) => this.label != null || label == null
+      ? this
+      : StateHandle(key: key, value: value, tool: tool, callId: callId, label: label);
+
+  JsonMap toJson() => compact({'key': key, 'value': value, 'tool': tool, 'callId': callId, 'label': label});
 }
 
 enum SideEffectOutcome { ok, error }
@@ -54,6 +78,12 @@ enum SideEffectOutcome { ok, error }
 /// A completed non-read-only tool call (R11 §9.1 `sideEffectLedger`). Kept so
 /// the model does not repeat actions after their turns were summarized away
 /// ("don't repeat any actions you've already completed", LangChain).
+///
+/// [tool] is the tool that ran: for a call made through a proxy such as
+/// `call_tool`, its target. When the ledger outgrows
+/// [CompactionSummary.maxLedger], its oldest entries are folded into
+/// aggregates ([count] > 1) per tool rather than dropped (see
+/// [CompactionSummary.capLedger]).
 @immutable
 final class SideEffectRecord {
   const SideEffectRecord({
@@ -63,6 +93,10 @@ final class SideEffectRecord {
     required this.outcome,
     this.server,
     this.argsPreview,
+    this.count = 1,
+    this.callIds = const [],
+    this.keyArgs = const [],
+    this.declaredReadOnly = false,
   });
 
   factory SideEffectRecord.fromJson(JsonMap j) => SideEffectRecord(
@@ -75,19 +109,101 @@ final class SideEffectRecord {
       orElse: () => throw FormatError('unknown side-effect outcome ${j['outcome']}'),
     ),
     argsPreview: j.opt<String>('argsPreview'),
+    count: (j.optInt('count') ?? 1).clamp(1, 1 << 30),
+    callIds: _stringList(j, 'callIds'),
+    keyArgs: _stringList(j, 'keyArgs'),
+    declaredReadOnly: j.opt<bool>('declaredReadOnly') ?? false,
   );
 
+  /// Folds [group] (oldest first; entries may be aggregates themselves)
+  /// into one entry that keeps every call id and key argument.
+  ///
+  /// Entries of different tools (the last resort of
+  /// [CompactionSummary.capLedger]) become one "earlier actions" entry
+  /// whose key arguments are per-tool counts.
+  factory SideEffectRecord.aggregate(List<SideEffectRecord> group) {
+    assert(group.isNotEmpty);
+    final first = group.first;
+    final ids = [for (final e in group) ...e.allCallIds];
+    final count = group.fold(0, (n, e) => n + e.count);
+    final tools = {for (final e in group) e.tool};
+    final List<String> keys;
+    if (tools.length == 1) {
+      keys = [for (final e in group) ...e.keysOrPreview];
+    } else {
+      final perTool = <String, int>{};
+      for (final e in group) {
+        perTool[e.tool] = (perTool[e.tool] ?? 0) + e.count;
+      }
+      keys = [for (final t in perTool.entries) '${t.key} ×${t.value}'];
+    }
+    final kept = keys.length <= maxKeyArgs ? keys : keys.sublist(0, maxKeyArgs);
+    return SideEffectRecord(
+      callId: first.callId,
+      tool: tools.length == 1 ? first.tool : 'earlier actions',
+      server: {for (final e in group) e.server}.length == 1 ? first.server : null,
+      argsDigest: Digest.fnv64([for (final e in group) e.argsDigest].join(',')),
+      outcome: first.outcome,
+      argsPreview: clipText('×$count: ${kept.join('; ')}', 300),
+      count: count,
+      callIds: ids,
+      keyArgs: kept,
+      declaredReadOnly: group.every((e) => e.declaredReadOnly),
+    );
+  }
+
+  static List<String> _stringList(JsonMap j, String key) => [
+    for (final e in j.opt<List<Object?>>(key) ?? const <Object?>[])
+      if (e is String) e else throw FormatError('expected "$key" to hold strings, got ${e.runtimeType}'),
+  ];
+
+  /// Key arguments kept per aggregate (the rest is counted in [count]).
+  static const int maxKeyArgs = 64;
+
+  /// The first (for an aggregate: the oldest) call.
   final String callId;
   final String tool;
   final String? server;
 
-  /// FNV-1a of the canonical JSON arguments (see `Digest.args`).
+  /// FNV-1a of the canonical JSON arguments (see `Digest.args`); for an
+  /// aggregate, of its members' digests.
   final String argsDigest;
   final SideEffectOutcome outcome;
 
-  /// Short JSON excerpt of the arguments so the model can recognise the
-  /// action; bounded and scrubbed in handoff bundles.
+  /// Short JSON excerpt of the arguments, the tool's key argument (path,
+  /// title, name, id) first, so the model can recognise the action;
+  /// bounded and scrubbed in handoff bundles. For an aggregate, its count
+  /// and key arguments as text.
   final String? argsPreview;
+
+  /// How many calls this entry stands for (> 1: an aggregate of older
+  /// entries of the same tool, server and outcome).
+  final int count;
+
+  /// Every call an aggregate stands for, oldest first (empty for a single
+  /// call: see [allCallIds]).
+  final List<String> callIds;
+
+  /// The key argument of each call ([argsPreview]'s first values), oldest
+  /// first, so an aggregate still says WHAT was done.
+  final List<String> keyArgs;
+
+  /// The tool declares itself read-only but its hints are not trusted
+  /// (an untrusted server, or no trust-aware view wired), so the call stays
+  /// in the ledger. Such entries are folded and dropped before any
+  /// other entry: a wrongly listed read costs a re-read, a lost write can
+  /// be repeated.
+  final bool declaredReadOnly;
+
+  bool get isAggregate => count > 1;
+
+  List<String> get allCallIds => callIds.isEmpty ? [callId] : callIds;
+
+  /// [keyArgs], or for entries without them (older summaries) the start of
+  /// [argsPreview].
+  List<String> get keysOrPreview => keyArgs.isNotEmpty || count > 1
+      ? keyArgs
+      : [if (argsPreview != null) clipText(argsPreview!, 60)];
 
   SideEffectRecord map(String Function(String) f) => SideEffectRecord(
     callId: callId,
@@ -96,6 +212,10 @@ final class SideEffectRecord {
     argsDigest: argsDigest,
     outcome: outcome,
     argsPreview: argsPreview == null ? null : f(argsPreview!),
+    count: count,
+    callIds: callIds,
+    keyArgs: [for (final k in keyArgs) f(k)],
+    declaredReadOnly: declaredReadOnly,
   );
 
   JsonMap toJson() => compact({
@@ -105,6 +225,10 @@ final class SideEffectRecord {
     'argsDigest': argsDigest,
     'outcome': outcome.name,
     'argsPreview': argsPreview,
+    'count': count == 1 ? null : count,
+    'callIds': callIds.isEmpty ? null : callIds,
+    'keyArgs': keyArgs.isEmpty ? null : keyArgs,
+    'declaredReadOnly': declaredReadOnly ? true : null,
   });
 }
 
@@ -260,7 +384,9 @@ final class CompactionSummary {
   static const int maxArtifacts = 32;
   static const int maxArtifactChars = 300;
   static const int maxStateHandles = 16;
+  /// Ledger entries ([capLedger] folds older ones instead of dropping them).
   static const int maxLedger = 40;
+  static const int maxHandleLabelChars = 60;
   static const int maxTaint = 16;
   static const int maxUserMessages = 20;
   static const int maxUserMessageChars = 4000;
@@ -502,9 +628,7 @@ final class CompactionSummary {
       nextStepQuote: nextStepQuote == null ? null : clipText(nextStepQuote!, nextStepChars),
       artifacts: [for (final a in dedupeItems(artifacts).take(maxArtifacts)) clipText(a, maxArtifactChars)],
       stateHandles: stateHandles.take(maxStateHandles).toList(),
-      sideEffectLedger: sideEffectLedger.length <= maxLedger
-          ? sideEffectLedger
-          : sideEffectLedger.sublist(sideEffectLedger.length - maxLedger),
+      sideEffectLedger: capLedger(sideEffectLedger),
       pendingApprovals: pendingApprovals.take(16).toList(),
       taint: taint.take(maxTaint).toList(),
       compactionCount: compactionCount,
@@ -512,6 +636,68 @@ final class CompactionSummary {
       plan: plan,
       nonce: nonce,
     );
+  }
+
+  /// Bounds [ledger] (oldest first) to [cap] entries without losing a
+  /// completed action:
+  /// 1. the oldest [SideEffectRecord.declaredReadOnly] entries are folded
+  ///    into one aggregate per tool, as few as needed;
+  /// 2. if that is not enough, those reads are dropped, oldest first (a
+  ///    read listed as done costs at most a re-read);
+  /// 3. only then are the oldest writes folded into one aggregate per tool,
+  ///    server and outcome, keeping each call's key argument and id;
+  /// 4. with more than [cap] such groups, the oldest groups become a
+  ///    single "earlier actions" entry with per-tool counts.
+  ///
+  /// A write is never dropped, and never folded to make room for a read.
+  /// Aggregates come first (they hold the oldest calls), then the remaining
+  /// entries in their original order.
+  static List<SideEffectRecord> capLedger(List<SideEffectRecord> ledger, {int cap = maxLedger}) {
+    if (ledger.length <= cap) return ledger;
+    String group(SideEffectRecord e) => '${e.declaredReadOnly}\u0000${e.tool}\u0000${e.server}\u0000${e.outcome.name}';
+    var out = _foldOldest(ledger, cap, (e) => e.declaredReadOnly, group);
+    if (out.length > cap) {
+      var excess = out.length - cap;
+      final kept = <SideEffectRecord>[];
+      for (final e in out) {
+        if (e.declaredReadOnly && excess > 0) {
+          excess--;
+        } else {
+          kept.add(e);
+        }
+      }
+      out = kept;
+    }
+    if (out.length > cap) out = _foldOldest(out, cap, (e) => true, group);
+    if (out.length > cap) out = _foldOldest(out, cap, (e) => true, (e) => e.outcome.name);
+    return out;
+  }
+
+  /// Folds the oldest entries that are [eligible] into one aggregate per
+  /// [group], as few as needed for [list] to fit [cap] (or all of them).
+  static List<SideEffectRecord> _foldOldest(
+    List<SideEffectRecord> list,
+    int cap,
+    bool Function(SideEffectRecord) eligible,
+    String Function(SideEffectRecord) group,
+  ) {
+    final candidates = [
+      for (final (i, e) in list.indexed)
+        if (eligible(e)) i,
+    ];
+    final groups = <String, List<SideEffectRecord>>{};
+    var folded = 0;
+    while (folded < candidates.length && list.length - folded + groups.length > cap) {
+      final e = list[candidates[folded++]];
+      (groups[group(e)] ??= []).add(e);
+    }
+    if (folded == 0) return list;
+    final gone = candidates.take(folded).toSet();
+    return [
+      for (final g in groups.values) g.length == 1 ? g.single : SideEffectRecord.aggregate(g),
+      for (final (i, e) in list.indexed)
+        if (!gone.contains(i)) e,
+    ];
   }
 
   /// Dedupes list items by [itemKey], keeping the first occurrence.
@@ -610,12 +796,37 @@ final class CompactionSummary {
     if (sideEffectLedger.isEmpty) return;
     b.write('\n\nActions already performed (side effects; do not repeat them):');
     for (final s in sideEffectLedger) {
-      final args = s.argsPreview == null ? '' : ' ${s.argsPreview}';
       final where = s.server == null ? '' : ' on ${s.server}';
       final result = s.outcome == SideEffectOutcome.ok ? 'done' : 'failed';
+      if (s.isAggregate) {
+        // Older calls folded per tool: still one line per tool that says
+        // what was done (key arguments), so none of them looks undone.
+        final ids = s.allCallIds;
+        final keys = _keyList(s.keyArgs, s.count);
+        b.write(
+          '\n- ${s.tool} ×${s.count}$where → $result${s.declaredReadOnly ? ' (declared read-only)' : ''}'
+          '${keys.isEmpty ? '' : ': $keys'} (${s.count} calls, ${ids.first} … ${ids.last})',
+        );
+        continue;
+      }
+      final args = s.argsPreview == null ? '' : ' ${s.argsPreview}';
       final digest = s.argsDigest.length > 8 ? s.argsDigest.substring(0, 8) : s.argsDigest;
       b.write('\n- ${s.tool}$args$where → $result (call ${s.callId}, args $digest)');
     }
+  }
+
+  /// [keys] joined within a rendering budget; [count] calls in all.
+  static String _keyList(List<String> keys, int count) {
+    final b = StringBuffer();
+    var shown = 0;
+    for (final k in keys) {
+      if (b.length + k.length > 600) break;
+      if (shown > 0) b.write('; ');
+      b.write(k);
+      shown++;
+    }
+    if (shown < count && shown > 0) b.write('; and ${count - shown} more');
+    return b.toString();
   }
 
   void _renderToolData(StringBuffer u) {
@@ -628,7 +839,8 @@ final class CompactionSummary {
     if (stateHandles.isNotEmpty) {
       u.write('${u.isEmpty ? '' : '\n'}State handles returned by tools (carry them forward):');
       for (final h in stateHandles) {
-        u.write('\n- ${h.key} = ${h.value}${h.tool == null ? '' : ' (${h.tool})'}');
+        final label = h.label == null ? '' : ' for ${jsonEncode(h.label)}';
+        u.write('\n- ${h.key} = ${h.value}$label${h.tool == null ? '' : ' (${h.tool})'}');
       }
     }
   }

@@ -16,23 +16,10 @@
 /// * [PrefixCacheStore] — persisted KV prefixes with an LRU budget.
 library;
 
-export 'src/autotune/autotune.dart';
-export 'src/cache/prefix_cache_store.dart';
-export 'src/common/key_value_store.dart';
+// The Flutter-free core (FFI host, provider, lifecycle, types).
+export 'engine.dart';
+// The Android process host and the default host picker (need Flutter).
 export 'src/engine/default_engine_host.dart';
-export 'src/engine/engine_host.dart';
-export 'src/engine/engine_types.dart';
-export 'src/engine/ffi_engine_host.dart';
 export 'src/engine/process_engine_host.dart';
 export 'src/engine/process_exit.dart';
 export 'src/engine/process_messages.pigeon.dart' show BindPolicy;
-export 'src/ffi/library_loader.dart' show EngineLibrary, EngineUnavailableException, kEngineLibraryEnv;
-export 'src/lifecycle/admission.dart';
-export 'src/lifecycle/forensics.dart';
-export 'src/lifecycle/lifecycle_manager.dart';
-export 'src/provider/event_mapper.dart';
-export 'src/provider/llama_cpp_provider.dart';
-export 'src/provider/model_info.dart';
-export 'src/provider/request_mapper.dart';
-export 'src/provider/token_counter.dart';
-export 'src/scheduler/inference_scheduler.dart';

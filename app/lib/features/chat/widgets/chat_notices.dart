@@ -86,6 +86,7 @@ class ChatErrorCard extends StatefulWidget {
         ChatErrorAction.retry => 'Try again',
         ChatErrorAction.changeModel => 'Switch model',
         ChatErrorAction.newChat => 'New chat',
+        ChatErrorAction.openModels => 'Open model library',
       };
 
   static IconData iconOf(ChatErrorAction a) => switch (a) {
@@ -94,6 +95,7 @@ class ChatErrorCard extends StatefulWidget {
         ChatErrorAction.retry => Icons.refresh_rounded,
         ChatErrorAction.changeModel => Icons.swap_horiz_rounded,
         ChatErrorAction.newChat => Icons.edit_square,
+        ChatErrorAction.openModels => Icons.memory_rounded,
       };
 
   @override
@@ -202,6 +204,8 @@ class SetupPanel extends StatelessWidget {
     required this.onAddProvider,
     required this.onChooseModel,
     this.providerName,
+    this.onDeviceModels = 0,
+    this.onBrowseModels,
   });
 
   final ProviderAvailability availability;
@@ -209,10 +213,18 @@ class SetupPanel extends StatelessWidget {
   final VoidCallback onChooseModel;
   final String? providerName;
 
+  /// Models installed on this phone (they make a chat possible without
+  /// any provider).
+  final int onDeviceModels;
+
+  /// Opens the on-device model library (shown when nothing is set up).
+  final VoidCallback? onBrowseModels;
+
   @override
   Widget build(BuildContext context) {
     final tokens = SherpaTokens.of(context);
     final theme = Theme.of(context);
+    final n = onDeviceModels;
     final (title, body, cta, onTap, icon) = switch (availability) {
       ProviderAvailability.noProviders => (
           'Add a model to start chatting',
@@ -221,6 +233,14 @@ class SetupPanel extends StatelessWidget {
           'Add provider',
           onAddProvider,
           Icons.add_rounded,
+        ),
+      ProviderAvailability.needsModel when n > 0 => (
+          'Choose a model',
+          '${n == 1 ? 'A model on this phone is' : '$n models on this phone are'} ready to use. They run here, '
+              'so nothing you write leaves your phone.',
+          'Choose model',
+          onChooseModel,
+          Icons.tune_rounded,
         ),
       ProviderAvailability.providerMissing => (
           '${providerName ?? 'This chat\'s provider'} is unavailable',
@@ -254,7 +274,21 @@ class SetupPanel extends StatelessWidget {
             SizedBox(height: tokens.space.xs),
             Text(body, style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             SizedBox(height: tokens.space.md),
-            FilledButton.icon(onPressed: onTap, icon: Icon(icon), label: Text(cta)),
+            Wrap(
+              spacing: tokens.space.sm,
+              runSpacing: tokens.space.xs,
+              children: [
+                FilledButton.icon(onPressed: onTap, icon: Icon(icon), label: Text(cta)),
+                if (availability == ProviderAvailability.noProviders && onBrowseModels != null)
+                  OutlinedButton.icon(
+                    onPressed: onBrowseModels,
+                    icon: const Icon(Icons.download_rounded),
+                    label: const Text('Get a model for this phone'),
+                  ),
+                if (availability == ProviderAvailability.needsModel && n > 0)
+                  TextButton(onPressed: onAddProvider, child: const Text('Add provider')),
+              ],
+            ),
           ],
         ),
       ),

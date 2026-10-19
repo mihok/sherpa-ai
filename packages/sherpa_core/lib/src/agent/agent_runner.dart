@@ -8,7 +8,9 @@ import '../common/clock.dart';
 import '../common/ids.dart';
 import '../common/json.dart';
 import '../context/context_manager.dart';
+import '../context/digest.dart';
 import '../context/passthrough_context_manager.dart';
+import '../context/summary_harvest.dart';
 import '../context/token_estimator.dart';
 import '../context/untrusted.dart';
 import '../memory/memory_monitor.dart';
@@ -517,15 +519,38 @@ final class AgentRunner {
         draftId: toolMsgId,
         pending: [for (final c in calls) PendingCall(callId: c.id, toolName: c.name, status: status[c.id]!)]);
 
-    ToolResultPart errorResult(ToolCall c, String text) =>
-        ToolResultPart(callId: c.id, toolName: c.name, content: [TextPart(text)], isError: true);
+    // Every answer but an interrupted call's (outcome unknown) says the call
+    // never ran, so the summary's side-effect ledger leaves it out.
+    ToolResultPart errorResult(ToolCall c, String text, {bool ran = false}) => ToolResultPart(
+          callId: c.id,
+          toolName: c.name,
+          content: [TextPart(text)],
+          isError: true,
+          meta: ran ? const {} : const {SummaryComposer.metaNotRun: true},
+        );
 
     // The result is durable before the status that refers to it.
-    Future<void> answer(ToolCall c, String text, [PendingCallStatus s = PendingCallStatus.done]) async {
-      results[c.id] = errorResult(c, text);
+    Future<void> answer(ToolCall c, String text, {PendingCallStatus s = PendingCallStatus.done, bool mayHaveRun = false}) async {
+      results[c.id] = errorResult(c, text, ran: mayHaveRun);
       status[c.id] = s;
       await persistResults();
       await saveStatus(RunPhase.awaitingApproval);
+    }
+
+    // Identical calls in one reply (same target, same canonical arguments):
+    // small models emit parallel duplicates with distinct ids. Only the
+    // first of a non-idempotent call is considered; each copy is answered
+    // without running once its original is decided (so pairing stays valid
+    // and the copy reports the original's outcome). Answered calls (a
+    // resume) still claim their key, so a copy never takes the place of an
+    // original that was already decided.
+    final firstOf = <String, String>{};
+    final duplicateOf = <String, (String, String)>{}; // copy id → (original id, target name)
+    String? sameCallKey(ToolCall c, ResolvedToolCall? r) {
+      final tool = r?.tool;
+      if (truncated || !c.isValid || r == null || tool == null || r.refusal != null) return null;
+      if (_approvals.annotationsFor(tool).isIdempotent) return null;
+      return '${r.call.name}\u0000${Digest.canonicalJson(r.call.arguments)}';
     }
 
     try {
@@ -542,7 +567,11 @@ final class AgentRunner {
       }
       final toRun = <ToolCall>[];
       for (final c in calls) {
-        if (results.containsKey(c.id)) continue;
+        if (results.containsKey(c.id)) {
+          final key = sameCallKey(c, _tools.resolve(c, sessionId: sid));
+          if (key != null) firstOf.putIfAbsent(key, () => c.id);
+          continue;
+        }
         if (truncated) {
           await answer(c, 'This call to "${c.name}" was cut off by the output token limit before its arguments '
               'were complete, so it was not run. Call the tool again with shorter arguments (for example, '
@@ -567,16 +596,26 @@ final class AgentRunner {
           await answer(c, '"${tool.name}" is not available to the model (it can only be used from its app view).');
           continue;
         }
+        final key = sameCallKey(c, r);
+        final original = key == null ? null : firstOf[key];
+        if (original != null) {
+          run.emit(RunNotice('tool_call_duplicate',
+              'Skipped a repeated ${tool.displayName} call: the reply asked for it twice with the same arguments.'));
+          await _audit(run, AuditKind.toolCall, 'skipped duplicate ${r.call.name}', {'callId': c.id, 'duplicateOf': original});
+          duplicateOf[c.id] = (original, r.call.name);
+          continue;
+        }
+        if (key != null) firstOf[key] = c.id;
         targets[c.id] = r;
         switch (status[c.id]!) {
           case PendingCallStatus.denied:
             // Declined before the process died (an older version may not
             // have saved the result): never ask again.
-            await answer(c, _declinedText, PendingCallStatus.denied);
+            await answer(c, _declinedText, s: PendingCallStatus.denied);
           case PendingCallStatus.done:
             // Marked done but its result never reached the store (older
             // versions): the outcome is unknown.
-            await answer(c, _interruptedText(tool));
+            await answer(c, _interruptedText(tool), mayHaveRun: true);
           case PendingCallStatus.running:
             // Interrupted mid-execution by process death. Re-run only on
             // trusted read-only / idempotent annotations (R11 §9.8).
@@ -586,7 +625,7 @@ final class AgentRunner {
             } else {
               run.emit(RunNotice('tool_interrupted',
                   '${tool.displayName} was interrupted while running; its outcome is unknown and it was not run again.'));
-              await answer(c, _interruptedText(tool));
+              await answer(c, _interruptedText(tool), mayHaveRun: true);
             }
           case PendingCallStatus.approved:
             toRun.add(c);
@@ -596,7 +635,7 @@ final class AgentRunner {
               await saveStatus(RunPhase.awaitingApproval);
               toRun.add(c);
             } else {
-              await answer(c, _declinedText, PendingCallStatus.denied);
+              await answer(c, _declinedText, s: PendingCallStatus.denied);
             }
         }
       }
@@ -623,6 +662,28 @@ final class AgentRunner {
           message: msg!,
         ));
       });
+      // A copy reports its original's outcome without running: done when
+      // the original succeeded (a small model told "error" runs it again),
+      // an error when the original failed, was declined or was cut short.
+      if (duplicateOf.isNotEmpty && !run.token.isCancelled) {
+        for (final c in calls) {
+          final dup = duplicateOf[c.id];
+          if (dup == null) continue;
+          final (original, target) = dup;
+          final outcome = results[original];
+          final ok = outcome != null && !outcome.isError;
+          results[c.id] = ToolResultPart(
+            callId: c.id,
+            toolName: c.name,
+            content: [TextPart(_duplicateText(original, target, originalOk: ok))],
+            isError: !ok,
+            meta: const {SummaryComposer.metaNotRun: true},
+          );
+          status[c.id] = PendingCallStatus.done;
+        }
+        await persistResults();
+        await saveStatus(RunPhase.executingTools);
+      }
     } finally {
       // Pairing invariant: every call gets a result, even when cancelled.
       for (final c in calls) {
@@ -638,6 +699,12 @@ final class AgentRunner {
 
   static const String _declinedText =
       'The user declined this tool call. Do not retry it; ask the user how to proceed if it was necessary.';
+
+  static String _duplicateText(String original, String tool, {required bool originalOk}) => originalOk
+      ? 'Duplicate of call $original, not run: this reply asked for "$tool" twice with the same arguments, and call '
+          '$original already did it. Use the result of call $original; do not call it again.'
+      : 'Duplicate of call $original, not run: this reply asked for "$tool" twice with the same arguments. See call '
+          '$original for what happened.';
 
   static String _interruptedText(ToolDefinition tool) =>
       'The app was interrupted while "${tool.name}" was running, so its outcome is unknown. It was not run again '
@@ -679,6 +746,7 @@ final class AgentRunner {
               toolName: c.name,
               content: const [TextPart('Cancelled by the user before it ran.')],
               isError: true,
+              meta: const {SummaryComposer.metaNotRun: true},
             ),
         ],
       ),

@@ -40,8 +40,100 @@ final class ArgumentsParseResult {
 /// and strings, Python `True/False/None`, comments, markdown fences, leading
 /// prose, unescaped inner quotes, and truncated input (closing open strings,
 /// arrays and objects). It never throws.
+///
+/// Strict mode (R11 §d.3) refuses, as errors rather than repairs, the
+/// outputs whose meaning a repair would have to guess:
+/// * a key that occurs twice in one object (`{"city": "Paris", "city":
+///   "Rome"}`): `jsonDecode` silently keeps the last value, a repair would
+///   pick one; neither is what the model may have meant;
+/// * chat-template tokens inside the arguments (Gemma 4's `<|"|>` string
+///   delimiter leaked by a generic server parser): the "repaired" values
+///   would contain the delimiters;
+/// * an unquoted value with spaces in arguments that also needed a
+///   structural repair (`{"city": Paris Tokyo, "unit": celsius]`): one value
+///   or several cannot be told apart.
 abstract final class ToolArgumentsRepair {
   static const int _maxDepth = 64;
+
+  /// The [ArgumentsParseResult.fixes] entry of a strict-mode refusal (plus
+  /// the specific reason: `duplicate_key`, `template_tokens`,
+  /// `ambiguous_value`).
+  static const String refusedFix = 'refused';
+
+  static final RegExp _templateToken = RegExp(r'<\|[^\s<>|]{0,24}\|>');
+
+  /// A quoted word followed by `:` inside an unquoted value: the value ran
+  /// on into the next member (`Paris Tokyo "unit": "c"`).
+  static final RegExp _swallowedKey = RegExp(r'''["'“‘][^"'”’]{0,64}["'”’]\s*[:=]''');
+
+  /// Fixes that change the structure (not just the spelling) of the input.
+  static const Set<String> _structuralFixes = {'mismatched_bracket', 'missing_comma', 'missing_colon', 'unexpected_char'};
+
+  /// The first key that occurs twice in one object of [json], which must
+  /// be strict JSON text; null when there is none (or [json] is not JSON).
+  static String? duplicateKey(String json) {
+    final objects = <Set<String>?>[]; // null for an array
+    var i = 0;
+    final n = json.length;
+    while (i < n) {
+      final c = json.codeUnitAt(i);
+      if (c == 0x22) {
+        final start = i++;
+        var escaped = false;
+        while (i < n) {
+          final d = json.codeUnitAt(i);
+          if (d == 0x5C) {
+            escaped = true;
+            i += 2;
+            continue;
+          }
+          if (d == 0x22) break;
+          i++;
+        }
+        final end = i++;
+        final keys = objects.isEmpty ? null : objects.last;
+        if (keys == null || end >= n) continue;
+        var j = i;
+        while (j < n && (json.codeUnitAt(j) == 0x20 || json.codeUnitAt(j) == 0x0A || json.codeUnitAt(j) == 0x0D || json.codeUnitAt(j) == 0x09)) {
+          j++;
+        }
+        // In an object, a string followed by ':' is a key.
+        if (j >= n || json.codeUnitAt(j) != 0x3A) continue;
+        final String key;
+        if (escaped) {
+          try {
+            key = jsonDecode(json.substring(start, end + 1)) as String;
+          } on FormatException {
+            return null;
+          }
+        } else {
+          key = json.substring(start + 1, end);
+        }
+        if (!keys.add(key)) return key;
+        continue;
+      }
+      if (c == 0x7B) {
+        objects.add(<String>{});
+      } else if (c == 0x5B) {
+        objects.add(null);
+      } else if ((c == 0x7D || c == 0x5D) && objects.isNotEmpty) {
+        objects.removeLast();
+      }
+      i++;
+    }
+    return null;
+  }
+
+  /// The [ToolCall.argumentsError] for arguments in which [key] occurs
+  /// twice in one object.
+  static String duplicateKeyError(String key) =>
+      'The key "${_clip(key)}" appears twice in the tool arguments, so which value was meant is ambiguous; '
+      'the call was not run. Send each argument once.';
+
+  static ArgumentsParseResult _duplicate(String key, Set<String> fixes) =>
+      ArgumentsParseResult.failed(duplicateKeyError(key), fixes: {...fixes, refusedFix, 'duplicate_key'});
+
+  static String _clip(String s) => s.length <= 60 ? s : '${s.substring(0, 59)}…';
 
   static final RegExp _fence = RegExp(r'```[A-Za-z0-9_+-]*[ \t]*\r?\n?([\s\S]*?)(?:```|$)');
 
@@ -75,7 +167,11 @@ abstract final class ToolArgumentsRepair {
     final text = raw.trim();
     if (text.isEmpty) return const ArgumentsParseResult.ok({});
     final strict = _strict(text);
-    if (strict.$1) return _fromValue(strict.$2, const {});
+    if (strict.$1) {
+      final dup = strict.$2 is Map ? duplicateKey(text) : null;
+      if (dup != null) return _duplicate(dup, const {});
+      return _fromValue(strict.$2, const {});
+    }
 
     final fixes = <String>{};
     var body = text.startsWith('﻿') ? text.substring(1) : text;
@@ -112,7 +208,27 @@ abstract final class ToolArgumentsRepair {
     } on FormatException catch (e) {
       return ArgumentsParseResult.failed('Could not repair tool arguments: ${e.message}', fixes: {...fixes, ...parser.fixes});
     }
-    return _fromValue(value, {...fixes, ...parser.fixes});
+    final all = {...fixes, ...parser.fixes};
+    final token = _templateToken.firstMatch(body.substring(0, parser.valueEnd));
+    if (token != null) {
+      return ArgumentsParseResult.failed(
+        'The tool arguments contain the chat-template token ${token[0]}: the server did not parse this model\'s '
+        'tool-call format, so the values would be garbled. The call was not run; send plain JSON arguments.',
+        fixes: {...all, refusedFix, 'template_tokens'},
+      );
+    }
+    if (parser.duplicateKey != null) return _duplicate(parser.duplicateKey!, all);
+    final bare = parser.multiWordBareValue;
+    final broken = [for (final f in _structuralFixes) if (all.contains(f)) f.replaceAll('_', ' ')];
+    if (bare != null && (broken.isNotEmpty || _swallowedKey.hasMatch(bare))) {
+      return ArgumentsParseResult.failed(
+        'The tool arguments are ambiguous: the unquoted value "${_clip(bare)}" may be one value or several'
+        '${broken.isEmpty ? ' (it runs into what looks like the next key)' : ', and the JSON around it is broken too (${broken.join(', ')})'}. '
+        'The call was not run; quote string values.',
+        fixes: {...all, refusedFix, 'ambiguous_value'},
+      );
+    }
+    return _fromValue(value, all);
   }
 
   static ArgumentsParseResult _fromValue(Object? value, Set<String> fixes) {
@@ -131,6 +247,7 @@ abstract final class ToolArgumentsRepair {
           if (nested.isOk) {
             return ArgumentsParseResult.ok(nested.value!, repaired: true, fixes: {...fixes, ...nested.fixes, 'stringified'});
           }
+          if (nested.fixes.contains(refusedFix)) return nested;
         }
         return ArgumentsParseResult.failed('Tool arguments must be a JSON object, got a string', fixes: fixes);
       case List():
@@ -163,6 +280,15 @@ final class _LenientParser {
   int _depth = 0;
   final Set<String> fixes = {};
 
+  /// Where the document's value ended (trailing content starts here).
+  int valueEnd = 0;
+
+  /// The first key seen twice in one object.
+  String? duplicateKey;
+
+  /// The first unquoted string value that contains whitespace.
+  String? multiWordBareValue;
+
   static final RegExp _strictNumber = RegExp(r'^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$');
 
   bool get _atEnd => _i >= _s.length;
@@ -176,6 +302,7 @@ final class _LenientParser {
     } on _Truncated {
       throw const FormatException('unexpected end of input');
     }
+    valueEnd = _i > _s.length ? _s.length : _i;
     _skipWs();
     if (!_atEnd) fixes.add('trailing_content');
     return v;
@@ -262,7 +389,10 @@ final class _LenientParser {
         continue;
       }
       afterComma = false;
-      if (map.containsKey(key)) fixes.add('duplicate_key');
+      if (map.containsKey(key)) {
+        fixes.add('duplicate_key');
+        duplicateKey ??= key;
+      }
       _skipWs();
       if (_atEnd) {
         fixes.add('truncated');
@@ -556,6 +686,7 @@ final class _LenientParser {
         return null;
     }
     fixes.add('unquoted_string');
+    if (word.contains(RegExp(r'\s'))) multiWordBareValue ??= word;
     return word;
   }
 

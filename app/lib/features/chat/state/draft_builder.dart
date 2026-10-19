@@ -21,6 +21,10 @@ final class DraftBuilder {
   int _snapshotVersion = -1;
   LiveDraft? _snapshot;
 
+  /// The provider's last performance sample for this message (local
+  /// engines, llama.cpp-compatible servers); null when it sent none.
+  PerfSample? perf;
+
   bool get hasOutput => _text.isNotEmpty || _reasoning.isNotEmpty || _redacted || _calls.isNotEmpty;
 
   /// How long the model reasoned, once it moved on to text or tools.
@@ -56,7 +60,10 @@ final class DraftBuilder {
         (_calls[index] ??= _CallDraft(call.id, call.name)).complete = true;
       case Finish():
         _endReasoning(now);
-      case UsageUpdate() || ProviderNotice() || PerfSample():
+      case PerfSample():
+        perf = event;
+        return;
+      case UsageUpdate() || ProviderNotice():
         return;
     }
     _version++;

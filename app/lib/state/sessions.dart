@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
@@ -82,16 +83,29 @@ final visibleSessionsProvider = Provider<AsyncValue<List<SessionRecord>>>((ref) 
       ? const <ProviderConfig>[]
       : (ref.watch(providerConfigsProvider).value ?? ref.read(providerRegistryProvider).configs);
   final names = {for (final c in configs) c.id: c.displayName.toLowerCase()};
+  // On-device models are known by their display names, not library ids.
+  final local = query.isEmpty ? const <ModelDescriptor>[] : (ref.watch(localModelsProvider).value ?? const []);
+  final localNames = {for (final m in local) m.id: m.displayName.toLowerCase()};
   bool matches(SessionRecord s) =>
       query.isEmpty ||
       s.title.toLowerCase().contains(query) ||
       (s.modelId?.toLowerCase().contains(query) ?? false) ||
-      (names[s.providerId]?.contains(query) ?? false);
+      (names[s.providerId]?.contains(query) ?? false) ||
+      (s.providerId == localProviderId && (localNames[s.modelId]?.contains(query) ?? false));
   return sessions.whenData((list) => [
         for (final s in list)
           if (!hidden.contains(s.id) && matches(s)) s,
       ]);
 });
+
+/// Clean-up for per-chat state a feature keeps outside the session store,
+/// run after a chat is deleted for good (e.g. MCP forgets the chat's tool
+/// switches). Best effort: a failing hook is logged, never surfaced.
+typedef SessionDeletedHook = Future<void> Function(String sessionId);
+
+/// Overridden by features that keep per-chat state (MCP:
+/// `mcpRuntimeOverrides`). Empty by default.
+final sessionDeletedHooksProvider = Provider<List<SessionDeletedHook>>((ref) => const []);
 
 /// Session mutations the shell performs. Lives as long as the app, so the
 /// callbacks it hands out (undo handles) never hold a disposed widget ref.
@@ -139,9 +153,20 @@ final class SessionActions {
         } finally {
           hidden.unhide(id);
         }
+        await _forget(id);
       },
       undo: () async => hidden.unhide(id),
     );
+  }
+
+  Future<void> _forget(String id) async {
+    for (final hook in _ref.read(sessionDeletedHooksProvider)) {
+      try {
+        await hook(id);
+      } on Object catch (e) {
+        debugPrint('session $id clean-up: $e');
+      }
+    }
   }
 
   /// Archives or restores a chat. With [archived] and archived chats hidden,

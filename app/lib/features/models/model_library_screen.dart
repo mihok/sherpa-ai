@@ -12,6 +12,7 @@ import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
 import '../../services/device/device_profile_source.dart';
 import '../../services/downloads/downloads.dart';
+import '../../services/inference/local_model_specs.dart' show isRunnableLocally;
 import '../../state/providers.dart';
 import '../../state/ui_preferences.dart';
 import '../home/relative_time.dart';
@@ -411,21 +412,37 @@ class LibraryModelTile extends ConsumerWidget {
                       Text(m.issue.message, style: theme.textTheme.bodySmall?.copyWith(color: t.semantic.danger)),
                     ],
                     SizedBox(height: t.space.sm),
-                    Tooltip(
-                      message: use == null
-                          ? 'On-device chat arrives with the local engine.'
-                          : engineProblem ?? 'Start a chat that runs on this phone',
-                      child: FilledButton.tonalIcon(
-                        onPressed: use == null || !m.usable || engineProblem != null
-                            ? null
-                            : () async {
-                                ref.read(hapticsProvider).light();
-                                await ref.read(modelLibraryProvider).markUsed(m.id);
-                                if (context.mounted) await use(context, localModelChoice(m));
-                              },
-                        icon: const Icon(Icons.chat_bubble_outline_rounded),
-                        label: const Text('Use in chat'),
-                      ),
+                    Wrap(
+                      spacing: t.space.sm,
+                      runSpacing: t.space.sm,
+                      children: [
+                        Tooltip(
+                          message: use == null
+                              ? 'On-device chat arrives with the local engine.'
+                              : engineProblem ?? 'Start a chat that runs on this phone',
+                          child: FilledButton.tonalIcon(
+                            onPressed: use == null || !m.usable || engineProblem != null
+                                ? null
+                                : () async {
+                                    ref.read(hapticsProvider).light();
+                                    await ref.read(modelLibraryProvider).markUsed(m.id);
+                                    if (context.mounted) await use(context, localModelChoice(m));
+                                  },
+                            icon: const Icon(Icons.chat_bubble_outline_rounded),
+                            label: const Text('Use in chat'),
+                          ),
+                        ),
+                        // The lab explains an unavailable engine itself.
+                        if (ref.watch(localInferenceProvider) != null && isRunnableLocally(m))
+                          Tooltip(
+                            message: 'Speed, memory and settings of ${m.displayName} on this phone',
+                            child: OutlinedButton.icon(
+                              onPressed: () => context.go(Routes.modelPerformance(m.id)),
+                              icon: const Icon(Icons.speed_rounded),
+                              label: const Text('Performance'),
+                            ),
+                          ),
+                      ],
                     ),
                   ],
                 ),

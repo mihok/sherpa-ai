@@ -16,6 +16,9 @@ abstract final class Routes {
   static const downloads = '/settings/models/downloads';
   static const huggingFace = '/settings/huggingface';
 
+  /// The performance lab of one on-device model (library id).
+  static String modelPerformance(String modelId) => '$models/performance/${Uri.encodeComponent(modelId)}';
+
   /// MCP tool servers: the list, add (by URL, QR, registry or deep link),
   /// the registry search, remembered approvals, one server, its console and
   /// a tool's review.

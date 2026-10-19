@@ -1,16 +1,13 @@
 /// L1 — parser conformance corpus (R11 §9.9): golden raw outputs per
 /// model family and parser path, well-formed and malformed, each with the
 /// call a correct harness must execute or the reason it must not.
-// ignore_for_file: implementation_imports
 library;
 
 import 'dart:convert';
 import 'dart:math';
 
 import 'package:sherpa_core/sherpa_core.dart';
-import 'package:sherpa_inference/src/engine/engine_types.dart';
-import 'package:sherpa_inference/src/ffi/bindings.dart' show SeFinish;
-import 'package:sherpa_inference/src/provider/event_mapper.dart';
+import 'package:sherpa_inference/engine.dart';
 import 'package:sherpa_net/sherpa_net.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 

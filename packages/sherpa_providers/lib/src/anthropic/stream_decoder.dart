@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_net/sherpa_net.dart';
 
+import '../common/json_repair.dart' show ToolArgumentsRepair;
 import '../common/tool_call_accumulator.dart' show ToolCallCutoff;
 import 'errors.dart';
 import 'tool_names.dart';
@@ -281,6 +282,18 @@ final class AnthropicStreamDecoder {
     }
     try {
       final decoded = jsonDecode(raw);
+      // jsonDecode keeps the last of two equal keys; strict mode refuses
+      // the call instead of guessing (R11 §d.3).
+      final dup = decoded is Map ? ToolArgumentsRepair.duplicateKey(raw) : null;
+      if (dup != null) {
+        return ToolCall(
+          id: b.id,
+          name: b.name,
+          arguments: const {},
+          rawArguments: raw,
+          argumentsError: ToolArgumentsRepair.duplicateKeyError(dup),
+        );
+      }
       if (decoded is Map) {
         return ToolCall(
           id: b.id,

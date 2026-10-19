@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../../state/services.dart' show localProviderId;
 import 'model_selection.dart';
 
 /// What went wrong, in terms of what the user can do about it.
@@ -31,7 +32,10 @@ enum ChatErrorKind {
 /// with this error, or the action (share, copy, branch switch…) that threw.
 /// The controller binds it to that operation (`ChatController.retryError`)
 /// and drops it from errors with nothing to repeat.
-enum ChatErrorAction { fixProvider, addProvider, retry, changeModel, newChat }
+///
+/// [openModels] opens the on-device model library (an unavailable engine,
+/// a model that can't load here).
+enum ChatErrorAction { fixProvider, addProvider, retry, changeModel, newChat, openModels }
 
 /// An error mapped to calm, specific copy and the actions that can fix it.
 ///
@@ -89,8 +93,11 @@ ChatError chatErrorFrom(
   String? detail,
   ModelSelection? model,
 }) {
-  final provider = model?.providerName ?? 'The provider';
-  final host = model?.host ?? model?.providerName ?? 'the server';
+  // The built-in provider is called "On this device" in pickers, which
+  // can't start a sentence ("On this device rejected the request").
+  final local = (model?.providerId ?? (error is ProviderException ? error.providerId : null)) == localProviderId;
+  final provider = local ? 'The on-device model' : (model?.providerName ?? 'The provider');
+  final host = local ? 'the on-device engine' : (model?.host ?? model?.providerName ?? 'the server');
   final modelName = model?.modelName ?? 'this model';
 
   if (error is ChatSetupException) return _setupError(error);
@@ -100,6 +107,16 @@ ChatError chatErrorFrom(
       if (error.statusCode != null) 'HTTP ${error.statusCode}',
       error.message,
     ].join(' · ');
+    if (local && error.kind == ProviderErrorKind.unsupported) {
+      return ChatError(
+        kind: ChatErrorKind.localEngine,
+        title: 'On-device models are unavailable: ${_localReason(error.message)}',
+        message: 'Check the models on this phone in the model library, or switch to another model.',
+        actions: const [ChatErrorAction.openModels, ChatErrorAction.changeModel],
+        detail: tech,
+        providerId: localProviderId,
+      );
+    }
     switch (error.kind) {
       case ProviderErrorKind.auth:
         return ChatError(
@@ -283,6 +300,16 @@ ChatError _overflow(String modelName, String detail) => ChatError(
       actions: const [ChatErrorAction.newChat, ChatErrorAction.changeModel],
       detail: detail,
     );
+
+/// `On-device inference is unavailable: the engine did not start` → `the
+/// engine did not start` (the engine's own sentence, without its prefix).
+String _localReason(String message) {
+  var reason = message.trim();
+  final i = reason.indexOf(': ');
+  if (i >= 0 && reason.toLowerCase().contains('unavailable')) reason = reason.substring(i + 2).trim();
+  if (reason.endsWith('.')) reason = reason.substring(0, reason.length - 1);
+  return reason.isEmpty ? 'the engine did not start' : reason;
+}
 
 String _humanDuration(Duration d) {
   if (d.inSeconds < 60) return '${d.inSeconds.clamp(1, 59)} s';

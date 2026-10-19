@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:meta/meta.dart';
 
+import '../common/json.dart';
 import '../model/content.dart';
 import '../model/message.dart';
 import '../model/tool.dart';
@@ -52,7 +53,7 @@ abstract final class SummaryComposer {
       ...model.constraints.where(Provenance.isTool),
       ...model.userPreferences.where(Provenance.isTool),
     ];
-    final ledgerIds = {for (final s in prev?.sideEffectLedger ?? const <SideEffectRecord>[]) s.callId};
+    final ledgerIds = {for (final s in prev?.sideEffectLedger ?? const <SideEffectRecord>[]) ...s.allCallIds};
     final taintSources = {for (final t in prev?.taint ?? const <TaintRecord>[]) t.source};
     final covered = {...?prev?.coveredMessageIds};
     return CompactionSummary(
@@ -80,11 +81,9 @@ abstract final class SummaryComposer {
       // A user turn kept after the summary supersedes any older quote.
       nextStepQuote: h.nextStepQuote ?? (_userTurnFollows(input) ? null : prev?.nextStepQuote),
       artifacts: _newestFirst(h.artifacts, prev?.artifacts ?? const [], (a) => a, CompactionSummary.maxArtifacts),
-      stateHandles: _newestFirst(
-        h.stateHandles,
-        prev?.stateHandles ?? const [],
-        (s) => s.dedupeKey,
-        CompactionSummary.maxStateHandles,
+      stateHandles: _mergeHandles(
+        [...h.stateHandles, ...?prev?.stateHandles],
+        cap: CompactionSummary.maxStateHandles,
       ),
       sideEffectLedger: [
         ...?prev?.sideEffectLedger,
@@ -124,6 +123,21 @@ abstract final class SummaryComposer {
     return all.length <= cap ? all : all.sublist(all.length - cap);
   }
 
+  /// [newestFirst] deduped by [StateHandle.dedupeKey] (the newest wins),
+  /// keeping a label an older sighting of the same handle had, cut to [cap].
+  static List<StateHandle> _mergeHandles(Iterable<StateHandle> newestFirst, {int? cap}) {
+    final byKey = <String, StateHandle>{};
+    for (final h in newestFirst) {
+      final seen = byKey[h.dedupeKey];
+      if (seen == null) {
+        if (cap == null || byKey.length < cap) byKey[h.dedupeKey] = h;
+      } else {
+        byKey[h.dedupeKey] = seen.orLabel(h.label);
+      }
+    }
+    return byKey.values.toList();
+  }
+
   static List<T> _newestFirst<T>(List<T> fresh, List<T> older, String Function(T) key, int cap) {
     final seen = <String>{};
     final out = <T>[];
@@ -153,12 +167,14 @@ abstract final class SummaryComposer {
             artifacts.addAll(artifactsInJson(call.arguments));
           case ToolResultPart():
             final call = calls[p.callId];
-            final def = lookup(p.toolName);
+            // A proxied call (`call_tool`) is judged, ledgered and
+            // attributed as the tool that actually ran.
+            final ran = _ran(p, call, lookup);
             artifacts.addAll(_artifactsInResult(p));
-            handles.addAll(_handlesInResult(p));
-            final source = _taintSource(p.toolName, def);
+            handles.addAll(_handlesInResult(p, ran));
+            final source = _taintSource(ran.name, ran.def);
             if (source != null) taint.add(TaintRecord(source: source, firstMessageId: m.id));
-            final effect = call == null ? null : _sideEffect(call, p, def, input.annotationsFor);
+            final effect = call == null ? null : _sideEffect(call, ran, p, input.annotationsFor);
             if (effect != null) effects.add(effect);
           case ResourceLinkPart(:final uri) || EmbeddedResourcePart(:final uri):
             artifacts.add(uri);
@@ -173,7 +189,7 @@ abstract final class SummaryComposer {
       userMessages: _userMessages(input, counter),
       nextStepQuote: _userTurnFollows(input) ? null : _nextStepQuote(input.messages),
       artifacts: _dedupe(artifacts.reversed).toList(),
-      stateHandles: _dedupeBy(handles.reversed, (h) => h.dedupeKey).toList(),
+      stateHandles: _mergeHandles(handles.reversed),
       sideEffects: effects,
       taint: _dedupeBy(taint, (t) => t.source).toList(),
       coveredMessageIds: [
@@ -322,29 +338,44 @@ abstract final class SummaryComposer {
   );
   static const int _handlesPerResult = 6;
 
+  /// Keys whose value says what a handle's object is (a note's title, a
+  /// file's path) in the result that returned it or the call that made it.
+  static final RegExp _handleLabelKey = RegExp(
+    r'^(title|name|subject|label|summary|display_?name|file_?name|path)$',
+    caseSensitive: false,
+  );
+
   /// Ids and handles in a tool result (structured content, JSON text, or
-  /// `foo_id: value` patterns in prose). Secret-looking keys and values are
+  /// `foo_id: value` patterns in prose), attributed to the tool that ran
+  /// ([ran]) and labelled with what they identify: the title/name next to
+  /// the first handle of an object, else (for the result's top level) the
+  /// title/name argument of the call. Secret-looking keys and values are
   /// never collected: summaries end up in handoff bundles.
-  static List<StateHandle> _handlesInResult(ToolResultPart p) {
+  static List<StateHandle> _handlesInResult(ToolResultPart p, _Ran ran) {
     final out = <StateHandle>[];
-    void add(String key, Object? v) {
-      if (out.length >= _handlesPerResult) return;
-      if (!_handleKey.hasMatch(key) || secretKey.hasMatch(key)) return;
+    final callLabel = _labelIn(ran.arguments);
+    bool add(String key, Object? v, String? label) {
+      if (out.length >= _handlesPerResult) return false;
+      if (!_handleKey.hasMatch(key) || secretKey.hasMatch(key)) return false;
       final value = switch (v) {
         String() => v.trim(),
         int() => '$v',
         _ => null,
       };
-      if (value == null || value.isEmpty || value.length > 160 || value.contains(RegExp(r'\s'))) return;
-      if (_secretValue.hasMatch(value)) return;
-      out.add(StateHandle(key: key, value: value, tool: p.toolName, callId: p.callId));
+      if (value == null || value.isEmpty || value.length > 160 || value.contains(RegExp(r'\s'))) return false;
+      if (_secretValue.hasMatch(value)) return false;
+      out.add(StateHandle(key: key, value: value, tool: ran.name, callId: p.callId, label: label));
+      return true;
     }
 
     void walk(Object? v, int depth) {
       if (depth > 3 || out.length >= _handlesPerResult) return;
       if (v is Map<Object?, Object?>) {
+        // The object's own id is (by convention) its first handle; other
+        // handles in it (a folder id, a cursor) belong to other objects.
+        String? label = _labelIn(v) ?? (depth == 0 ? callLabel : null);
         for (final e in v.entries) {
-          add(e.key.toString(), e.value);
+          if (add(e.key.toString(), e.value, label)) label = null;
         }
         for (final e in v.values) {
           if (e is Map || e is List) walk(e, depth + 1);
@@ -362,11 +393,24 @@ abstract final class SummaryComposer {
     if (json != null) {
       walk(json, 0);
     } else {
-      for (final m in _handleText.allMatches(text.length > _scanLimit ? text.substring(0, _scanLimit) : text)) {
-        add(m[1]!, m[2]);
+      final matches = _handleText.allMatches(text.length > _scanLimit ? text.substring(0, _scanLimit) : text).toList();
+      for (final m in matches) {
+        add(m[1]!, m[2], matches.length == 1 ? callLabel : null);
       }
     }
     return out;
+  }
+
+  /// A short label from [m]'s title/name-like string value, if any.
+  static String? _labelIn(Map<Object?, Object?> m) {
+    for (final e in m.entries) {
+      final v = e.value;
+      if (v is! String || !_handleLabelKey.hasMatch(e.key.toString()) || secretKey.hasMatch(e.key.toString())) continue;
+      final label = squash(v);
+      if (label.isEmpty || _secretValue.hasMatch(label)) continue;
+      return clipText(label, CompactionSummary.maxHandleLabelChars);
+    }
+    return null;
   }
 
   static Object? _tryJson(String text) {
@@ -380,8 +424,16 @@ abstract final class SummaryComposer {
   // ---------------------------------------------------------------------------
   // Side effects and taint
 
+  /// [ToolResultPart.meta] key the agent loop sets to `true` on the result
+  /// of a call it answered without running it (declined, invalid, refused,
+  /// unknown, a duplicate of another call in the same reply, cut off, or
+  /// cancelled before it started). Such calls are not side effects. An
+  /// interrupted call (outcome unknown) is never marked.
+  static const String metaNotRun = 'ai.sherpa/notRun';
+
   /// Error texts the agent loop writes for calls that never executed; such
   /// calls are not side effects (mirrors `AgentRunner` and `ToolPairing`).
+  /// For transcripts written before [metaNotRun].
   static const List<String> _notExecuted = [
     'The user declined',
     'Cancelled by the user before it ran',
@@ -398,30 +450,132 @@ abstract final class SummaryComposer {
       annotationsFor?.call(def) ??
       (def.source.kind == ToolSourceKind.builtin ? def.annotations : def.annotations.untrustedDefaults);
 
+  /// The model-facing name of the tool that produced [p]: for a call made
+  /// through a proxy such as `call_tool`, its target
+  /// ([ToolResultPart.metaTool], set by the agent loop), else
+  /// [ToolResultPart.toolName]. Use it to attribute tool output (provenance
+  /// tags, taint), never the proxy.
+  static String toolThatRan(ToolResultPart p) {
+    final target = p.meta[ToolResultPart.metaTool];
+    return target is String && target.isNotEmpty ? target : p.toolName;
+  }
+
+  /// What produced [p]: for a call made through a proxy (`call_tool`), the
+  /// tool that actually ran ([toolThatRan]), with its own arguments and
+  /// definition; otherwise [call] itself.
+  static _Ran _ran(ToolResultPart p, ToolCall? call, ToolDefinition? Function(String name) lookup) {
+    final metaServer = p.meta[ToolResultPart.metaServerId];
+    final server = metaServer is String && metaServer.isNotEmpty ? metaServer : null;
+    final target = toolThatRan(p);
+    if (target != p.toolName) {
+      final def = lookup(target);
+      return (name: target, arguments: _proxiedArguments(call), def: def, server: server ?? def?.source.serverId);
+    }
+    final def = lookup(p.toolName);
+    return (name: p.toolName, arguments: call?.arguments ?? const {}, def: def, server: def?.source.serverId ?? server);
+  }
+
+  /// The target's arguments in a proxy call: `call_tool`'s `arguments`
+  /// object, which the router also accepts as a JSON string.
+  static JsonMap _proxiedArguments(ToolCall? call) {
+    final a = call?.arguments['arguments'];
+    if (a is Map<Object?, Object?>) return a.cast<String, Object?>();
+    if (a is String && a.trim().startsWith('{')) {
+      final v = _tryJson(a.trim());
+      if (v is Map<Object?, Object?>) return v.cast<String, Object?>();
+    }
+    return const {};
+  }
+
   static SideEffectRecord? _sideEffect(
     ToolCall call,
+    _Ran ran,
     ToolResultPart result,
-    ToolDefinition? def,
     ToolAnnotations Function(ToolDefinition)? annotationsFor,
   ) {
-    if (call.name == UpdatePlanTool.toolName) return null;
+    if (call.name == UpdatePlanTool.toolName || ran.name == UpdatePlanTool.toolName) return null;
+    if (result.meta[metaNotRun] == true) return null;
     // Unknown definitions count as side effects: wrongly listing a read as
     // "done" costs a re-read, wrongly omitting a write can repeat it.
+    final def = ran.def;
     if (def != null && trustedAnnotations(def, annotationsFor).isReadOnly) return null;
     if (result.isError && _notExecuted.any(result.text.trimLeft().startsWith)) return null;
     // Summaries travel in handoff bundles: secret-named argument values are
     // masked before the preview is encoded, and the digest is taken over the
     // masked arguments too (a digest of a short password is a dictionary
     // attack away from the password).
-    final masked = maskSecretValues(call.arguments)! as Map<String, Object?>;
+    final masked = maskSecretValues(ran.arguments)! as Map<String, Object?>;
+    final key = keyArgument(masked);
     return SideEffectRecord(
       callId: call.id,
-      tool: call.name,
-      server: def?.source.serverId,
+      tool: ran.name,
+      server: ran.server,
       argsDigest: Digest.args(masked),
       outcome: result.isError ? SideEffectOutcome.error : SideEffectOutcome.ok,
-      argsPreview: call.arguments.isEmpty ? null : clipText(Digest.canonicalJson(masked), 120),
+      argsPreview: masked.isEmpty ? null : argsPreview(masked),
+      keyArgs: [?key],
+      declaredReadOnly: def != null && def.annotations.isReadOnly,
     );
+  }
+
+  /// Keys that name what an action is about (besides paths and ids).
+  static final RegExp _labelArgKey = RegExp(
+    r'^(title|name|subject|label|summary|topic|display_?name|to|recipients?|email|query|q)$',
+    caseSensitive: false,
+  );
+
+  /// How much an argument identifies its action (lower first): paths and
+  /// URLs, then titles and names, then ids, then other short scalars, then
+  /// long text, then nested values.
+  static int _argRank(String key, Object? v) {
+    if (v is String) {
+      if (_artifactKey.hasMatch(key) && !v.contains('\n')) return 0;
+      if (_labelArgKey.hasMatch(key)) return 1;
+      if (_handleKey.hasMatch(key)) return 2;
+      return v.length <= 60 && !v.contains('\n') ? 3 : 4;
+    }
+    if (v is num || v is bool || v == null) return _handleKey.hasMatch(key) ? 2 : 3;
+    return 5;
+  }
+
+  static List<String> _rankedKeys(Map<String, Object?> args) {
+    final keys = args.keys.toList();
+    final rank = {for (final k in keys) k: _argRank(k, args[k])};
+    return keys..sort((a, b) => rank[a] != rank[b] ? rank[a]!.compareTo(rank[b]!) : a.compareTo(b));
+  }
+
+  /// A bounded JSON-like excerpt of [args] with the key argument first
+  /// (canonical JSON sorts keys, which put e.g. `arguments` before `name`
+  /// and `content` before `path`, and the clip then cut the identifying
+  /// part off). Long strings are clipped one by one, so one long body can't
+  /// push the others out.
+  static String argsPreview(Map<String, Object?> args, {int max = 160}) {
+    final parts = <String>[];
+    for (final k in _rankedKeys(args)) {
+      final v = args[k];
+      final rank = _argRank(k, v);
+      final value = switch (v) {
+        String() => jsonEncode(clipText(v, rank <= 2 ? 100 : 48)),
+        Map<Object?, Object?>() || List<Object?>() => clipText(Digest.canonicalJson(v), 48),
+        _ => jsonEncode(v),
+      };
+      parts.add('${jsonEncode(k)}:$value');
+    }
+    return clipText('{${parts.join(',')}}', max);
+  }
+
+  /// The one or two arguments that identify the action (`path="/a.txt"`,
+  /// `title="Dentist" date="2026-11-03"`), for ledger aggregates; null when
+  /// no argument is short enough to name it.
+  static String? keyArgument(Map<String, Object?> args) {
+    final out = <String>[];
+    for (final k in _rankedKeys(args)) {
+      final v = args[k];
+      if (_argRank(k, v) > 3 || out.length == 2) break;
+      if (v is String && v.trim().isEmpty) continue;
+      out.add('$k=${jsonEncode(v is String ? clipText(v, out.isEmpty ? 80 : 40) : v)}');
+    }
+    return out.isEmpty ? null : out.join(' ');
   }
 
   static String? _taintSource(String toolName, ToolDefinition? def) {
@@ -440,3 +594,7 @@ abstract final class SummaryComposer {
     return items.where((e) => seen.add(key(e)));
   }
 }
+
+/// The tool behind a result: its model-facing name, the arguments it ran
+/// with, its definition (when known) and its server.
+typedef _Ran = ({String name, JsonMap arguments, ToolDefinition? def, String? server});

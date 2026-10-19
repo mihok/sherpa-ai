@@ -152,8 +152,11 @@ void main() {
       expectRepaired('null', {}, fix: 'null_arguments');
     });
 
-    test('duplicate keys keep the last value', () {
-      expectRepaired('{"a": 1, "a": 2,}', {'a': 2}, fix: 'duplicate_key');
+    test('duplicate keys are refused, not repaired (strict mode, see strict_arguments_test)', () {
+      final r = parse('{"a": 1, "a": 2,}');
+      expect(r.isOk, isFalse);
+      expect(r.error, contains('"a" appears twice'));
+      expect(r.fixes, containsAll(['duplicate_key', ToolArgumentsRepair.refusedFix]));
     });
   });
 

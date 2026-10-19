@@ -19,6 +19,7 @@ import '../features/models/model_detail_screen.dart';
 import '../features/models/model_directory_screen.dart';
 import '../features/models/model_library_screen.dart';
 import '../features/onboarding/onboarding_screen.dart';
+import '../features/perf/perf_lab_screen.dart';
 import '../features/settings/about_screen.dart';
 import '../features/settings/privacy_screen.dart';
 import '../features/settings/provider_form_screen.dart';
@@ -51,6 +52,7 @@ import 'sherpa_page.dart';
 /// /settings/models/browse        Hugging Face browser
 /// /settings/models/browse/:owner/:name   a repo: variants, fit, download
 /// /settings/models/downloads     download queue
+/// /settings/models/performance/:id   performance lab of a local model
 /// /settings/huggingface          Hugging Face token
 /// /settings/tools                MCP tool servers (built in and added)
 /// /settings/tools/add            add a server (?url=&name=&source=link|qr|registry)
@@ -197,6 +199,13 @@ final routerProvider = Provider<GoRouter>((ref) {
                         path: 'downloads',
                         pageBuilder: (context, state) =>
                             SherpaPage<void>(key: state.pageKey, restorationId: 'downloads', child: const DownloadsScreen()),
+                      ),
+                      GoRoute(
+                        path: 'performance/:id',
+                        pageBuilder: (context, state) => SherpaPage<void>(
+                          key: state.pageKey,
+                          child: PerfLabScreen(modelId: state.pathParameters['id']!),
+                        ),
                       ),
                     ],
                   ),

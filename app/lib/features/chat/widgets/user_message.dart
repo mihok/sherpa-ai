@@ -5,6 +5,7 @@ import '../../../design/tokens.dart';
 import '../state/transcript_model.dart';
 import 'chat_style.dart';
 import 'message_actions.dart';
+import 'source_chips.dart';
 import 'transcript.dart';
 
 /// Callbacks a user bubble needs from the screen.
@@ -75,6 +76,8 @@ class UserMessageTile extends StatelessWidget {
     final runActive = ChatRunScope.runningOf(context);
     final tokens = SherpaTokens.of(context);
     final theme = Theme.of(context);
+    final source = item.promptSource;
+    final resources = item.resources;
     Offset? pressAt;
     return RepaintBoundary(
       child: ReadableWidth(
@@ -92,12 +95,28 @@ class UserMessageTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                GestureDetector(
-                  onLongPressStart: (d) => pressAt = d.globalPosition,
-                  onLongPress: () => _showMenu(context, pressAt ?? Offset.zero, runActive: runActive),
-                  onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition, runActive: runActive),
-                  child: UserBubble(text: item.text),
-                ),
+                if (source != null)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: tokens.space.xs),
+                    child: PromptSourceLabel(source: source),
+                  ),
+                if (item.text.trim().isNotEmpty || resources.isEmpty)
+                  GestureDetector(
+                    onLongPressStart: (d) => pressAt = d.globalPosition,
+                    onLongPress: () => _showMenu(context, pressAt ?? Offset.zero, runActive: runActive),
+                    onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition, runActive: runActive),
+                    child: UserBubble(text: item.text),
+                  ),
+                if (resources.isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(top: tokens.space.xs),
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: tokens.space.xs,
+                      runSpacing: tokens.space.xs,
+                      children: [for (final r in resources) ResourceChip.of(r)],
+                    ),
+                  ),
                 if (item.isEdit || item.branch.hasSiblings)
                   Row(
                     mainAxisSize: MainAxisSize.min,

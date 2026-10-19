@@ -55,12 +55,14 @@ class SettingsScreen extends ConsumerWidget {
                     runSpacing: t.space.xs,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Text(choice.modelId),
+                      Text(ref.watch(modelDisplayNameProvider(choice))),
                       if (privacy != null) PrivacyBadge(location: privacy.location, host: privacy.host),
                     ],
                   ),
                 ),
-          enabled: configs.isNotEmpty,
+          // On-device models count: a phone with only local models can
+          // still pick a default.
+          enabled: configs.isNotEmpty || (ref.watch(localModelsProvider).value?.isNotEmpty ?? false),
           onTap: () => unawaited(showDefaultModelSheet(context)),
         ),
         ListTile(

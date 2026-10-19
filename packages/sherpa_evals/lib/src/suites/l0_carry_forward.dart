@@ -79,7 +79,7 @@ Future<(List<CaseResult>, CarryTotals)> runCarryForward({String? only}) async {
         problems.add('lost: ${x['text']}');
       }
     }
-    final ids = [for (final e in s.sideEffectLedger) e.callId];
+    final ids = [for (final e in s.sideEffectLedger) ...e.allCallIds];
     t.duplicates = ids.length - ids.toSet().length;
     if (t.duplicates > 0) problems.add('${t.duplicates} duplicate ledger entries');
     final rendered = s.render();

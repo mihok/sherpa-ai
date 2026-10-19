@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../design/tokens.dart';
+import '../../../services/mcp/composer_sources.dart';
 import 'chat_style.dart';
+import 'source_chips.dart';
 
 /// A built-in `/command`.
 @immutable
@@ -32,7 +34,13 @@ class ComposerEditing {
 /// * Hardware keyboards: Enter sends, Shift+Enter inserts a newline (and an
 ///   IME composition is never interrupted), Esc stops, Ctrl/⌘+↑ edits the
 ///   last message.
-/// * Typing `/` lists the built-in commands; ↑/↓ and Enter pick one.
+/// * Typing `/` lists the built-in commands and the prompts of the chat's
+///   tool servers ([promptCommands], `/server:prompt`); ↑/↓ and Enter pick
+///   one. A prompt that takes arguments is typed out (`/server:prompt
+///   topic="…"`) and runs on send ([onPromptCommand]).
+/// * Typing `@` asks for resource suggestions ([onMentionQuery], answered
+///   through [mentionSuggestions]); a picked one becomes a chip that is
+///   sent with the message.
 class ChatComposer extends StatefulWidget {
   const ChatComposer({
     super.key,
@@ -47,6 +55,11 @@ class ChatComposer extends StatefulWidget {
     this.hintText = 'Message',
     this.editing,
     this.onEditLast,
+    this.promptCommands = const [],
+    this.onPromptCommand,
+    this.mentionSuggestions = const [],
+    this.onMentionQuery,
+    this.onSendWithMentions,
   });
 
   final TextEditingController controller;
@@ -63,12 +76,59 @@ class ChatComposer extends StatefulWidget {
   final ComposerEditing? editing;
   final VoidCallback? onEditLast;
 
+  /// Slash commands from MCP prompts. Their names, titles and descriptions
+  /// come from the server and are shown as such.
+  final List<McpPromptCommand> promptCommands;
+
+  /// Runs [McpPromptCommand] with what was typed after it, plus the
+  /// resources picked with `@`.
+  final void Function(McpPromptCommand command, String arguments, List<McpResourceSuggestion> mentions)?
+      onPromptCommand;
+
+  /// Suggestions for the `@` query last reported through [onMentionQuery].
+  final List<McpResourceSuggestion> mentionSuggestions;
+
+  /// What the user typed after `@` at the cursor; null when not mentioning.
+  /// Null itself: mentions are off.
+  final void Function(String? query)? onMentionQuery;
+
+  /// Sends the text together with the picked resources (falls back to
+  /// [onSend] when none are picked).
+  final void Function(String text, List<McpResourceSuggestion> mentions)? onSendWithMentions;
+
   @override
   State<ChatComposer> createState() => _ChatComposerState();
 }
 
+/// One row of the composer's pop-up menu (a command or a mention).
+final class _MenuEntry {
+  const _MenuEntry({
+    required this.title,
+    required this.description,
+    required this.icon,
+    required this.onSelect,
+    this.source,
+    this.enabled = true,
+  });
+
+  final String title;
+  final String? description;
+  final IconData icon;
+  final VoidCallback onSelect;
+
+  /// The tool server the entry comes from (its text is the server's).
+  final String? source;
+  final bool enabled;
+}
+
 class _ChatComposerState extends State<ChatComposer> {
   int _highlight = 0;
+
+  /// Resources picked with `@`, sent with the next message.
+  final List<McpResourceSuggestion> _mentions = [];
+
+  /// The `@` token at the cursor: where it starts and what follows it.
+  ({int start, String query})? _mentionToken;
 
   @override
   void initState() {
@@ -97,11 +157,64 @@ class _ChatComposerState extends State<ChatComposer> {
     super.dispose();
   }
 
-  void _onText() => setState(() => _highlight = 0);
+  void _onText() {
+    final token = _currentMentionToken();
+    final changed = token?.query != _mentionToken?.query || (token == null) != (_mentionToken == null);
+    setState(() {
+      _highlight = 0;
+      _mentionToken = token;
+    });
+    if (changed) widget.onMentionQuery?.call(token?.query);
+  }
+
+  /// `@word` ending at the cursor (after a space or at the start), while
+  /// mentions are on and an earlier message isn't being edited.
+  ({int start, String query})? _currentMentionToken() {
+    if (widget.onMentionQuery == null || widget.editing != null) return null;
+    final v = widget.controller.value;
+    final caret = v.selection.isValid && v.selection.isCollapsed ? v.selection.baseOffset : v.text.length;
+    if (caret < 0 || caret > v.text.length) return null;
+    final before = v.text.substring(0, caret);
+    final at = before.lastIndexOf('@');
+    if (at < 0 || (at > 0 && !RegExp(r'\s').hasMatch(before[at - 1]))) return null;
+    final query = before.substring(at + 1);
+    if (query.contains(RegExp(r'\s'))) return null;
+    return (start: at, query: query);
+  }
+
+  void _pickMention(McpResourceSuggestion s) {
+    final token = _mentionToken;
+    final v = widget.controller.value;
+    if (token != null) {
+      final end = token.start + 1 + token.query.length;
+      final text = v.text.replaceRange(token.start, end.clamp(0, v.text.length), '');
+      widget.controller.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: token.start));
+    }
+    setState(() {
+      if (!_mentions.any((m) => m.mention == s.mention)) _mentions.add(s);
+      _mentionToken = null;
+    });
+    widget.onMentionQuery?.call(null);
+    widget.focusNode.requestFocus();
+  }
+
+  void _removeMention(McpResourceSuggestion s) => setState(() => _mentions.removeWhere((m) => m.mention == s.mention));
+
+  /// The prompt command the text starts with (`/server:prompt`, then a
+  /// space or the end).
+  ({McpPromptCommand command, String rest})? get _promptInvocation {
+    final t = widget.controller.text;
+    if (!t.startsWith('/')) return null;
+    final m = RegExp(r'^/(\S+)(?:\s+([\s\S]*))?$').firstMatch(t);
+    if (m == null) return null;
+    final name = m[1]!.toLowerCase();
+    final c = widget.promptCommands.where((c) => c.command == name).firstOrNull;
+    return c == null ? null : (command: c, rest: m[2] ?? '');
+  }
 
   void _onFocus() => setState(() {});
 
-  bool get _hasText => widget.controller.text.trim().isNotEmpty;
+  bool get _hasText => widget.controller.text.trim().isNotEmpty || _mentions.isNotEmpty;
 
   /// Commands matching a leading `/word` (no spaces yet).
   List<SlashCommand> get _matches {
@@ -111,10 +224,57 @@ class _ChatComposerState extends State<ChatComposer> {
     return widget.commands.where((c) => c.name.startsWith(q)).toList();
   }
 
+  /// Prompt commands matching a leading `/word`.
+  List<McpPromptCommand> get _promptMatches {
+    final t = widget.controller.text;
+    if (widget.promptCommands.isEmpty || !t.startsWith('/') || t.contains(RegExp(r'\s'))) return const [];
+    final q = t.substring(1).toLowerCase();
+    return widget.promptCommands
+        .where((c) => c.command.startsWith(q) || c.command.contains(':$q') || c.label.toLowerCase().startsWith(q))
+        .toList();
+  }
+
+  /// What the pop-up menu shows now: mention suggestions while typing
+  /// `@…`, otherwise matching commands.
+  List<_MenuEntry> get _menu {
+    if (_mentionToken != null) {
+      return [
+        for (final s in widget.mentionSuggestions)
+          _MenuEntry(
+            title: '@${s.mention}',
+            description: s.label == s.resource.name ? s.resource.description : s.label,
+            icon: Icons.alternate_email_rounded,
+            source: s.serverName,
+            onSelect: () => _pickMention(s),
+          ),
+      ];
+    }
+    return [
+      for (final c in _matches)
+        _MenuEntry(title: '/${c.name}', description: c.description, icon: c.icon, enabled: c.enabled, onSelect: () => _run(c)),
+      for (final c in _promptMatches)
+        _MenuEntry(
+          title: '/${c.command}',
+          description: c.description ?? (c.label == c.prompt.name ? null : c.label),
+          icon: Icons.extension_outlined,
+          source: c.serverName,
+          onSelect: () => _pickPrompt(c),
+        ),
+    ];
+  }
+
   void _submit() {
     if (widget.running || !widget.canSend || !_hasText) return;
     final exact = _matches.where((c) => '/${c.name}' == widget.controller.text.trim()).firstOrNull;
     if (exact != null) return _run(exact);
+    final prompt = _promptInvocation;
+    if (prompt != null && widget.onPromptCommand != null) return _runPrompt(prompt.command, prompt.rest);
+    final mentions = List.of(_mentions);
+    if (mentions.isNotEmpty && widget.onSendWithMentions != null) {
+      setState(_mentions.clear);
+      widget.onSendWithMentions!(widget.controller.text, mentions);
+      return;
+    }
     widget.onSend(widget.controller.text);
   }
 
@@ -124,16 +284,34 @@ class _ChatComposerState extends State<ChatComposer> {
     widget.onCommand(c);
   }
 
+  /// From the menu: a prompt without arguments runs at once; one with
+  /// arguments is typed out so they can follow.
+  void _pickPrompt(McpPromptCommand c) {
+    if (c.arguments.isEmpty) return _runPrompt(c, '');
+    final text = '/${c.command} ';
+    widget.controller.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
+    widget.focusNode.requestFocus();
+  }
+
+  void _runPrompt(McpPromptCommand c, String rest) {
+    if (widget.running || !widget.canSend) return;
+    final mentions = List.of(_mentions);
+    setState(_mentions.clear);
+    widget.controller.clear();
+    widget.onPromptCommand?.call(c, rest, mentions);
+  }
+
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
     final keys = HardwareKeyboard.instance;
     final key = event.logicalKey;
-    final matches = _matches;
+    final matches = _menu;
     if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
       if (keys.isShiftPressed) return KeyEventResult.ignored; // newline
       if (widget.controller.value.composing.isValid) return KeyEventResult.ignored; // IME commit
       if (matches.isNotEmpty) {
-        _run(matches[_highlight.clamp(0, matches.length - 1)]);
+        final entry = matches[_highlight.clamp(0, matches.length - 1)];
+        if (entry.enabled) entry.onSelect();
       } else {
         _submit();
       }
@@ -147,6 +325,11 @@ class _ChatComposerState extends State<ChatComposer> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.escape) {
+      if (matches.isNotEmpty && _mentionToken != null) {
+        setState(() => _mentionToken = null);
+        widget.onMentionQuery?.call(null);
+        return KeyEventResult.handled;
+      }
       if (matches.isNotEmpty) {
         widget.controller.clear();
         return KeyEventResult.handled;
@@ -176,13 +359,37 @@ class _ChatComposerState extends State<ChatComposer> {
     final tokens = SherpaTokens.of(context);
     final theme = Theme.of(context);
     final motion = chatMotionOf(context);
-    final matches = _matches;
+    final matches = _menu;
+    final invocation = _promptInvocation;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (matches.isNotEmpty)
-          _SlashMenu(commands: matches, highlight: _highlight.clamp(0, matches.length - 1), onSelect: _run),
+          _SlashMenu(
+            entries: matches,
+            highlight: _highlight.clamp(0, matches.length - 1),
+            label: _mentionToken != null ? 'Resources' : 'Commands',
+          ),
+        if (invocation != null && invocation.command.arguments.isNotEmpty && matches.isEmpty)
+          _PromptHint(command: invocation.command, rest: invocation.rest),
+        if (_mentions.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: tokens.space.xs),
+            child: Wrap(
+              spacing: tokens.space.xs,
+              runSpacing: tokens.space.xs,
+              children: [
+                for (final m in _mentions)
+                  ResourceChip(
+                    key: ValueKey('mention:${m.mention}'),
+                    label: m.label,
+                    serverName: m.serverName,
+                    onRemove: () => _removeMention(m),
+                  ),
+              ],
+            ),
+          ),
         if (widget.editing != null)
           Padding(
             padding: EdgeInsets.only(bottom: tokens.space.xs),
@@ -299,11 +506,11 @@ class _ChatComposerState extends State<ChatComposer> {
 }
 
 class _SlashMenu extends StatelessWidget {
-  const _SlashMenu({required this.commands, required this.highlight, required this.onSelect});
+  const _SlashMenu({required this.entries, required this.highlight, required this.label});
 
-  final List<SlashCommand> commands;
+  final List<_MenuEntry> entries;
   final int highlight;
-  final void Function(SlashCommand c) onSelect;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
@@ -321,42 +528,130 @@ class _SlashMenu extends StatelessWidget {
         child: Semantics(
           container: true,
           role: SemanticsRole.menu,
-          label: 'Commands',
+          label: label,
           explicitChildNodes: true,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final (i, c) in commands.indexed)
-                Semantics(
-                  role: SemanticsRole.menuItem,
-                  selected: i == highlight,
-                  child: InkWell(
-                    onTap: c.enabled ? () => onSelect(c) : null,
-                    child: Container(
-                      constraints: BoxConstraints(minHeight: tokens.space.minTouchTarget),
-                      color: i == highlight ? theme.colorScheme.surfaceContainerHighest : null,
-                      padding: EdgeInsets.symmetric(horizontal: tokens.space.lg, vertical: tokens.space.sm),
-                      child: Row(
-                        children: [
-                          Icon(c.icon, size: ChatIconSize.medium, color: theme.colorScheme.onSurfaceVariant),
-                          SizedBox(width: tokens.space.md),
-                          Text('/${c.name}', style: chatMonoStyle(context).copyWith(fontWeight: FontWeight.w600)),
-                          SizedBox(width: tokens.space.md),
-                          Expanded(
-                            child: Text(
-                              c.enabled ? c.description : '${c.description} (not available now)',
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: c.enabled ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
+          child: ConstrainedBox(
+            // Many servers can offer many prompts: the menu scrolls rather
+            // than pushing the composer off screen.
+            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.4),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final (i, c) in entries.indexed)
+                    Semantics(
+                      role: SemanticsRole.menuItem,
+                      selected: i == highlight,
+                      child: InkWell(
+                        onTap: c.enabled ? c.onSelect : null,
+                        child: Container(
+                          constraints: BoxConstraints(minHeight: tokens.space.minTouchTarget),
+                          color: i == highlight ? theme.colorScheme.surfaceContainerHighest : null,
+                          padding: EdgeInsets.symmetric(horizontal: tokens.space.lg, vertical: tokens.space.sm),
+                          child: Row(
+                            children: [
+                              Icon(c.icon, size: ChatIconSize.medium, color: theme.colorScheme.onSurfaceVariant),
+                              SizedBox(width: tokens.space.md),
+                              Flexible(
+                                flex: c.source == null ? 0 : 1,
+                                child: Text(
+                                  c.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: chatMonoStyle(context).copyWith(fontWeight: FontWeight.w600),
+                                ),
                               ),
-                            ),
+                              SizedBox(width: tokens.space.md),
+                              Expanded(
+                                flex: c.source == null ? 1 : 2,
+                                child: c.source == null
+                                    ? Text(
+                                        c.enabled ? c.description ?? '' : '${c.description ?? ''} (not available now)',
+                                        style: theme.textTheme.bodyMedium?.copyWith(
+                                          color: c.enabled ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
+                                        ),
+                                      )
+                                    : _ServerText(description: c.description, source: c.source!),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
-                ),
-            ],
+                ],
+              ),
+            ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A server's own description, with the server named under it: the text
+/// is the server's, not Sherpa's.
+class _ServerText extends StatelessWidget {
+  const _ServerText({required this.description, required this.source});
+
+  final String? description;
+  final String source;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.colorScheme.onSurfaceVariant;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (description != null && description!.trim().isNotEmpty)
+          Text(
+            description!,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurface),
+          ),
+        Text('from $source', style: theme.textTheme.labelSmall?.copyWith(color: muted)),
+      ],
+    );
+  }
+}
+
+/// Under `/server:prompt …`: which arguments the prompt takes and which
+/// are still missing.
+class _PromptHint extends StatelessWidget {
+  const _PromptHint({required this.command, required this.rest});
+
+  final McpPromptCommand command;
+  final String rest;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    final missing = command.missing(command.parseArguments(rest)).toSet();
+    final parts = [
+      for (final a in command.arguments)
+        '${a.name}${a.required ? (missing.contains(a.name) ? ' (required)' : ' ✓') : ' (optional)'}',
+    ];
+    final color = missing.isEmpty ? theme.colorScheme.onSurfaceVariant : tokens.semantic.warning;
+    return Padding(
+      padding: EdgeInsets.only(bottom: tokens.space.xs, left: tokens.space.md, right: tokens.space.md),
+      child: Semantics(
+        liveRegion: true,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.extension_outlined, size: ChatIconSize.small, color: color),
+            SizedBox(width: tokens.space.sm),
+            Expanded(
+              child: Text(
+                '${command.label} from ${command.serverName} takes ${parts.join(', ')}. '
+                '${command.arguments.length == 1 ? 'Type it after the command.' : 'Type them in order, or as name="value".'}',
+                style: theme.textTheme.labelMedium?.copyWith(color: color),
+              ),
+            ),
+          ],
         ),
       ),
     );

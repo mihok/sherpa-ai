@@ -12,6 +12,7 @@ import '../../design/widgets/section_header.dart';
 import '../../routing/routes.dart';
 import '../../state/app_providers.dart';
 import '../../state/provider_location.dart';
+import '../../state/ui_preferences.dart';
 import '../context/data/data_actions.dart';
 import '../providers/fields.dart';
 import 'settings_page.dart';
@@ -34,6 +35,8 @@ class PrivacyScreen extends ConsumerWidget {
       for (final l in ExecutionLocation.values) l: [for (final c in configs) if (locationOf(c) == l) c],
     };
     final body = theme.textTheme.bodyMedium;
+    final onDevice = ref.watch(localModelsProvider).value ?? const <ModelDescriptor>[];
+    final modelSummaries = ref.watch(uiSettingsProvider.select((s) => s.modelSummaries));
 
     return SettingsPage(
       title: 'Privacy & data',
@@ -42,8 +45,9 @@ class PrivacyScreen extends ConsumerWidget {
         const SectionHeader('Where your data goes'),
         _LocationGroup(
           title: 'On this phone',
-          empty: 'Nothing yet. Downloadable on-device models arrive in the next release.',
+          empty: 'No models on this phone yet. Download one in On-device models, or run a server on this phone.',
           configs: byLocation[ExecutionLocation.onDevice]!,
+          leading: [if (onDevice.isNotEmpty) _OnDeviceModelsTile(models: onDevice)],
         ),
         _LocationGroup(
           title: 'Your network',
@@ -54,6 +58,22 @@ class PrivacyScreen extends ConsumerWidget {
           title: 'Internet services',
           empty: 'No cloud providers connected.',
           configs: byLocation[ExecutionLocation.remote]!,
+        ),
+        const SectionHeader('Long chats'),
+        SwitchListTile(
+          title: const Text("Let the chat's model write summaries"),
+          subtitle: const Text(
+            'When a chat gets long, Sherpa summarizes its older messages so it can keep going. On-device '
+            'models always write their own summaries. For other models, Sherpa makes a simpler summary on '
+            "this phone unless you turn this on: then the older conversation is sent to the chat's "
+            'provider once more to be summarized.',
+          ),
+          isThreeLine: true,
+          value: modelSummaries,
+          onChanged: (v) {
+            ref.read(hapticsProvider).selection();
+            unawaited(ref.read(uiSettingsProvider.notifier).update((s) => s.copyWith(modelSummaries: v)));
+          },
         ),
         const SectionHeader('The trust boundary'),
         SettingsPadding(
@@ -139,6 +159,7 @@ class _RightNowCard extends ConsumerWidget {
     final theme = Theme.of(context);
     final choice = ref.watch(defaultModelProvider).value;
     final privacy = choice == null ? null : ref.watch(providerPrivacyProvider(choice.providerId));
+    final name = choice == null ? null : ref.watch(modelDisplayNameProvider(choice));
     return Padding(
       padding: EdgeInsets.fromLTRB(t.space.lg, t.space.lg, t.space.lg, 0),
       child: Card(
@@ -152,7 +173,7 @@ class _RightNowCard extends ConsumerWidget {
               if (choice == null || privacy == null)
                 Text('No default model. New chats will ask which model to use.', style: theme.textTheme.bodyLarge)
               else ...[
-                Text('New chats use ${choice.modelId}.', style: theme.textTheme.bodyLarge),
+                Text('New chats use $name.', style: theme.textTheme.bodyLarge),
                 SizedBox(height: t.space.sm),
                 PrivacyBadge(location: privacy.location, host: privacy.host),
               ],
@@ -165,11 +186,14 @@ class _RightNowCard extends ConsumerWidget {
 }
 
 class _LocationGroup extends StatelessWidget {
-  const _LocationGroup({required this.title, required this.empty, required this.configs});
+  const _LocationGroup({required this.title, required this.empty, required this.configs, this.leading = const []});
 
   final String title;
   final String empty;
   final List<ProviderConfig> configs;
+
+  /// Rows above the configs (the on-device models).
+  final List<Widget> leading;
 
   @override
   Widget build(BuildContext context) {
@@ -182,7 +206,8 @@ class _LocationGroup extends StatelessWidget {
           padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.lg, t.space.xs),
           child: Semantics(headingLevel: 3, child: Text(title, style: theme.textTheme.titleSmall)),
         ),
-        if (configs.isEmpty)
+        ...leading,
+        if (configs.isEmpty && leading.isEmpty)
           Padding(
             padding: EdgeInsets.symmetric(horizontal: t.space.lg, vertical: t.space.xs),
             child: Text(empty, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
@@ -205,6 +230,37 @@ class _LocationGroup extends StatelessWidget {
   }
 }
 
+/// "On this phone: 3 on-device models", with their names.
+class _OnDeviceModelsTile extends StatelessWidget {
+  const _OnDeviceModelsTile({required this.models});
+
+  final List<ModelDescriptor> models;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = SherpaTokens.of(context);
+    final n = models.length;
+    final names = models.take(3).map((m) => m.displayName).join(', ');
+    final more = n > 3 ? ' and ${n - 3} more' : '';
+    return ListTile(
+      title: Text('$n on-device ${n == 1 ? 'model' : 'models'}'),
+      subtitle: Padding(
+        padding: EdgeInsets.only(top: t.space.xs),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('$names$more', maxLines: 2, overflow: TextOverflow.ellipsis),
+            SizedBox(height: t.space.xs),
+            const PrivacyBadge(location: ExecutionLocation.onDevice),
+          ],
+        ),
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => context.go(Routes.models),
+    );
+  }
+}
+
 class _IndicatorRow extends StatelessWidget {
   const _IndicatorRow({required this.badge, required this.meaning});
 
@@ -220,7 +276,10 @@ class _IndicatorRow extends StatelessWidget {
         spacing: t.space.md,
         runSpacing: t.space.xs,
         crossAxisAlignment: WrapCrossAlignment.center,
-        children: [badge, Text(meaning, style: Theme.of(context).textTheme.bodyMedium)],
+        children: [
+          badge,
+          Text(meaning, style: Theme.of(context).textTheme.bodyMedium),
+        ],
       ),
     );
   }

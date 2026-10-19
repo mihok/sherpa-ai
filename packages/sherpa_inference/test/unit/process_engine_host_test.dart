@@ -5,7 +5,6 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_inference/sherpa_inference.dart';
-import 'package:sherpa_inference/src/ffi/bindings.dart';
 import 'package:sherpa_inference/testing.dart';
 
 import '../support/fake_inference_service.dart';

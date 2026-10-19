@@ -29,7 +29,8 @@ enum ProviderAvailability {
   /// provider setup.
   noProviders,
 
-  /// Providers exist but neither the chat nor the defaults name a model.
+  /// Providers exist (or models on this phone, [ChatViewState.onDeviceModels])
+  /// but neither the chat nor the defaults name a model.
   needsModel,
 
   /// The chat names a provider that was removed or can't be built.
@@ -261,6 +262,7 @@ final class ChatViewState {
     this.error,
     this.interrupted,
     this.scrollRequest,
+    this.onDeviceModels = 0,
   });
 
   final String sessionId;
@@ -302,6 +304,11 @@ final class ChatViewState {
   final InterruptedRun? interrupted;
   final ChatScrollRequest? scrollRequest;
 
+  /// Models installed on this phone, counted while the chat has no model
+  /// yet: with no provider configured they still make the chat usable
+  /// ([ProviderAvailability.needsModel] rather than `noProviders`).
+  final int onDeviceModels;
+
   bool get isRunActive => status.isActive;
   bool get canSend => availability == ProviderAvailability.ready && !isRunActive && !loading;
 
@@ -336,6 +343,7 @@ final class ChatViewState {
     Object? error = _keep,
     Object? interrupted = _keep,
     Object? scrollRequest = _keep,
+    int? onDeviceModels,
   }) =>
       ChatViewState(
         sessionId: sessionId,
@@ -361,5 +369,6 @@ final class ChatViewState {
         interrupted: identical(interrupted, _keep) ? this.interrupted : interrupted as InterruptedRun?,
         scrollRequest:
             identical(scrollRequest, _keep) ? this.scrollRequest : scrollRequest as ChatScrollRequest?,
+        onDeviceModels: onDeviceModels ?? this.onDeviceModels,
       );
 }

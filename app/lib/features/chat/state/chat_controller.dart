@@ -7,9 +7,13 @@ import 'package:flutter_riverpod/misc.dart' show KeepAliveLink;
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
+import '../../../services/inference/local_model_provider.dart' show kLocalProviderName;
+import '../../../services/mcp/composer_sources.dart';
 import '../../../state/providers.dart';
 import '../../../state/services.dart';
+import '../../../state/ui_preferences.dart';
 import '../../context/state/context_actions.dart';
+import '../../mcp/state/mcp_providers.dart';
 import 'chat_dependencies.dart';
 import 'chat_errors.dart';
 import 'chat_view_state.dart';
@@ -141,6 +145,8 @@ class ChatController extends Notifier<ChatViewState> {
     ref.onDispose(_dispose);
     _registrySub = _registry.changes.listen((_) => _onRegistryChanged());
     _prefsSub = _prefs?.changes.listen((_) => unawaited(_guarded(_refreshModel, failed: "update this chat's model")));
+    // Who writes summaries is part of the runner's context manager.
+    ref.listen(uiSettingsProvider.select((s) => s.modelSummaries), (_, _) => _invalidateRunner());
     _loaded = _load();
     return ChatViewState(sessionId: sessionId);
   }
@@ -156,16 +162,121 @@ class ChatController extends Notifier<ChatViewState> {
   ///
   /// The message appears synchronously, before anything is persisted, so
   /// tapping send never feels like it waited on storage.
-  Future<void> send(String text) async {
+  ///
+  /// [mentions] (MCP resources picked with `@`) are resolved after that and
+  /// attached to the message: the text of a small one is embedded, others
+  /// are linked. The agent loop counts either as untrusted content.
+  Future<void> send(String text, {List<McpResourceSuggestion> mentions = const []}) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty || _runActive) return;
+    if ((trimmed.isEmpty && mentions.isEmpty) || _runActive) return;
     unawaited(_platform.haptic(ChatHaptic.send));
     await _launch(
       anchorAt: state.items.length,
-      pendingUser: trimmed,
-      open: (runner) => runner.send(sessionId, [TextPart(trimmed)]),
-      again: () => send(trimmed),
+      pendingUser: trimmed.isEmpty ? mentions.map((m) => '@${m.mention}').join(' ') : trimmed,
+      userTurn: true,
+      open: (runner) async {
+        final attached = await _resolveMentions(mentions);
+        return runner.send(
+          sessionId,
+          [if (trimmed.isNotEmpty) TextPart(trimmed), ...attached.parts],
+          metadata: attached.metadata,
+        );
+      },
+      again: () => send(trimmed, mentions: mentions),
     );
+  }
+
+  /// Sends what an MCP prompt (a slash command) expanded to. Every message
+  /// before the last is stored as the prompt wrote it; the last one, a user
+  /// message, is sent through the runner. Each keeps the prompt's metadata,
+  /// so a message from a server the user doesn't trust stays flagged as
+  /// untrusted for the agent loop, and the transcript says where it came
+  /// from. [mentions] attach to the last message as in [send].
+  ///
+  /// A prompt that ends with an assistant message leaves nothing to answer:
+  /// its messages are added and the user continues from there.
+  Future<void> sendPrompt(McpExpandedPrompt prompt, {List<McpResourceSuggestion> mentions = const []}) async {
+    if (_runActive || prompt.messages.isEmpty) return;
+    final messages = prompt.messages;
+    final last = messages.last;
+    if (last.role != Role.user) {
+      await _guarded(failed: 'add the prompt', () async {
+        await _appendPromptMessages(prompt, messages);
+        await _reloadPath(force: true, scroll: ChatScrollKind.bottom);
+      });
+      return;
+    }
+    final text = [for (final p in last.content) if (p is TextPart) p.text].join('\n').trim();
+    unawaited(_platform.haptic(ChatHaptic.send));
+    await _launch(
+      anchorAt: state.items.length,
+      pendingUser: text.isEmpty ? '/${prompt.command.command}' : text,
+      userTurn: true,
+      open: (runner) async {
+        await _appendPromptMessages(prompt, messages.sublist(0, messages.length - 1));
+        final attached = await _resolveMentions(mentions);
+        return runner.send(
+          sessionId,
+          [...last.content, ...attached.parts],
+          metadata: {..._promptMetadata(prompt, last), ...attached.metadata},
+        );
+      },
+      again: () => sendPrompt(prompt, mentions: mentions),
+    );
+  }
+
+  /// [m]'s metadata plus the server's name and the command, for the label.
+  static JsonMap _promptMetadata(McpExpandedPrompt prompt, McpExpandedMessage m) {
+    final p = m.metadata[kMcpPromptKey];
+    return {
+      ...m.metadata,
+      kMcpPromptKey: {
+        if (p is Map) ...p.cast<String, Object?>(),
+        'serverName': prompt.command.serverName,
+        'command': prompt.command.command,
+      },
+    };
+  }
+
+  /// Stores [messages] as a chain under the active leaf and moves the leaf
+  /// to the last one.
+  Future<void> _appendPromptMessages(McpExpandedPrompt prompt, List<McpExpandedMessage> messages) async {
+    if (messages.isEmpty) return;
+    final session = await _requireSession();
+    final ids = ref.read(idGeneratorProvider);
+    var parent = session.activeLeafId;
+    for (final m in messages) {
+      final message = Message(
+        id: ids.next('msg'),
+        parentId: parent,
+        role: m.role,
+        content: m.content,
+        createdAt: _clock.now(),
+        metadata: _promptMetadata(prompt, m),
+      );
+      await _store.putMessage(sessionId, message);
+      parent = message.id;
+    }
+    await _store.putSession(session.copyWith(activeLeafId: parent, updatedAt: _clock.now()));
+  }
+
+  /// Resolves `@` mentions to message parts, plus the metadata that names
+  /// each one's server for the transcript.
+  Future<({List<ContentPart> parts, JsonMap metadata})> _resolveMentions(List<McpResourceSuggestion> mentions) async {
+    if (mentions.isEmpty) return (parts: const <ContentPart>[], metadata: const <String, Object?>{});
+    final sources = ref.read(chatMcpSourcesProvider);
+    final parts = <ContentPart>[];
+    final listed = <JsonMap>[];
+    for (final m in mentions) {
+      final part = await sources.resolveMention(m);
+      final uri = switch (part) {
+        EmbeddedResourcePart(:final uri) || ResourceLinkPart(:final uri) => uri,
+        _ => m.resource.uri,
+      };
+      parts.add(part);
+      listed.add({'uri': uri, 'serverId': m.serverId, 'serverName': m.serverName, 'mention': m.mention, 'name': m.label});
+    }
+    return (parts: parts, metadata: {kMcpResourcesKey: listed});
   }
 
   /// Stops everything: streaming, tools, and any open approval (denied).
@@ -196,6 +307,7 @@ class ChatController extends Notifier<ChatViewState> {
     await _launch(
       anchorAt: _itemIndexOf(assistantMessageId),
       keepThrough: parentId,
+      userTurn: true,
       open: (runner) => runner.regenerate(sessionId, fromMessageId: parentId),
       again: () => retry(assistantMessageId),
     );
@@ -223,6 +335,7 @@ class ChatController extends Notifier<ChatViewState> {
     }
     await _launch(
       anchorAt: state.items.length,
+      userTurn: true,
       open: (runner) => runner.regenerate(sessionId, fromMessageId: leaf.id),
       again: retryLast,
     );
@@ -256,6 +369,7 @@ class ChatController extends Notifier<ChatViewState> {
       anchorAt: _itemIndexOf(userMessageId),
       keepBefore: userMessageId,
       pendingUser: trimmed,
+      userTurn: true,
       open: (runner) => runner.edit(sessionId, userMessageId, [TextPart(trimmed)]),
       again: () => edit(userMessageId, trimmed),
     );
@@ -267,14 +381,17 @@ class ChatController extends Notifier<ChatViewState> {
   /// it is rolled back if the run can't start (no provider, store error).
   /// [again] is the public call that launched it: "Try again" on a failure
   /// to start repeats it (resends the message) rather than regenerating an
-  /// earlier reply.
+  /// earlier reply. [userTurn] marks a new user turn (send, edit,
+  /// regenerate; not "continue"): tool changes made since the chat's tool
+  /// list was frozen take effect from it ([toolsUserTurnHookProvider]).
   Future<void> _launch({
     required int anchorAt,
-    required Stream<AgentEvent> Function(AgentRunner runner) open,
+    required FutureOr<Stream<AgentEvent>> Function(AgentRunner runner) open,
     required Future<void> Function() again,
     String? pendingUser,
     String? keepThrough,
     String? keepBefore,
+    bool userTurn = false,
   }) async {
     if (_runActive) return;
     final previousPath = _path;
@@ -331,7 +448,43 @@ class ChatController extends Notifier<ChatViewState> {
       rollback(null);
       return;
     }
-    await _run(open(runner), anchorAt: anchorAt);
+    if (userTurn) _userTurnBoundary();
+    Stream<AgentEvent> events;
+    try {
+      events = await open(runner);
+    } on Object catch (e, st) {
+      debugPrint('chat[$sessionId]: $e\n$st');
+      if (_disposed) return;
+      rollback(chatErrorFrom(e, model: state.model));
+      return;
+    }
+    if (_disposed) return;
+    if (_stopping) {
+      rollback(null);
+      return;
+    }
+    await _run(events, anchorAt: anchorAt);
+  }
+
+  /// A new user turn: lets MCP start a new tool segment when servers,
+  /// switches or approvals changed since this chat's tool list was frozen.
+  void _userTurnBoundary() {
+    try {
+      ref.read(toolsUserTurnHookProvider)(sessionId);
+    } on Object catch (e) {
+      debugPrint('chat[$sessionId] (tool segment): $e');
+    }
+  }
+
+  /// Waits until MCP has listed every server's tools (start-up), so a
+  /// resumed run finds the tools of its interrupted calls. Never blocks
+  /// for good: a failure only means some tool may read as unknown.
+  Future<void> _toolsReady() async {
+    try {
+      await ref.read(toolsReadyProvider)();
+    } on Object catch (e) {
+      debugPrint('chat[$sessionId] (tools ready): $e');
+    }
   }
 
   /// Shows the previous/next sibling of [messageId]: the session's active
@@ -415,6 +568,8 @@ class ChatController extends Notifier<ChatViewState> {
         return;
       }
       final runner = await _ensureRunner();
+      await _toolsReady();
+      if (_disposed || _runActive) return;
       final last = state.items.isEmpty ? null : state.items.last;
       final anchor = last is AssistantTurnItem ? state.items.length - 1 : state.items.length;
       await _run(runner.resume(sessionId), anchorAt: anchor);
@@ -497,6 +652,7 @@ class ChatController extends Notifier<ChatViewState> {
         router: _router,
         config: _config,
         manager: ref.read(chatContextManagerProvider),
+        extras: ref.read(chatContextExtrasProvider),
         memory: ref.read(memoryMonitorProvider),
         clock: _clock,
         ids: ref.read(idGeneratorProvider),
@@ -610,9 +766,13 @@ class ChatController extends Notifier<ChatViewState> {
       }
     }
     if (choice == null) {
+      // Models on this phone make the chat usable without any provider.
+      final onDevice = await _onDeviceModelCount();
+      if (_disposed) return;
       _commit(state.copyWith(
-        availability: configs.isEmpty ? ProviderAvailability.noProviders : ProviderAvailability.needsModel,
+        availability: configs.isEmpty && onDevice == 0 ? ProviderAvailability.noProviders : ProviderAvailability.needsModel,
         model: null,
+        onDeviceModels: onDevice,
       ));
       return;
     }
@@ -635,12 +795,14 @@ class ChatController extends Notifier<ChatViewState> {
     } on Object {
       availability = ProviderAvailability.providerMissing;
       final privacy = config == null ? null : privacyForConfig(config);
+      final local = choice.providerId == localProviderId;
       selection = ModelSelection(
         providerId: choice.providerId,
         modelId: choice.modelId,
-        providerName: config?.displayName ?? choice.providerId,
+        providerName: config?.displayName ?? (local ? kLocalProviderName : choice.providerId),
         modelName: previousName ?? choice.modelId,
-        location: privacy?.location ?? ExecutionLocation.remote,
+        // The built-in provider has no config, but it never leaves the phone.
+        location: privacy?.location ?? (local ? ExecutionLocation.onDevice : ExecutionLocation.remote),
         host: privacy?.host,
       );
     }
@@ -657,6 +819,15 @@ class ChatController extends Notifier<ChatViewState> {
       }
     } on Object {
       // Listing can fail offline; the raw model id is a fine label.
+    }
+  }
+
+  /// How many models the on-device provider offers (0 when it isn't wired).
+  Future<int> _onDeviceModelCount() async {
+    try {
+      return (await _registry.models(localProviderId)).length;
+    } on Object {
+      return 0;
     }
   }
 
@@ -711,7 +882,7 @@ class ChatController extends Notifier<ChatViewState> {
       return existing;
     }
     final base = ref.read(chatContextManagerProvider);
-    final extras = ref.read(chatRunnerExtrasProvider)(provider, choice, base);
+    final extras = ref.read(chatContextExtrasProvider)(provider, choice, base);
     final runner = AgentRunner(
       store: _store,
       provider: provider,
@@ -763,8 +934,8 @@ class ChatController extends Notifier<ChatViewState> {
       case ProviderAvailability.noProviders:
         throw const ChatSetupException(
           ChatErrorKind.noProvider,
-          'Sherpa needs a model to talk to. Add an API provider such as Anthropic, OpenAI, or a '
-          'compatible server like llama.cpp or Ollama.',
+          'Sherpa needs a model to talk to. Download one to run on this phone, or add an API provider such '
+          'as Anthropic, OpenAI, or a compatible server like llama.cpp or Ollama.',
         );
       case ProviderAvailability.providerMissing:
         throw ChatSetupException(
@@ -794,6 +965,7 @@ class ChatController extends Notifier<ChatViewState> {
     if (!force && state.interrupted == null) return;
     final cp = await _store.getCheckpoint(sessionId);
     if (cp != null && !cp.isTerminal && cp.leafMessageId != null) {
+      await _toolsReady();
       final events = runner.resume(sessionId);
       runner.cancel('discarded interrupted run');
       await events.drain<void>();
@@ -925,11 +1097,18 @@ class ChatController extends Notifier<ChatViewState> {
     if (draft != null) {
       draft.finish(_clock.now());
       final thought = draft.reasoningDuration;
-      if (thought != null && m.content.any((p) => p is ReasoningPart)) {
-        // "Thought for Ns" survives reopening the chat: persisted as a
-        // client-only hint (providers never see message metadata). The
+      final sample = draft.perf;
+      final perf = sample == null ? null : ReplyPerf.fromSample(sample);
+      final hints = <String, Object?>{
+        // "Thought for Ns" survives reopening the chat.
+        if (thought != null && m.content.any((p) => p is ReasoningPart)) 'reasoningMs': thought.inMilliseconds,
+        // "42 tok/s · TTFT 0.4 s" under a local reply.
+        if (perf != null && !perf.isEmpty) kReplyPerfKey: perf.toJson(),
+      };
+      if (hints.isNotEmpty) {
+        // Client-only hints (providers never see message metadata). The
         // runner never rewrites a message after completing it.
-        m = m.copyWith(metadata: {...m.metadata, 'reasoningMs': thought.inMilliseconds});
+        m = m.copyWith(metadata: {...m.metadata, ...hints});
         final hinted = m;
         // A display hint: losing it is not worth an error card.
         unawaited(_quiet(() => _store.putMessage(sessionId, hinted)));

@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_inference/sherpa_inference.dart' show EngineTokenCounter, WarmingContextManager;
 
 import '../../../state/services.dart';
+import '../../chat/state/chat_dependencies.dart' show RunnerExtrasFor;
 import 'format.dart';
 
 /// Everything the context inspector shows for one chat, read in one pass so
@@ -39,8 +41,8 @@ final class ContextSnapshot {
   /// The tool definitions the request offers (what the model can call).
   final List<ToolDefinition> tools;
 
-  /// The configured context manager can compact on request (the ladder);
-  /// the passthrough manager only measures.
+  /// The chat's context manager can compact on request (the ladder); the
+  /// passthrough manager only measures.
   final bool canCompact;
 
   /// Set when the next request should not go ahead as is.
@@ -70,7 +72,10 @@ final class ContextSnapshot {
 /// context inside a run. The inspector must show the *same* view without
 /// starting one, so [request] rebuilds the runner's `ContextRequest` field by
 /// field (session prompt through `PromptBoundary`, offered tools, plan,
-/// memory, nonce, location). Writes go through the same store calls and
+/// memory, nonce, location) and applies the same per-provider [extras] the
+/// chat's runner gets (`chatContextExtrasProvider`): a local chat is counted
+/// with the engine's own tokenizer and summarized by its own model, exactly
+/// as its next run would be. Writes go through the same store calls and
 /// audit lines the runner uses, so a manual compaction or an undo is
 /// indistinguishable from one the ladder made by itself.
 ///
@@ -86,6 +91,7 @@ final class ContextActions {
     required this.clock,
     required this.ids,
     this.memory,
+    this.extras,
     TokenCounter Function()? counter,
   }) : _counter = counter ?? HeuristicTokenCounter.new;
 
@@ -93,22 +99,36 @@ final class ContextActions {
   final ProviderRegistry registry;
   final ToolRouter router;
   final AgentConfig config;
+
+  /// The app's base context manager; [extras] may replace it per provider.
   final ContextManager manager;
   final Clock clock;
   final IdGenerator ids;
   final MemoryMonitor? memory;
+
+  /// The runner's per-provider extras (counter, context manager); null =
+  /// [manager] and a heuristic counter for every provider.
+  final RunnerExtrasFor? extras;
   final TokenCounter Function() _counter;
+
+  /// The ladder inside [m] (through a token-warming wrapper), if any.
+  static LadderContextManager? ladderOf(ContextManager m) => switch (m) {
+        LadderContextManager() => m,
+        WarmingContextManager(:final inner) => ladderOf(inner),
+        _ => null,
+      };
 
   /// Inspection is pure, so when the app runs the passthrough manager a
   /// default ladder can still *show* the view (it never writes anything).
-  late final LadderContextManager _ladder =
-      manager is LadderContextManager ? manager as LadderContextManager : LadderContextManager(clock: clock);
-
-  bool get canCompact => manager is LadderContextManager;
+  LadderContextManager _inspector(ContextManager m) => ladderOf(m) ?? LadderContextManager(clock: clock);
 
   /// The request the runner would build for the next model call on
   /// [model] (mirrors `AgentRunner._modelStep`).
-  Future<ContextRequest> request(String sessionId, ModelChoice model) async {
+  Future<ContextRequest> request(String sessionId, ModelChoice model) async => (await _resolve(sessionId, model)).request;
+
+  /// [request] plus the context manager a run on [model] uses; an exact
+  /// engine counter is warmed, so the synchronous counts hit its cache.
+  Future<({ContextRequest request, ContextManager manager})> _resolve(String sessionId, ModelChoice model) async {
     final session = await store.getSession(sessionId) ?? (throw StateError('unknown session $sessionId'));
     final leaf = session.activeLeafId;
     final path = leaf == null ? const <Message>[] : await store.path(sessionId, leaf);
@@ -122,6 +142,7 @@ final class ContextActions {
       }
     }
     final provider = await registry.resolve(model.providerId);
+    final e = extras?.call(provider, model, manager);
     final caps = await provider.capabilities(model.modelId);
     final hints = ToolSelectionHints(
       onDevice: provider.info.location == ExecutionLocation.onDevice,
@@ -132,36 +153,46 @@ final class ContextActions {
             .where((t) => t.modelVisible)
             .toList()
         : const <ToolDefinition>[];
-    return ContextRequest(
+    final system = PromptBoundary.compose(session.systemPrompt ?? config.defaultSystemPrompt);
+    final counter = e?.counter ?? _counter();
+    if (counter is EngineTokenCounter) {
+      try {
+        await counter.warm(systemPrompt: system, messages: path, tools: offered);
+      } on Object {
+        // Counting falls back to (pessimistic) estimates.
+      }
+    }
+    final r = ContextRequest(
       sessionId: sessionId,
       path: path,
       overlays: overlays,
       tools: offered,
       capabilities: caps,
-      counter: _counter(),
-      systemPrompt: PromptBoundary.compose(session.systemPrompt ?? config.defaultSystemPrompt),
+      counter: counter,
+      systemPrompt: system,
       plan: plan,
       memory: memory?.current ?? MemoryState.unknown,
       settings: config.contextSettings,
       location: provider.info.location,
       boundaryNonce: session.settings.opt<String>('boundaryNonce'),
     );
+    return (request: r, manager: e?.contextManager ?? manager);
   }
 
   Future<ContextSnapshot> snapshot(String sessionId, ModelChoice model) async {
-    final r = await request(sessionId, model);
-    final inspection = _ladder.inspect(r);
+    final (:request, :manager) = await _resolve(sessionId, model);
+    final inspection = _inspector(manager).inspect(request);
     return ContextSnapshot(
       sessionId: sessionId,
       model: model,
       inspection: inspection,
-      overlays: r.overlays,
-      path: r.path,
-      capabilities: r.capabilities,
-      settings: r.settings,
-      canCompact: canCompact,
-      tools: r.tools,
-      recommendation: recommend(inspection, r.overlays, r.settings),
+      overlays: request.overlays,
+      path: request.path,
+      capabilities: request.capabilities,
+      settings: request.settings,
+      canCompact: ladderOf(manager) != null,
+      tools: request.tools,
+      recommendation: recommend(inspection, request.overlays, request.settings),
     );
   }
 
@@ -169,11 +200,12 @@ final class ContextActions {
   /// (store + `contextAction` audit line). Throws [StateError] when the
   /// configured manager cannot compact.
   Future<CompactionOutcome> compactNow(String sessionId, ModelChoice model) async {
-    final m = manager;
-    if (m is! LadderContextManager) {
+    final (:request, :manager) = await _resolve(sessionId, model);
+    final ladder = ladderOf(manager);
+    if (ladder == null) {
       throw StateError('this build summarizes context only when it fills up');
     }
-    final outcome = await m.compactNow(await request(sessionId, model));
+    final outcome = await ladder.compactNow(request);
     final o = outcome.overlay;
     if (o != null) {
       await store.putOverlay(sessionId, o);
@@ -192,8 +224,8 @@ final class ContextActions {
   /// removed. The transcript itself never changed, so the original text is
   /// in the next request again.
   Future<List<String>> undo(String sessionId, ModelChoice model, String overlayId) async {
-    final r = await request(sessionId, model);
-    final set = _ladder.inspect(r).undoSet(overlayId);
+    final (request: r, :manager) = await _resolve(sessionId, model);
+    final set = _inspector(manager).inspect(r).undoSet(overlayId);
     final byId = {for (final o in r.overlays) o.id: o};
     final removed = <String>[];
     for (final id in set.reversed) {

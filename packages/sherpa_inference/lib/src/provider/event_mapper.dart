@@ -1,6 +1,5 @@
-import 'dart:convert';
-
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_providers/tool_arguments.dart';
 
 import '../engine/engine_types.dart';
 import '../ffi/bindings.dart';
@@ -46,10 +45,10 @@ ProviderException providerErrorFor(Object error, {required String providerId}) =
 ///   (`inputTokens` = uncached prompt tokens, `cacheReadTokens` = prompt
 ///   tokens served from the KV cache, so the full prompt is their sum).
 /// * PERF becomes [PerfSample] (with the prompt/cached counts of USAGE).
-/// * TOOL_CALL_DONE becomes [ToolCallComplete] with parsed arguments; the
-///   lazy grammar normally guarantees valid JSON, otherwise the core's
-///   repair runs and the call is marked `repaired` (which forces approval of
-///   non-read-only tools, R11 §9.6.7).
+/// * TOOL_CALL_DONE becomes [ToolCallComplete] with arguments parsed
+///   exactly like the remote adapters' ([parseToolCall]); the lazy grammar
+///   normally guarantees valid JSON. A repaired call is followed by a
+///   `tool_args_repaired` notice, as from the Chat/Responses adapters.
 /// * FINISH maps to exactly one [Finish]; FINISH(error) after ERROR becomes
 ///   a [ProviderException] stream error instead.
 final class EngineEventMapper {
@@ -79,7 +78,17 @@ final class EngineEventMapper {
       case EngineEventType.toolCallArgsDelta:
         return [ToolCallArgsDelta(index: e.index, fragment: e.text)];
       case EngineEventType.toolCallDone:
-        return [ToolCallComplete(index: e.index, call: parseToolCall(e.id, e.name, e.text))];
+        final parsed = ToolArgumentsRepair.parseArguments(e.text);
+        final call = _toolCall(e.id, e.name, e.text, parsed);
+        return [
+          ToolCallComplete(index: e.index, call: call),
+          if (parsed.repaired)
+            ProviderNotice(
+              'tool_args_repaired',
+              'Repaired malformed JSON arguments for ${call.name}.',
+              data: {'index': e.index, 'fixes': parsed.fixes.toList()..sort()},
+            ),
+        ];
       case EngineEventType.usage:
         _prompt = e.promptTokens;
         _cached = e.cachedTokens;
@@ -131,21 +140,22 @@ final class EngineEventMapper {
     }
   }
 
-  /// Builds a [ToolCall] from the engine's complete argument JSON.
-  static ToolCall parseToolCall(String id, String name, String raw) {
-    final text = raw.trim();
-    if (text.isEmpty) return ToolCall(id: id, name: name, arguments: const {}, rawArguments: raw);
-    try {
-      final v = jsonDecode(text);
-      if (v is Map) return ToolCall(id: id, name: name, arguments: v.cast<String, Object?>(), rawArguments: raw);
-      return ToolCall(
-          id: id, name: name, arguments: const {}, rawArguments: raw, argumentsError: 'arguments must be a JSON object');
-    } on FormatException catch (e) {
-      final repaired = JsonRepair.decodeObject(text);
-      if (repaired != null) {
-        return ToolCall(id: id, name: name, arguments: repaired, rawArguments: raw, repaired: true);
-      }
-      return ToolCall(id: id, name: name, arguments: const {}, rawArguments: raw, argumentsError: 'malformed JSON (${e.message})');
-    }
-  }
+  /// Builds a [ToolCall] from the engine's complete argument text, parsed
+  /// like every other parser path ([ToolArgumentsRepair]): strict JSON as
+  /// is; a literal `null` means no arguments and arguments stringified twice
+  /// are decoded again (both flagged `repaired`); other malformed JSON is
+  /// repaired and flagged `repaired`, which forces approval of non-read-only
+  /// tools (R11 §9.6.7); duplicate keys, leaked chat-template tokens and
+  /// ambiguous unquoted values make the call invalid (never run).
+  static ToolCall parseToolCall(String id, String name, String raw) =>
+      _toolCall(id, name, raw, ToolArgumentsRepair.parseArguments(raw));
+
+  static ToolCall _toolCall(String id, String name, String raw, ArgumentsParseResult parsed) => ToolCall(
+        id: id,
+        name: name,
+        arguments: parsed.value ?? const {},
+        rawArguments: raw,
+        argumentsError: parsed.error,
+        repaired: parsed.repaired,
+      );
 }

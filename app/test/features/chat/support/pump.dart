@@ -29,6 +29,8 @@ Future<GoRouter> pumpChatScreen(
         path: '/settings/providers/:rest',
         builder: (_, s) => Scaffold(body: Text('route:${s.uri.path}')),
       ),
+      GoRoute(path: '/settings/tools', builder: (_, s) => Scaffold(body: Text('route:${s.uri.path}'))),
+      GoRoute(path: '/settings/models', builder: (_, s) => Scaffold(body: Text('route:${s.uri.path}'))),
     ],
   );
   addTearDown(router.dispose);

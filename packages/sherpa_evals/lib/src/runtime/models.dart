@@ -1,9 +1,7 @@
-// The engine host, lifecycle manager and provider are imported from their
-// Flutter-free source files: the package's main library also exports the
-// Android process host, which imports Flutter and so cannot load under
-// `dart run`. See the report: sherpa_inference should export a pure-Dart
-// entry library (e.g. `package:sherpa_inference/ffi.dart`).
-// ignore_for_file: implementation_imports
+// The engine host, lifecycle manager and provider come from
+// `package:sherpa_inference/engine.dart`, the Flutter-free entry library
+// (the package's main library also exports the Android process host, which
+// imports Flutter and so cannot load under `dart run`).
 library;
 
 import 'dart:convert';
@@ -12,13 +10,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:sherpa_core/sherpa_core.dart';
-import 'package:sherpa_inference/src/cache/prefix_cache_store.dart';
-import 'package:sherpa_inference/src/engine/engine_types.dart';
-import 'package:sherpa_inference/src/engine/ffi_engine_host.dart';
-import 'package:sherpa_inference/src/lifecycle/forensics.dart';
-import 'package:sherpa_inference/src/lifecycle/lifecycle_manager.dart';
-import 'package:sherpa_inference/src/provider/llama_cpp_provider.dart';
-import 'package:sherpa_inference/src/provider/token_counter.dart';
+import 'package:sherpa_inference/engine.dart';
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 /// What `--model` names.

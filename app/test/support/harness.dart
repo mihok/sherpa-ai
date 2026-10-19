@@ -255,3 +255,49 @@ Future<void> tapText(WidgetTester tester, String text, {int index = 0}) async {
 Finder findBadge(String host, {ExecutionLocation? location}) => find.byWidgetPredicate(
       (w) => w is PrivacyBadge && w.host == host && (location == null || w.location == location),
     );
+
+/// [inner] plus the built-in on-device provider ([localProviderId]) with
+/// [models] installed, like `LocalProviderRegistry` over the model library.
+final class WithLocalModels implements ProviderRegistry {
+  WithLocalModels(this.inner, this.installed);
+
+  final ProviderRegistry inner;
+  List<ModelDescriptor> installed;
+
+  /// Library model descriptors as the local provider lists them.
+  static ModelDescriptor model(String id, String name) => ModelDescriptor(
+        id: id,
+        providerId: localProviderId,
+        displayName: name,
+        capabilities: const ModelCapabilities(contextLength: 8192),
+      );
+
+  @override
+  List<ProviderConfig> get configs => inner.configs;
+
+  @override
+  Stream<List<ProviderConfig>> get changes => inner.changes;
+
+  @override
+  Future<ProviderConfig> add(ProviderConfig config, {String? apiKey}) => inner.add(config, apiKey: apiKey);
+
+  @override
+  Future<ProviderConfig> update(ProviderConfig config, {String? apiKey, bool clearApiKey = false}) =>
+      inner.update(config, apiKey: apiKey, clearApiKey: clearApiKey);
+
+  @override
+  Future<void> remove(String providerId) => inner.remove(providerId);
+
+  @override
+  Future<bool> hasApiKey(String providerId) => inner.hasApiKey(providerId);
+
+  @override
+  Future<ModelProvider> resolve(String providerId) => inner.resolve(providerId);
+
+  @override
+  Future<List<ModelDescriptor>> models(String providerId, {bool refresh = false}) async =>
+      providerId == localProviderId ? installed : inner.models(providerId, refresh: refresh);
+
+  @override
+  Future<EndpointStatus> probe(String providerId) => inner.probe(providerId);
+}

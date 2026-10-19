@@ -131,9 +131,11 @@ Future<void> _excludeModelStorageFromBackup() async {
 }
 
 /// The escalation ladder (prune → truncate → compact → handoff → hard stop).
-/// Summaries are extractive for now: deterministic, offline and free; a
-/// model-written summarizer needs the session's own provider and arrives
-/// with the context inspector UI.
+/// Summaries are extractive here: deterministic, offline and free. Per
+/// chat, `chatContextExtrasProvider` swaps in a model-written summarizer
+/// (the chat's own on-device model at background priority, or a remote
+/// chat's model once the user opts in under Privacy → Long chats), with the
+/// extractive one as fallback.
 ContextManager _contextManager(Ref ref) => LadderContextManager(
       strategy: const ExtractiveContextStrategy(),
       toolLookup: ref.watch(toolRouterProvider).lookup,

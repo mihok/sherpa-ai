@@ -7,6 +7,7 @@ import '../../design/tokens.dart';
 import '../../design/typography.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../state/app_providers.dart';
+import '../../state/services.dart' show ModelChoice;
 import 'relative_time.dart';
 
 /// One chat in the sessions list: title, model, time, where it runs.
@@ -39,10 +40,15 @@ class SessionTile extends ConsumerWidget {
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
     final providerId = session.providerId;
-    final config = providerId == null ? null : ref.watch(providerConfigProvider(providerId));
+    final modelId = session.modelId;
+    final providerName = providerId == null ? null : ref.watch(providerDisplayNameProvider(providerId));
     final privacy = providerId == null ? null : ref.watch(providerPrivacyProvider(providerId));
-    final modelLabel = session.modelId ?? 'No model chosen';
-    final subtitle = [modelLabel, ?config?.displayName].join(' · ');
+    final modelLabel = modelId == null
+        ? 'No model chosen'
+        : providerId == null
+            ? modelId
+            : ref.watch(modelDisplayNameProvider(ModelChoice(providerId: providerId, modelId: modelId)));
+    final subtitle = [modelLabel, ?providerName].join(' · ');
     final time = formatRelativeShort(session.updatedAt, now);
     final archiveLabel = session.archived ? 'Unarchive' : 'Archive';
 

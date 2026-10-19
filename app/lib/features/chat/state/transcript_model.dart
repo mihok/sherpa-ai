@@ -40,6 +40,184 @@ sealed class ChatItem {
   String get signature;
 }
 
+/// `Message.metadata` key of the MCP prompt a message came from:
+/// `{serverId, name, serverName, command}` (the composer adds the last two).
+const String kMcpPromptKey = 'mcpPrompt';
+
+/// `Message.metadata` key listing the MCP resources the user attached with
+/// `@`: `[{uri, serverId, serverName, mention}]`, so the transcript can say
+/// which server each one came from.
+const String kMcpResourcesKey = 'mcpResources';
+
+/// `Message.metadata` key of an assistant step's performance sample (a
+/// client-only display hint, [ReplyPerf.toJson]).
+const String kReplyPerfKey = 'perf';
+
+/// Where a message written by an MCP server's prompt came from.
+@immutable
+final class PromptSource {
+  const PromptSource({required this.serverName, required this.command, required this.untrusted});
+
+  /// [kMcpPromptKey] of [m], or null for a message the user typed.
+  static PromptSource? of(Message m) {
+    final p = m.metadata[kMcpPromptKey];
+    if (p is! Map) return null;
+    final server = p['serverName'] ?? p['serverId'];
+    final command = p['command'] ?? p['name'];
+    return PromptSource(
+      serverName: server is String ? server : 'a tool server',
+      command: command is String ? command : '',
+      untrusted: m.metadata[UntrustedData.messageMetadataKey] == true,
+    );
+  }
+
+  final String serverName;
+
+  /// `server:prompt`, without the slash.
+  final String command;
+
+  /// The server is not trusted: the agent loop counts the text as
+  /// untrusted content.
+  final bool untrusted;
+
+  /// "From Example tools · /example:review" (+ " · untrusted").
+  String get label => [
+        'From $serverName',
+        if (command.isNotEmpty) '/$command',
+        if (untrusted) 'untrusted',
+      ].join(' · ');
+
+  String get semanticLabel =>
+      'Written by the $serverName prompt${command.isEmpty ? '' : ' /$command'}${untrusted ? ', from an untrusted server' : ''}';
+}
+
+/// A resource attached to a message (an `@` mention, or part of a prompt).
+@immutable
+final class AttachedResource {
+  const AttachedResource({required this.uri, required this.label, this.serverName, this.embedded = false});
+
+  final String uri;
+  final String label;
+
+  /// Null when the message doesn't say (e.g. an imported transcript).
+  final String? serverName;
+
+  /// The text was read into the message (else only a link was attached).
+  final bool embedded;
+
+  /// The resources among [m]'s parts, with server names from
+  /// [kMcpResourcesKey] (or the prompt's server).
+  static List<AttachedResource> of(Message m) {
+    final servers = <String, String>{};
+    final labels = <String, String>{};
+    final listed = m.metadata[kMcpResourcesKey];
+    if (listed is List) {
+      for (final e in listed) {
+        if (e is! Map || e['uri'] is! String) continue;
+        final uri = e['uri'] as String;
+        if (e['serverName'] is String) servers[uri] = e['serverName'] as String;
+        if (e['name'] is String) labels[uri] = e['name'] as String;
+      }
+    }
+    final prompt = PromptSource.of(m)?.serverName;
+    return [
+      for (final p in m.content)
+        switch (p) {
+          EmbeddedResourcePart(:final uri) => AttachedResource(
+              uri: uri,
+              label: labels[uri] ?? _shortName(uri),
+              serverName: servers[uri] ?? prompt,
+              embedded: true,
+            ),
+          ResourceLinkPart(:final uri, :final name, :final title) => AttachedResource(
+              uri: uri,
+              label: labels[uri] ?? title ?? name ?? _shortName(uri),
+              serverName: servers[uri] ?? prompt,
+            ),
+          _ => null,
+        },
+    ].nonNulls.toList();
+  }
+
+  /// `notes://work/today.md` → `today.md`; `notes://today.md` → `today.md`.
+  static String _shortName(String uri) {
+    final u = Uri.tryParse(uri);
+    if (u == null) return uri;
+    final seg = u.pathSegments.where((s) => s.isNotEmpty).lastOrNull;
+    if (seg != null) return seg;
+    return u.host.isNotEmpty ? u.host : uri;
+  }
+}
+
+/// How fast a local (or timing-reporting) reply was produced, from the
+/// provider's [PerfSample]. Persisted as a display hint under
+/// [kReplyPerfKey].
+@immutable
+final class ReplyPerf {
+  const ReplyPerf({this.ttftMs, this.decodeTps, this.prefillTps, this.draftAcceptRate});
+
+  factory ReplyPerf.fromSample(PerfSample s) => ReplyPerf(
+        ttftMs: s.timeToFirstTokenMs,
+        decodeTps: s.decodeTokensPerSec,
+        prefillTps: s.prefillTokensPerSec,
+        draftAcceptRate: s.draftAcceptRate,
+      );
+
+  static ReplyPerf? fromJson(Object? j) {
+    if (j is! Map) return null;
+    double? d(String k) => j[k] is num ? (j[k] as num).toDouble() : null;
+    final p = ReplyPerf(ttftMs: d('ttftMs'), decodeTps: d('decodeTps'), prefillTps: d('prefillTps'), draftAcceptRate: d('draftAcceptRate'));
+    return p.isEmpty ? null : p;
+  }
+
+  final double? ttftMs;
+  final double? decodeTps;
+  final double? prefillTps;
+  final double? draftAcceptRate;
+
+  bool get isEmpty => (decodeTps == null || decodeTps! <= 0) && (ttftMs == null || ttftMs! <= 0);
+
+  JsonMap toJson() => {
+        if (ttftMs != null) 'ttftMs': ttftMs,
+        if (decodeTps != null) 'decodeTps': decodeTps,
+        if (prefillTps != null) 'prefillTps': prefillTps,
+        if (draftAcceptRate != null) 'draftAcceptRate': draftAcceptRate,
+      };
+
+  /// "42 tok/s · TTFT 0.4 s".
+  String get label => [
+        if (decodeTps != null && decodeTps! > 0) '${_rate(decodeTps!)} tok/s',
+        if (ttftMs != null && ttftMs! > 0) 'TTFT ${_seconds(ttftMs!)}',
+      ].join(' · ');
+
+  /// The same, spelled out, plus prefill and draft acceptance.
+  String get semanticLabel => [
+        if (decodeTps != null && decodeTps! > 0) 'Generated at ${_rate(decodeTps!)} tokens per second',
+        if (ttftMs != null && ttftMs! > 0) 'first token after ${_seconds(ttftMs!, spoken: true)}',
+        if (prefillTps != null && prefillTps! > 0) 'read the conversation at ${_rate(prefillTps!)} tokens per second',
+        if (draftAcceptRate != null) '${(draftAcceptRate! * 100).round()}% of drafted tokens accepted',
+      ].join(', ');
+
+  static String _rate(double v) => v >= 10 ? '${v.round()}' : v.toStringAsFixed(1);
+
+  static String _seconds(double ms, {bool spoken = false}) {
+    if (ms < 100) return spoken ? '${ms.round()} milliseconds' : '${ms.round()} ms';
+    final s = (ms / 1000).toStringAsFixed(ms < 10000 ? 1 : 0);
+    return spoken ? '$s seconds' : '$s s';
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is ReplyPerf &&
+      other.ttftMs == ttftMs &&
+      other.decodeTps == decodeTps &&
+      other.prefillTps == prefillTps &&
+      other.draftAcceptRate == draftAcceptRate;
+
+  @override
+  int get hashCode => Object.hash(ttftMs, decodeTps, prefillTps, draftAcceptRate);
+}
+
 /// A message the user sent.
 final class UserItem extends ChatItem {
   UserItem({required this.message, required this.branch})
@@ -58,6 +236,12 @@ final class UserItem extends ChatItem {
 
   /// Set on messages created with "edit", so the bubble can say "Edited".
   bool get isEdit => message.metadata['editOf'] != null;
+
+  /// Set when an MCP prompt wrote this message, not the user.
+  PromptSource? get promptSource => PromptSource.of(message);
+
+  /// Resources attached to the message.
+  List<AttachedResource> get resources => AttachedResource.of(message);
 }
 
 /// Optimistic stand-in for the message being sent, shown until the runner
@@ -123,6 +307,12 @@ final class AssistantTurnItem extends ChatItem {
   /// The reply was cut off by the user or the token limit.
   String? get finishReason => steps.isEmpty ? null : steps.last.finishReason;
 
+  /// How fast the final step was generated, when the provider said.
+  ReplyPerf? get perf => steps.isEmpty ? null : ReplyPerf.fromJson(steps.last.metadata[kReplyPerfKey]);
+
+  /// Set when an MCP prompt supplied this turn (an example reply).
+  PromptSource? get promptSource => steps.isEmpty ? null : PromptSource.of(steps.first);
+
   static String _signatureOf(
     String key,
     List<Message> steps,
@@ -133,7 +323,8 @@ final class AssistantTurnItem extends ChatItem {
   ) {
     final b = StringBuffer('$key|$live|$showActions|${branch?.index}/${branch?.count}');
     for (final m in steps) {
-      b.write('|${m.id}:${m.content.length}:${m.finishReason}:${m.text.length}:${m.metadata['reasoningMs']}');
+      b.write('|${m.id}:${m.content.length}:${m.finishReason}:${m.text.length}:${m.metadata['reasoningMs']}'
+          ':${m.metadata[kReplyPerfKey] != null}');
     }
     b.write('|${blocks.length}');
     return b.toString();
@@ -175,6 +366,16 @@ final class TextBlock extends TurnBlock {
   final String key;
   final String messageId;
   final String text;
+}
+
+/// A resource in an assistant message (an MCP prompt's example reply).
+final class ResourceBlock extends TurnBlock {
+  const ResourceBlock({required this.key, required this.messageId, required this.resource});
+
+  @override
+  final String key;
+  final String messageId;
+  final AttachedResource resource;
 }
 
 /// Consecutive tool calls with nothing visible between them, rendered as
@@ -410,8 +611,12 @@ List<TurnBlock> buildTurnBlocks(List<Message> steps) {
           } else {
             blocks.add(ToolGroupBlock(key: 'g:${call.id}', calls: [call]));
           }
+        case EmbeddedResourcePart() || ResourceLinkPart():
+          final resources = AttachedResource.of(m.copyWith(content: [part]));
+          if (resources.isEmpty) continue;
+          blocks.add(ResourceBlock(key: 'res:${m.id}:$pi', messageId: m.id, resource: resources.single));
         default:
-          // Images, resources and MCP Apps views arrive in later milestones.
+          // Images and MCP Apps views arrive in later milestones.
           continue;
       }
     }

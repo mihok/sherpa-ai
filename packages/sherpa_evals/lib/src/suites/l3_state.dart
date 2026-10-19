@@ -161,15 +161,17 @@ Future<L3Trial> runL3Trial(
   await newSession(store, sid, clock);
   final provider = runtime?.provider ??
       policyProvider(idealPolicy(task), capabilities: scriptedCapabilities ?? const ModelCapabilities(contextLength: 32768));
+  final approvals = ApprovalPolicy(clock: clock, trustedServers: env.trustedServerIds);
   final runner = AgentRunner(
     store: store,
     provider: provider,
     modelId: runtime?.modelId ?? 'scripted',
     tools: env.router,
-    approvals: ApprovalPolicy(clock: clock, trustedServers: env.trustedServerIds),
+    approvals: approvals,
     approvalHandler: user,
     contextManager: () {
-      final ladder = LadderContextManager(clock: clock, toolLookup: env.router.lookup);
+      // Wired as app/lib/bootstrap.dart.
+      final ladder = LadderContextManager(clock: clock, toolLookup: env.router.lookup, annotationsFor: approvals.annotationsFor);
       return runtime == null ? ladder : runtime.wrap(ladder);
     }(),
     counter: runtime?.counter,

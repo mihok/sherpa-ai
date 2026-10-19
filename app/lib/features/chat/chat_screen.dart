@@ -7,7 +7,11 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../design/tokens.dart';
 import '../../design/widgets/privacy_badge.dart';
+import '../../services/mcp/composer_sources.dart';
+import '../mcp/session_tools_sheet.dart';
+import '../mcp/state/mcp_providers.dart';
 import 'model_picker_sheet.dart';
+import 'prompt_arguments_sheet.dart';
 import 'state/chat_controller.dart';
 import 'state/chat_dependencies.dart';
 import 'state/chat_errors.dart';
@@ -50,6 +54,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   String? _editingId;
   String? _sheetFor;
 
+  /// The composer has started with `/` since the screen opened: MCP
+  /// prompts are listed from then on (asking every server only once the
+  /// user reaches for a command, and re-listed each time they do).
+  bool _slashActive = false;
+  bool _startsWithSlash = false;
+
+  /// What follows `@` at the cursor (null: not mentioning).
+  String? _mentionQuery;
+
+  /// The MCP prompt being fetched from its server, for the busy line.
+  McpPromptCommand? _fetchingPrompt;
+
   // Created once so cached transcript tiles keep valid callbacks.
   late final UserMessageCallbacks _userCallbacks = UserMessageCallbacks(
     onEdit: _startEdit,
@@ -76,7 +92,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   ChatRoutes get _routes => ref.read(chatRoutesProvider);
 
   @override
+  void initState() {
+    super.initState();
+    _text.addListener(_onComposerText);
+  }
+
+  void _onComposerText() {
+    final slash = _text.text.startsWith('/');
+    if (slash == _startsWithSlash) return;
+    _startsWithSlash = slash;
+    if (!slash) return;
+    if (_slashActive) {
+      ref.invalidate(mcpPromptCommandsProvider(widget.sessionId));
+    } else {
+      setState(() => _slashActive = true);
+    }
+  }
+
+  @override
   void dispose() {
+    _text.removeListener(_onComposerText);
     _text.dispose();
     _composerFocus.dispose();
     super.dispose();
@@ -87,16 +122,66 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // ---------------------------------------------------------------------------
   // Intents
 
-  void _send(String text) {
+  void _send(String text) => _sendWithMentions(text, const []);
+
+  void _sendWithMentions(String text, List<McpResourceSuggestion> mentions) {
     final editing = _editingId;
     if (editing != null) {
       unawaited(_controller.edit(editing, text));
       setState(() => _editingId = null);
     } else {
-      unawaited(_controller.send(text));
+      unawaited(_controller.send(text, mentions: mentions));
     }
     _text.clear();
   }
+
+  /// A slash command from an MCP prompt: the server expands it (with the
+  /// arguments typed after it), and the messages it returns are sent. A
+  /// missing required argument opens a form instead of failing; any other
+  /// failure puts the command back in the composer.
+  Future<void> _runPrompt(
+    McpPromptCommand command,
+    String rest,
+    List<McpResourceSuggestion> mentions, {
+    Map<String, String>? values,
+  }) async {
+    void restore() {
+      if (mounted && _text.text.isEmpty) {
+        final line = '/${command.command}${rest.isEmpty ? ' ' : ' $rest'}';
+        _text.value = TextEditingValue(text: line, selection: TextSelection.collapsed(offset: line.length));
+      }
+    }
+
+    final args = values ?? command.parseArguments(rest);
+    setState(() => _fetchingPrompt = command);
+    McpExpandedPrompt expanded;
+    try {
+      expanded = await ref.read(chatMcpSourcesProvider).expand(command, args);
+    } on McpPromptArgumentsException catch (e) {
+      if (!mounted) return;
+      setState(() => _fetchingPrompt = null);
+      final filled = await PromptArgumentsSheet.show(context, command: command, initial: args, missing: e.missing);
+      if (!mounted) return;
+      if (filled == null) return restore();
+      return _runPrompt(command, rest, mentions, values: filled);
+    } on Object catch (e) {
+      debugPrint('chat prompt ${command.command}: $e');
+      if (!mounted) return;
+      setState(() => _fetchingPrompt = null);
+      _toast("Couldn't get /${command.command} from ${command.serverName}. Try again.");
+      return restore();
+    }
+    if (!mounted) return;
+    setState(() => _fetchingPrompt = null);
+    await _controller.sendPrompt(expanded, mentions: mentions);
+  }
+
+  /// Which tool servers and tools this chat may use.
+  void _openTools() => unawaited(SessionToolsSheet.show(
+        context,
+        sessionId: widget.sessionId,
+        onManage: () => GoRouter.maybeOf(context)?.go(_routes.tools),
+      ));
 
   void _startEdit(UserItem item) {
     if (_controller.isRunning) return;
@@ -159,10 +244,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         unawaited(_pickModel());
       case ChatErrorAction.newChat:
         unawaited(_newChat());
+      case ChatErrorAction.openModels:
+        _push(_routes.models);
     }
   }
 
   void _onOverflow(_ChatMenu item) => switch (item) {
+        _ChatMenu.tools => _openTools(),
         _ChatMenu.context => _push(_routes.context(widget.sessionId)),
         _ChatMenu.compact => unawaited(_compactNow()),
         _ChatMenu.handoff => _push(_routes.handoff(widget.sessionId)),
@@ -209,6 +297,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         unawaited(_controller.retryLast());
       case 'model':
         unawaited(_pickModel());
+      case 'tools':
+        _openTools();
     }
   }
 
@@ -271,6 +361,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final (budget, level, estimate) = ref.watch(provider.select((s) => (s.budget, s.contextLevel, s.budgetIsEstimate)));
     final (pending, interrupted, hasItems) =
         ref.watch(provider.select((s) => (s.pendingApproval, s.interrupted, s.items.isNotEmpty)));
+    final onDeviceModels = ref.watch(provider.select((s) => s.onDeviceModels));
     ref.listen(provider.select((s) => s.pendingApproval), (prev, next) {
       if (next != null && next.call.id != prev?.call.id) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -292,7 +383,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         enabled: !running && hasItems,
       ),
       const SlashCommand(name: 'model', description: 'Switch model', icon: Icons.swap_horiz_rounded),
+      const SlashCommand(name: 'tools', description: 'Choose the tools this chat may use', icon: Icons.handyman_outlined),
     ];
+    // Prompts of the chat's tool servers, listed only while typing a command
+    // (each list asks every server); a server that fails just offers none.
+    final prompts = _slashActive
+        ? ref.watch(mcpPromptCommandsProvider(widget.sessionId)).value ?? const <McpPromptCommand>[]
+        : const <McpPromptCommand>[];
+    final mention = _mentionQuery;
+    final suggestions = mention == null
+        ? const <McpResourceSuggestion>[]
+        : ref.watch(mcpResourceSuggestionsProvider((sessionId: widget.sessionId, query: mention))).value ??
+            const <McpResourceSuggestion>[];
+    final fetching = _fetchingPrompt;
 
     final dock = <Widget>[
       if (interrupted != null && !running)
@@ -307,6 +410,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ? ApprovalReminderBar(approval: pending, onReview: () => _maybeShowApprovalSheet(pending))
                 : const SizedBox.shrink())
             : DockedApprovalCard(sessionId: widget.sessionId, approval: pending),
+      if (fetching != null)
+        _FetchingPromptLine(command: fetching),
       if (ready)
         ChatComposer(
           controller: _text,
@@ -320,13 +425,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           hintText: model == null ? 'Message' : 'Message ${model.modelName}',
           editing: _editingId == null ? null : ComposerEditing(onCancel: _cancelEdit),
           onEditLast: _editLast,
+          promptCommands: prompts,
+          onPromptCommand: (c, rest, mentions) => unawaited(_runPrompt(c, rest, mentions)),
+          mentionSuggestions: suggestions,
+          onMentionQuery: (q) {
+            if (q != _mentionQuery) setState(() => _mentionQuery = q);
+          },
+          onSendWithMentions: _sendWithMentions,
         )
       else
         SetupPanel(
           availability: availability,
           providerName: model?.providerName,
+          onDeviceModels: onDeviceModels,
           onAddProvider: () => _push(_routes.newProvider),
           onChooseModel: () => unawaited(_pickModel()),
+          onBrowseModels: () => _push(_routes.models),
         ),
     ];
 
@@ -465,7 +579,7 @@ class _EmptyChat extends StatelessWidget {
   }
 }
 
-enum _ChatMenu { context, compact, handoff }
+enum _ChatMenu { tools, context, compact, handoff }
 
 /// The app bar's overflow: context tools that are useful but not frequent
 /// enough for their own buttons.
@@ -485,6 +599,10 @@ class _ChatOverflowMenu extends StatelessWidget {
         onSelected: onSelected,
         itemBuilder: (_) => [
           const PopupMenuItem(
+            value: _ChatMenu.tools,
+            child: ListTile(leading: Icon(Icons.handyman_outlined), title: Text('Tools')),
+          ),
+          const PopupMenuItem(
             value: _ChatMenu.context,
             child: ListTile(leading: Icon(Icons.manage_search_rounded), title: Text('Context details')),
           ),
@@ -500,4 +618,35 @@ class _ChatOverflowMenu extends StatelessWidget {
           ),
         ],
       );
+}
+
+/// "Getting /example:review from Example tools…" while a prompt is fetched.
+class _FetchingPromptLine extends StatelessWidget {
+  const _FetchingPromptLine({required this.command});
+
+  final McpPromptCommand command;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    return Semantics(
+      liveRegion: true,
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: tokens.space.md),
+        child: Row(
+          children: [
+            SizedBox.square(dimension: ChatIconSize.small, child: const CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(width: tokens.space.sm),
+            Expanded(
+              child: Text(
+                'Getting /${command.command} from ${command.serverName}…',
+                style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

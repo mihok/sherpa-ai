@@ -91,7 +91,10 @@ final class LocalModelProvider implements ModelProvider {
         ? engine.stream(request, cancel: cancel)
         : engine.withPriority(priority).stream(request, cancel: cancel);
     var succeeded = false;
+    Usage? usage;
     await for (final e in source) {
+      if (e is UsageUpdate) usage = e.usage;
+      if (e is PerfSample) _local.recordGeneration(request.modelId, e, usage: usage, background: !reply);
       if (e is Finish) {
         succeeded = e.reason == FinishReason.stop || e.reason == FinishReason.toolCalls || e.reason == FinishReason.length;
       }

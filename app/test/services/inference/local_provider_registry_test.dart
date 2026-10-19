@@ -110,26 +110,35 @@ void main() {
           noRunnerExtras);
     });
 
-    test('an extractive ladder is kept; a local model summarizer moves to background priority', () async {
+    test('a local chat summarizes with its own model at background priority', () async {
       await rig.add(libraryModel('m1'));
       final p = await registry.resolve(localProviderId);
-      final extractive = LadderContextManager();
-      expect(withBackgroundSummarizer(extractive, p), same(extractive));
-
-      final modelLadder = LadderContextManager(strategy: ModelContextStrategy(provider: p, modelId: 'm1', maxAttempts: 3));
-      final rebuilt = withBackgroundSummarizer(modelLadder, p) as LadderContextManager;
-      final s = rebuilt.strategy as ModelContextStrategy;
-      expect(s.provider, isNot(same(p)));
+      final e = localRunnerExtras(p, choice, LadderContextManager());
+      final ladder = (e.contextManager! as WarmingContextManager).inner as LadderContextManager;
+      final s = ladder.strategy as ModelSummarizer;
+      expect(modelSummarizerOf(e.contextManager!), same(s));
+      expect(s.priority, InferencePriority.background);
+      expect(s.provider, isNot(same(p)), reason: 'a background view, not the reply path');
       expect(s.provider.info.id, localProviderId);
       expect(s.modelId, 'm1');
-      expect(s.maxAttempts, 3);
+      expect(s.timeout, localSummaryTimeout);
+      expect(ladder.fallbackStrategy, isA<ExtractiveContextStrategy>());
       // A background summary is not a reply: it neither schedules autotune
       // nor carries the crash notice; it streams through the engine.
       expect(await replyText(s.provider, 'm1', 'summarize'), 'ok');
+    });
+
+    test('settings of a local summarizer are kept; a remote one is replaced (no remote compaction)', () async {
+      await rig.add(libraryModel('m1'));
+      final p = await registry.resolve(localProviderId);
+      final configured = LadderContextManager(strategy: ModelContextStrategy(provider: p, modelId: 'm1', maxAttempts: 3));
+      expect(modelSummarizerOf(localRunnerExtras(p, choice, configured).contextManager!)!.inner.maxAttempts, 3);
 
       final remote = await registry.resolve('cloud');
       final remoteLadder = LadderContextManager(strategy: ModelContextStrategy(provider: remote, modelId: 'big'));
-      expect(withBackgroundSummarizer(remoteLadder, p), same(remoteLadder));
+      final s = modelSummarizerOf(localRunnerExtras(p, choice, remoteLadder).contextManager!)!;
+      expect(s.provider.info.id, localProviderId);
+      expect(s.modelId, 'm1');
     });
   });
 

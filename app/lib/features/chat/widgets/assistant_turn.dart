@@ -11,6 +11,7 @@ import '../state/transcript_model.dart';
 import 'chat_style.dart';
 import 'message_actions.dart';
 import 'reasoning_region.dart';
+import 'source_chips.dart';
 import 'tool_call_card.dart';
 import 'transcript.dart';
 
@@ -62,7 +63,14 @@ class AssistantTurnTile extends StatelessWidget {
     final runActive = ChatRunScope.runningOf(context);
     final tokens = SherpaTokens.of(context);
     final theme = Theme.of(context);
+    final source = item.promptSource;
+    final perf = item.live ? null : item.perf;
     final finished = <Widget>[
+      if (source != null)
+        Padding(
+          padding: EdgeInsets.only(bottom: tokens.space.xs),
+          child: Align(alignment: AlignmentDirectional.centerStart, child: PromptSourceLabel(source: source)),
+        ),
       for (final block in item.blocks)
         Padding(
           key: ValueKey(block.key),
@@ -85,6 +93,10 @@ class AssistantTurnTile extends StatelessWidget {
                 ),
               ),
             ToolGroupBlock() => ToolGroupView(sessionId: sessionId, groupKey: block.key, calls: block.calls),
+            ResourceBlock(:final resource) => Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: ResourceChip.of(resource),
+              ),
           },
         ),
       if (!item.live && item.finishReason == FinishReason.cancelled.name && item.blocks.isNotEmpty)
@@ -119,14 +131,17 @@ class AssistantTurnTile extends StatelessWidget {
                 else if (item.showActions)
                   Align(
                     alignment: AlignmentDirectional.centerStart,
-                    child: AssistantActions(
-                      enabled: !runActive,
-                      onCopy: () => callbacks.onCopy(item),
-                      onShare: () => callbacks.onShare(item),
-                      onRetry: () => callbacks.onRetry(item),
-                      branch: item.branch,
-                      onPrevious: () => callbacks.onSwitch(item, false),
-                      onNext: () => callbacks.onSwitch(item, true),
+                    child: _withPerf(
+                      perf,
+                      AssistantActions(
+                        enabled: !runActive,
+                        onCopy: () => callbacks.onCopy(item),
+                        onShare: () => callbacks.onShare(item),
+                        onRetry: () => callbacks.onRetry(item),
+                        branch: item.branch,
+                        onPrevious: () => callbacks.onSwitch(item, false),
+                        onNext: () => callbacks.onSwitch(item, true),
+                      ),
                     ),
                   ),
                 if (!item.live && !item.showActions && item.blocks.isEmpty)
@@ -142,6 +157,14 @@ class AssistantTurnTile extends StatelessWidget {
     );
   }
 }
+
+/// The action row, followed by the reply's speed when it is known.
+Widget _withPerf(ReplyPerf? perf, Widget actions) => perf == null
+    ? actions
+    : Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [actions, ReplyPerfFooter(perf: perf)],
+      );
 
 class _Footnote extends StatelessWidget {
   const _Footnote({required this.icon, required this.text});

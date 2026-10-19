@@ -104,9 +104,10 @@ Future<List<Override>> localInferenceOverrides({
   ];
 }
 
-/// The chat's [RunnerExtrasFor] for on-device inference: the exact engine
-/// token counter and a warming context manager for the local provider,
-/// nothing for remote ones ([localRunnerExtras]).
+/// The chat's [RunnerExtrasFor] for on-device inference: for the local
+/// provider, the exact engine token counter and a warming context manager
+/// whose ladder summarizes with the chat's own model at background priority
+/// (extractive fallback); nothing for remote ones ([localRunnerExtras]).
 RunnerExtras localChatRunnerExtras(ModelProvider provider, ModelChoice choice, ContextManager base) {
   final e = localRunnerExtras(provider, choice, base);
   return RunnerExtras(counter: e.counter, contextManager: e.contextManager);

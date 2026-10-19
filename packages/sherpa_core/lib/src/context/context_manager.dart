@@ -16,7 +16,7 @@ final class ContextSettings {
   const ContextSettings({
     this.thresholds = const ContextThresholds(),
     this.keepRecentTurns = 4,
-    this.outputReserveTokens = 2048,
+    this.outputReserveTokens,
     this.estimateSafetyFraction = 0.10,
     this.largeToolResultTokens = 1500,
     this.staleAfterTurns = 2,
@@ -42,7 +42,11 @@ final class ContextSettings {
   /// Most recent user turns (and everything after the oldest of them) kept
   /// verbatim by compaction.
   final int keepRecentTurns;
-  final int outputReserveTokens;
+
+  /// Tokens kept free for the reply. Null (the default) scales with the
+  /// window ([defaultOutputReserve]); a value set here is used as is.
+  /// Either way the model's own output cap lowers it further.
+  final int? outputReserveTokens;
 
   /// Margin added when counts are estimated (no native tokenizer).
   final double estimateSafetyFraction;
@@ -99,6 +103,34 @@ final class ContextSettings {
 
   /// Recommend a handoff when the ratio after compaction is above this.
   final double maxPostCompactionRatio;
+
+  /// The reply reserve the scaled default never goes above (the old fixed
+  /// default; what every window of 8K or more gets).
+  static const int maxDefaultOutputReserve = 2048;
+
+  /// The reply reserve the scaled default never goes below: a few
+  /// sentences, or one tool call with modest arguments.
+  static const int minDefaultOutputReserve = 256;
+
+  /// The default reply reserve for a [window]-token context: a quarter of
+  /// it, clamped to [[minDefaultOutputReserve], [maxDefaultOutputReserve]].
+  ///
+  /// Why it scales: a fixed 2048 on a 2048-token window (admission's
+  /// minimum on small phones) leaves no input at all, so every turn would
+  /// hard-stop. 2K → 512, 4K → 1024, and from 8K up it is the familiar
+  /// 2048, so the R11 §9.2 ladder thresholds of medium and larger windows
+  /// are unchanged; the ≤ 4K tier compacts extractively (no summarizer
+  /// call has to fit) and only gains input room.
+  static int defaultOutputReserve(int window) =>
+      (window ~/ 4).clamp(minDefaultOutputReserve, maxDefaultOutputReserve);
+
+  /// The reply reserve for a [window]-token context: [outputReserveTokens]
+  /// when set, else [defaultOutputReserve]; never more than [maxOutput]
+  /// (the model's output cap) when that is known.
+  int outputReserveFor(int window, {int? maxOutput}) {
+    final reserve = outputReserveTokens ?? defaultOutputReserve(window);
+    return maxOutput != null && maxOutput < reserve ? maxOutput : reserve;
+  }
 }
 
 /// Everything the context manager needs for one model call.

@@ -80,6 +80,17 @@ void main() {
     expect(r.cases, isNotEmpty);
   });
 
+  test('the same create_note twice in one reply (Qwen3-0.6B trace) runs once, with one approval sheet', () async {
+    final t = _task('notes.parallel_duplicate_create');
+    for (final v in l3ScriptedVariants.entries) {
+      final r = await runL3Trial(t, trial: 0, variant: v.key, scriptedCapabilities: v.value);
+      expect(r.pass, isTrue, reason: '${v.key}: ${r.problems}');
+      expect(r.effects.where((e) => e.startsWith('create_note')), hasLength(1), reason: v.key);
+      expect(r.toolCalls, 2, reason: '${v.key}: create once, then append');
+      expect(r.prompts, 2, reason: '${v.key}: no sheet for the copy');
+    }
+  });
+
   test('servers apply effects once per call and report handles', () async {
     final w = World()..stock(groceryCatalog);
     final env = stateServers(w, ['shop']);

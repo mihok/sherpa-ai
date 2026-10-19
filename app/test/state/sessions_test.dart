@@ -1,9 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sherpa/features/mcp/mcp_bootstrap.dart';
+import 'package:sherpa/state/app_providers.dart';
 import 'package:sherpa/state/services.dart';
 import 'package:sherpa/state/sessions.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../services/mcp/support/mcp_fakes.dart';
 import '../support/harness.dart';
 
 void main() {
@@ -83,6 +86,61 @@ void main() {
     c.read(showArchivedProvider.notifier).toggle();
     await c.read(sessionListProvider.future);
     expect(c.read(visibleSessionsProvider).value!.single.archived, isTrue);
+    sub.close();
+  });
+
+  test('a committed delete runs the clean-up hooks; an undone one does not', () async {
+    final h = Harness();
+    final forgotten = <String>[];
+    final c = ProviderContainer.test(overrides: [
+      ...h.overrides,
+      sessionDeletedHooksProvider.overrideWithValue([
+        (id) async => forgotten.add(id),
+        (id) async => throw StateError('a failing hook is only logged'),
+        (id) async => forgotten.add('again:$id'),
+      ]),
+    ]);
+    final kept = await h.addSession('Kept');
+    final doomed = await h.addSession('Doomed');
+    final actions = c.read(sessionActionsProvider);
+    await actions.deleteWithUndo(kept.id).undo();
+    expect(forgotten, isEmpty);
+    await actions.deleteWithUndo(doomed.id).commit();
+    expect(forgotten, [doomed.id, 'again:${doomed.id}']);
+    expect(await h.store.getSession(doomed.id), isNull);
+  });
+
+  test("MCP forgets a deleted chat's tool switches", () async {
+    final h = Harness();
+    final rt = await fakeRuntime();
+    addTearDown(rt.dispose);
+    final c = ProviderContainer.test(overrides: [...h.overrides, ...mcpRuntimeOverrides(rt)]);
+    final s = await h.addSession('With tools');
+    final server = rt.servers.first.id;
+    await rt.enablement.setServerEnabled(server, false, sessionId: s.id);
+    expect(rt.enablement.isServerEnabled(s.id, server), isFalse);
+    await c.read(sessionActionsProvider).deleteWithUndo(s.id).commit();
+    expect(rt.enablement.isServerEnabled(s.id, server), isTrue, reason: 'back to the global switch');
+  });
+
+  test('on-device chats: badge, display name, and search by that name', () async {
+    final h = Harness(
+      wrapRegistry: (inner) => WithLocalModels(inner, [WithLocalModels.model('lib-qwen3', 'Qwen3 4B')]),
+    );
+    final c = containerFor(h);
+    expect(c.read(providerPrivacyProvider(localProviderId))?.location, ExecutionLocation.onDevice);
+    expect(c.read(providerDisplayNameProvider(localProviderId)), 'On this device');
+    await c.read(localModelsProvider.future);
+    const choice = ModelChoice(providerId: localProviderId, modelId: 'lib-qwen3');
+    expect(c.read(modelDisplayNameProvider(choice)), 'Qwen3 4B');
+    expect(c.read(modelDisplayNameProvider(const ModelChoice(providerId: 'openai', modelId: 'gpt-x'))), 'gpt-x');
+
+    final sub = c.listen(visibleSessionsProvider, (_, _) {});
+    await h.addSession('Offline notes', providerId: localProviderId, modelId: 'lib-qwen3');
+    await h.addSession('Cloud notes', providerId: 'openai', modelId: 'gpt-x');
+    await c.read(sessionListProvider.notifier).refresh();
+    c.read(sessionQueryProvider.notifier).set('qwen3 4b');
+    expect(c.read(visibleSessionsProvider).value!.map((s) => s.title), ['Offline notes']);
     sub.close();
   });
 }
