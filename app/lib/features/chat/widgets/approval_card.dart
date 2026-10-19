@@ -11,30 +11,50 @@ import 'chat_style.dart';
 import 'json_view.dart';
 
 /// Plain-language risk copy per [RiskLevel] (docs/research/11 §9.7).
+///
+/// For a one-off prompt the policy's reason explains the repair (shown in
+/// its own block, see [ApprovalCard]), so the risk line says what the tool
+/// can do instead.
 ({IconData icon, String label, String detail, Color color}) riskCopy(BuildContext context, PendingApproval a) {
   final tokens = SherpaTokens.of(context);
   final scheme = Theme.of(context).colorScheme;
+  final why = a.oneOffOnly ? _riskSentence(a) : a.reason;
   return switch (a.risk) {
     RiskLevel.safe => (
         icon: Icons.visibility_outlined,
         label: 'Reads information',
-        detail: a.reason,
+        detail: why,
         color: scheme.primary,
       ),
     RiskLevel.moderate => (
         icon: Icons.edit_note_rounded,
         label: 'Can make changes',
-        detail: a.reason,
+        detail: why,
         color: tokens.semantic.warning,
       ),
     RiskLevel.destructive => (
         icon: Icons.warning_amber_rounded,
         label: 'Can modify or delete data',
-        detail: '${a.reason} It may not be possible to undo.',
+        detail: '$why It may not be possible to undo.',
         color: tokens.semantic.danger,
       ),
   };
 }
+
+String _riskSentence(PendingApproval a) {
+  if (a.untrustedSource) {
+    return 'This server is not trusted, so Sherpa treats this action as one that may change or delete data.';
+  }
+  return switch (a.risk) {
+    RiskLevel.safe => 'This action only reads data.',
+    RiskLevel.moderate => 'This action may change state outside the app.',
+    RiskLevel.destructive => 'This action may modify or delete data.',
+  };
+}
+
+/// Headline of the one-off block: why this call can only be allowed once.
+String oneOffHeadline(PendingApproval a) =>
+    a.call.repaired ? "The model's request had to be repaired" : "The model's request had to be corrected";
 
 /// Expiry choices for "Always allow".
 enum AlwaysAllowExpiry {
@@ -51,8 +71,12 @@ enum AlwaysAllowExpiry {
 /// will do: tool and server, risk in plain words, and the full arguments.
 ///
 /// Buttons map 1:1 to [ApprovalResponse]: Deny, Allow once, Allow for this
-/// chat (session scope) and Always allow (with an expiry). "Always" is not
-/// offered for destructive tools. Y / N answer from a hardware keyboard.
+/// chat (session scope) and Always allow (with an expiry), each offered only
+/// when the policy allows that scope ([PendingApproval.allowedScopes]): never
+/// "always" for a destructive tool or an untrusted server, and only Deny /
+/// Allow once for a repaired or name-corrected call. For a proxied call
+/// (`call_tool`) everything shown is the target tool's. Y / N answer from a
+/// hardware keyboard.
 class ApprovalCard extends ConsumerWidget {
   const ApprovalCard({
     super.key,
@@ -86,6 +110,7 @@ class ApprovalCard extends ConsumerWidget {
     final risk = riskCopy(context, approval);
     final destructive = approval.risk == RiskLevel.destructive;
     final title = 'Allow “${approval.toolDisplayName}”?';
+    final warning = tokens.semantic.warning;
 
     return Focus(
       autofocus: true,
@@ -141,6 +166,39 @@ class ApprovalCard extends ConsumerWidget {
                   ),
               ],
             ),
+            if (approval.oneOffOnly) ...[
+              SizedBox(height: tokens.space.md),
+              Semantics(
+                container: true,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: warning.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(tokens.radius.sm),
+                    border: Border.all(color: warning.withValues(alpha: 0.5)),
+                  ),
+                  child: Padding(
+                    padding: EdgeInsets.all(tokens.space.md),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.build_circle_outlined, color: warning, size: ChatIconSize.medium),
+                        SizedBox(width: tokens.space.sm),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(oneOffHeadline(approval), style: theme.textTheme.labelLarge),
+                              SizedBox(height: tokens.space.xxs),
+                              Text(approval.reason, style: theme.textTheme.bodySmall),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
             SizedBox(height: tokens.space.md),
             DecoratedBox(
               decoration: BoxDecoration(
@@ -192,7 +250,9 @@ class ApprovalCard extends ConsumerWidget {
   }
 }
 
-/// Deny · Allow for this chat · Always allow ▾ · Allow once.
+/// Deny · Allow for this chat · Always allow ▾ · Allow once, as far as
+/// [PendingApproval.allowedScopes] permits (a one-off prompt: Deny · Allow
+/// once).
 class ApprovalActions extends ConsumerWidget {
   const ApprovalActions({super.key, required this.sessionId, required this.approval, this.onAnswered});
 
@@ -230,14 +290,15 @@ class ApprovalActions extends ConsumerWidget {
               onPressed: () => _respond(ref, const ApprovalResponse(UserDecision.deny)),
               child: const Text('Deny'),
             ),
-            TextButton(
-              onPressed: () => _respond(
-                ref,
-                const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.session),
+            if (approval.offersSession)
+              TextButton(
+                onPressed: () => _respond(
+                  ref,
+                  const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.session),
+                ),
+                child: const Text('Allow for this chat'),
               ),
-              child: const Text('Allow for this chat'),
-            ),
-            if (approval.allowsAlways)
+            if (approval.offersAlways)
               MenuAnchor(
                 builder: (context, controller, _) => TextButton.icon(
                   onPressed: () => controller.isOpen ? controller.close() : controller.open(),
@@ -263,11 +324,11 @@ class ApprovalActions extends ConsumerWidget {
             ),
           ],
         ),
-        if (!approval.allowsAlways)
+        if (_footnote(approval) case final note?)
           Padding(
             padding: EdgeInsets.only(top: tokens.space.sm),
             child: Text(
-              'Actions that can delete data always ask first.',
+              note,
               textAlign: TextAlign.end,
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -275,6 +336,14 @@ class ApprovalActions extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// Why fewer choices than usual are offered, or null when all are.
+String? _footnote(PendingApproval a) {
+  if (a.oneOffOnly) return 'A corrected request can only be allowed once.';
+  if (a.offersAlways) return null;
+  if (a.untrustedSource) return "Tools from a server you haven't trusted can't be allowed permanently.";
+  return 'Actions that can delete data always ask first.';
 }
 
 /// The card docked above the composer on wide screens.

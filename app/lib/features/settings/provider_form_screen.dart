@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_net/sherpa_net.dart' show UrlPolicyViolation;
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 import '../../design/haptics.dart';
@@ -67,6 +68,10 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
   bool _testing = false;
   bool _saving = false;
   bool _submitted = false;
+
+  /// The save-time verdict on the address (DNS, or the registry's own
+  /// check): shown under the field until the address or opt-in changes.
+  BaseUrlError? _urlRefused;
   ConnectionResult? _test;
   String? _defaultModelId;
   bool _useForNewChats = false;
@@ -175,6 +180,33 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
 
   // ---- actions ----------------------------------------------------------
 
+  /// The address check with DNS, before anything is saved: a plain-http
+  /// host name behind "my own network" must resolve to a local address.
+  /// False (with the reason under the field) when the address is refused.
+  Future<bool> _verifyUrl(ProviderConfig draft) async {
+    final check = await verifyBaseUrl(
+      draft.baseUrl,
+      allowLocalNetwork: draft.allowLocalNetwork,
+      resolver: ref.read(hostResolverProvider),
+    );
+    if (!mounted) return false;
+    if (check is BaseUrlError) {
+      _refuseUrl(check);
+      return false;
+    }
+    setState(() => _urlRefused = null);
+    return true;
+  }
+
+  void _refuseUrl(BaseUrlError reason) {
+    ref.read(hapticsProvider).error();
+    setState(() {
+      _urlRefused = reason;
+      _testing = false;
+      _saving = false;
+    });
+  }
+
   Future<void> _testConnection() async {
     setState(() => _submitted = true);
     final draft = _draft();
@@ -183,6 +215,7 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
       return;
     }
     setState(() => _testing = true);
+    if (!await _verifyUrl(draft)) return;
     final ConnectionResult result;
     try {
       if (_isEdit && !_dirty) {
@@ -198,8 +231,16 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
           _provisionalId = draft.id;
         }
       }
+    } on UrlPolicyViolation catch (v) {
+      // The registry's own check (DNS may have answered differently).
+      if (mounted) _refuseUrl(explainUrlViolation(v, allowLocalNetwork: draft.allowLocalNetwork));
+      return;
     } on Object {
-      if (mounted) setState(() => _testing = false);
+      if (mounted) {
+        setState(() => _testing = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text("Couldn't test the connection. Try again.")));
+      }
       return;
     }
     if (!mounted) return;
@@ -229,6 +270,7 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
       return;
     }
     setState(() => _saving = true);
+    if (!await _verifyUrl(draft)) return;
     try {
       final exists = _registry.configs.any((c) => c.id == draft.id);
       final clear = _clearKey && _newKey == null;
@@ -245,6 +287,9 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
       } else if (wasDefault && !_useForNewChats) {
         await _prefs.setDefaultModel(null);
       }
+    } on UrlPolicyViolation catch (v) {
+      if (mounted) _refuseUrl(explainUrlViolation(v, allowLocalNetwork: draft.allowLocalNetwork));
+      return;
     } on Object {
       if (mounted) {
         setState(() => _saving = false);
@@ -325,16 +370,14 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
   Widget _form(BuildContext context, ProviderPreset preset) {
     final t = SherpaTokens.of(context);
     final check = _urlCheck;
-    final urlError = _submitted || _url.text.isNotEmpty ? (check is BaseUrlError ? check.message : null) : null;
-    final needsOptIn = check is BaseUrlError && check.needsLocalNetworkOptIn;
-    final draftLocation = check is BaseUrlOk
-        ? locationOf(ProviderConfig(
-            id: '_',
-            flavor: _flavor,
-            displayName: '_',
-            baseUrl: check.uri,
-            allowLocalNetwork: _allowLocal,
-          ))
+    final refused = _urlRefused;
+    final urlError = refused?.message ??
+        (_submitted || _url.text.isNotEmpty ? (check is BaseUrlError ? check.message : null) : null);
+    final needsOptIn = (check is BaseUrlError && check.needsLocalNetworkOptIn) || (refused?.needsLocalNetworkOptIn ?? false);
+    // Rebuilds the badge once DNS confirmed (or refuted) a local host name.
+    ref.watch(localHostVerdictsProvider);
+    final badgeConfig = check is BaseUrlOk
+        ? ProviderConfig(id: '_', flavor: _flavor, displayName: '_', baseUrl: check.uri, allowLocalNetwork: _allowLocal)
         : null;
     final id = _original?.id ?? _provisionalId;
     final listed = id == null ? null : ref.watch(providerModelsProvider(id)).value;
@@ -367,13 +410,16 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
                 controller: _url,
                 hint: preset.urlHint,
                 errorText: urlError,
-                onChanged: (_) => setState(() => _test = null),
+                onChanged: (_) => setState(() {
+                  _test = null;
+                  _urlRefused = null;
+                }),
               ),
-              if (draftLocation != null) ...[
+              if (badgeConfig != null) ...[
                 SizedBox(height: t.space.sm),
                 Align(
                   alignment: AlignmentDirectional.centerStart,
-                  child: PrivacyBadge(location: draftLocation, host: hostLabel((check as BaseUrlOk).uri)),
+                  child: PrivacyBadge(location: locationOf(badgeConfig), host: privacyHostLabel(badgeConfig)),
                 ),
               ],
               if (preset.isLocalServer || preset.group == PresetGroup.custom || _allowLocal || needsOptIn)
@@ -382,6 +428,7 @@ class _ProviderFormScreenState extends ConsumerState<ProviderFormScreen> {
                   onChanged: (v) => setState(() {
                     _allowLocal = v;
                     _test = null;
+                    _urlRefused = null;
                   }),
                 ),
               SizedBox(height: t.space.lg),

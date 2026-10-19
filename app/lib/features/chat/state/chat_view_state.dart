@@ -94,6 +94,11 @@ final class ToolCallDraft {
 }
 
 /// A tool call that needs the user's decision before it may run.
+///
+/// For a proxied call (MCP `call_tool`) the runner resolves the target
+/// first: [call] is the target call (its name and arguments) and [tool] the
+/// target's definition, so the card names the tool and server that would
+/// actually run, never the proxy.
 @immutable
 final class PendingApproval {
   const PendingApproval({
@@ -102,7 +107,26 @@ final class PendingApproval {
     required this.risk,
     required this.reason,
     required this.requestedAt,
+    this.oneOffOnly = false,
+    this.allowedScopes = ApprovalScope.values,
   });
+
+  /// The card for [requirement], as the core policy decided it.
+  factory PendingApproval.of({
+    required ToolCall call,
+    required ToolDefinition? tool,
+    required NeedsConfirmation requirement,
+    required DateTime requestedAt,
+  }) =>
+      PendingApproval(
+        call: call,
+        tool: tool,
+        risk: requirement.risk,
+        reason: requirement.reason,
+        requestedAt: requestedAt,
+        oneOffOnly: requirement.oneOffOnly,
+        allowedScopes: requirement.allowedScopes,
+      );
 
   final ToolCall call;
   final ToolDefinition? tool;
@@ -110,14 +134,33 @@ final class PendingApproval {
   final String reason;
   final DateTime requestedAt;
 
+  /// The call was repaired or its tool name corrected: only "Deny" and
+  /// "Allow once" are possible, and nothing is remembered.
+  final bool oneOffOnly;
+
+  /// The grants the card may offer for "allow" ([NeedsConfirmation.allowedScopes]):
+  /// never "always" for a destructive tool or one from an untrusted server
+  /// (it counts as destructive), only "once" for [oneOffOnly].
+  final List<ApprovalScope> allowedScopes;
+
   String get toolDisplayName => tool?.displayName ?? call.name;
 
   /// "Built-in" for Sherpa's own tools, otherwise the server's name.
   String get sourceLabel => sourceLabelOf(tool?.source);
 
-  /// Destructive tools always ask (docs/research/11 §9.7): never offer an
-  /// "always allow" grant for them.
-  bool get allowsAlways => risk != RiskLevel.destructive;
+  /// "Allow for this chat" may be offered.
+  bool get offersSession => !oneOffOnly && allowedScopes.contains(ApprovalScope.session);
+
+  /// "Always allow" may be offered.
+  bool get offersAlways => !oneOffOnly && allowedScopes.contains(ApprovalScope.always);
+
+  /// The tool says it is not destructive, but its server isn't trusted, so
+  /// the policy treats it as destructive (and never offers "always").
+  bool get untrustedSource =>
+      tool != null &&
+      tool!.source.kind != ToolSourceKind.builtin &&
+      risk == RiskLevel.destructive &&
+      ApprovalPolicy.riskOf(tool!) != RiskLevel.destructive;
 }
 
 String sourceLabelOf(ToolSource? source) {
@@ -142,14 +185,21 @@ final class ChatNotice {
     required this.message,
     this.kind = ChatNoticeKind.info,
     this.action,
+    this.dismissible = false,
   });
 
   /// `retrying`, `handoff_recommended`, `tool_rerun`, `stopped`,
-  /// `max_steps`, `truncated`, … (RunNotice codes plus UI-owned ones).
+  /// `max_steps`, `truncated`, `untrusted_content`, `tool_call_truncated`,
+  /// `tool_interrupted`, … (RunNotice codes, provider notice codes such as
+  /// `tool_args_truncated`, plus UI-owned ones).
   final String code;
   final String message;
   final ChatNoticeKind kind;
   final ChatNoticeAction? action;
+
+  /// Shows a close button: for information the user may want to read once
+  /// and put away (a cut-off tool call, untrusted content in the chat).
+  final bool dismissible;
 }
 
 /// A run that was interrupted (process death, crash) and can be resumed.

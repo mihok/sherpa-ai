@@ -6,12 +6,14 @@ import '../state/chat_view_state.dart';
 import 'chat_style.dart';
 
 /// A quiet inline line in the transcript: "Retrying…", "You stopped this
-/// response.", "Paused after 24 steps [Continue]".
+/// response.", "Paused after 24 steps [Continue]". Dismissible notices
+/// ([ChatNotice.dismissible]) end with a close button.
 class NoticeTile extends StatelessWidget {
-  const NoticeTile({super.key, required this.notice, this.onAction});
+  const NoticeTile({super.key, required this.notice, this.onAction, this.onDismiss});
 
   final ChatNotice notice;
   final void Function(ChatNoticeAction action)? onAction;
+  final VoidCallback? onDismiss;
 
   @override
   Widget build(BuildContext context) {
@@ -53,6 +55,14 @@ class NoticeTile extends StatelessWidget {
                     ChatNoticeAction.continueRun => 'Continue',
                     ChatNoticeAction.handOff => 'Hand off…',
                   }),
+                ),
+              if (notice.dismissible && onDismiss != null)
+                IconButton(
+                  tooltip: 'Dismiss',
+                  onPressed: onDismiss,
+                  iconSize: ChatIconSize.small,
+                  color: theme.colorScheme.onSurfaceVariant,
+                  icon: const Icon(Icons.close_rounded),
                 ),
             ],
           ),

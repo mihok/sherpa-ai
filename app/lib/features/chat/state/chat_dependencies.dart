@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 
+import '../../../state/services.dart';
 import 'frame_scheduler.dart';
 
 // Seams the chat feature adds on top of the app's root providers
@@ -26,6 +27,18 @@ final chatAgentConfigProvider = Provider<AgentConfig>((ref) => const AgentConfig
 /// The context manager chat runs use. M3 replaces the passthrough with the
 /// escalation ladder.
 final chatContextManagerProvider = Provider<ContextManager>((ref) => const PassthroughContextManager());
+
+/// Per-provider extras for the agent runner: an on-device provider supplies
+/// an exact token counter and a context manager that warms it.
+final class RunnerExtras {
+  const RunnerExtras({this.counter, this.contextManager});
+  final TokenCounter? counter;
+  final ContextManager? contextManager;
+}
+
+typedef RunnerExtrasFor = RunnerExtras Function(ModelProvider provider, ModelChoice choice, ContextManager base);
+
+final chatRunnerExtrasProvider = Provider<RunnerExtrasFor>((ref) => (provider, choice, base) => const RunnerExtras());
 
 /// How the runner waits between provider retries (null = real time).
 /// Tests swap in an instant sleeper.

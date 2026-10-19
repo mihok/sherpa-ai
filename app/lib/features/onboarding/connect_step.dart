@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_net/sherpa_net.dart' show UrlPolicyViolation;
 import 'package:sherpa_providers/sherpa_providers.dart';
 
 import '../../design/tokens.dart';
@@ -77,11 +78,31 @@ class _ConnectStepState extends ConsumerState<ConnectStep> {
       allowLocalNetwork: _allowLocal,
     );
     setState(() => _busy = true);
+    // DNS first: a plain-http name behind "my own network" must resolve to
+    // a local address before the key is stored or sent anywhere.
+    final verified = await verifyBaseUrl(
+      check.uri,
+      allowLocalNetwork: _allowLocal,
+      resolver: ref.read(hostResolverProvider),
+    );
+    if (!mounted) return;
+    if (verified is BaseUrlError) {
+      _refuseUrl(verified.message);
+      return;
+    }
     final ConnectionResult result;
     try {
       result = await saveAndProbe(registry, config, apiKey: key.isEmpty ? null : key);
+    } on UrlPolicyViolation catch (v) {
+      // The registry's own check.
+      if (mounted) _refuseUrl(explainUrlViolation(v, allowLocalNetwork: _allowLocal).message);
+      return;
     } on Object {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(const SnackBar(content: Text("Couldn't save the provider. Try again.")));
+      }
       return;
     }
     if (!mounted) return;
@@ -101,6 +122,15 @@ class _ConnectStepState extends ConsumerState<ConnectStep> {
     widget.onResult(result);
   }
 
+  void _refuseUrl(String message) {
+    ref.read(hapticsProvider).error();
+    setState(() {
+      _busy = false;
+      _urlError = message;
+      _editUrl = true;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = SherpaTokens.of(context);
@@ -109,6 +139,7 @@ class _ConnectStepState extends ConsumerState<ConnectStep> {
     final parsed = Uri.tryParse(_url.text.trim());
     final host = parsed != null && parsed.host.isNotEmpty ? hostLabel(parsed) : null;
     final failure = _failure;
+    ref.watch(localHostVerdictsProvider); // the badge follows DNS verification
     return OnboardingStepLayout(
       title: 'Connect ${preset.name}',
       lead: preset.blurb,
@@ -130,7 +161,7 @@ class _ConnectStepState extends ConsumerState<ConnectStep> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text('Connects to', style: theme.textTheme.bodyMedium),
-                    PrivacyBadge(location: _location(), host: host),
+                    PrivacyBadge(location: _location(), host: _badgeHost() ?? host),
                   ],
                 ),
               ),
@@ -189,20 +220,30 @@ class _ConnectStepState extends ConsumerState<ConnectStep> {
     );
   }
 
-  ExecutionLocation _location() {
+  ProviderConfig? _draftConfig() {
     final parsed = Uri.tryParse(_url.text.trim());
-    if (parsed == null || parsed.host.isEmpty) {
+    if (parsed == null || parsed.host.isEmpty) return null;
+    return ProviderConfig(
+      id: '_',
+      flavor: widget.preset.flavor,
+      displayName: '_',
+      baseUrl: parsed,
+      allowLocalNetwork: _allowLocal,
+    );
+  }
+
+  ExecutionLocation _location() {
+    final config = _draftConfig();
+    if (config == null) {
       return widget.preset.isLocalServer ? ExecutionLocation.localNetwork : ExecutionLocation.remote;
     }
-    return locationOf(
-      ProviderConfig(
-        id: '_',
-        flavor: widget.preset.flavor,
-        displayName: '_',
-        baseUrl: parsed,
-        allowLocalNetwork: _allowLocal,
-      ),
-    );
+    return locationOf(config);
+  }
+
+  /// "host (unverified)" until DNS confirmed an opt-in host name is local.
+  String? _badgeHost() {
+    final config = _draftConfig();
+    return config == null ? null : privacyHostLabel(config);
   }
 }
 

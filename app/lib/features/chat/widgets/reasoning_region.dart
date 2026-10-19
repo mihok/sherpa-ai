@@ -68,6 +68,7 @@ class _ReasoningRegionState extends State<ReasoningRegion> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Semantics(
+          container: true,
           button: _canExpand,
           expanded: _canExpand ? _expanded : null,
           label: _label,

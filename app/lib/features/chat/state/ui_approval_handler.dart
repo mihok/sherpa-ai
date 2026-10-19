@@ -32,13 +32,7 @@ final class UiApprovalHandler implements ApprovalHandler {
   }) {
     if (cancel.isCancelled) return Future.value(const ApprovalResponse(UserDecision.deny));
     final request = _Request(
-      PendingApproval(
-        call: call,
-        tool: tool,
-        risk: requirement.risk,
-        reason: requirement.reason,
-        requestedAt: _clock.now(),
-      ),
+      PendingApproval.of(call: call, tool: tool, requirement: requirement, requestedAt: _clock.now()),
     );
     _queue.add(request);
     unawaited(cancel.whenCancelled.then((_) => _resolve(request, const ApprovalResponse(UserDecision.deny))));

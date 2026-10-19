@@ -3,6 +3,8 @@ import 'dart:io' show InternetAddress;
 import 'package:sherpa_net/sherpa_net.dart';
 import 'package:sherpa_providers/sherpa_providers.dart' show endpointUrlPolicy;
 
+import '../../state/provider_location.dart';
+
 /// Pure validation for the provider form, shared by onboarding and settings
 /// (and unit-tested without widgets).
 
@@ -80,15 +82,27 @@ const BaseUrlError _publicHttp = BaseUrlError(
 /// A name that does not resolve right now (the LAN server is off, the
 /// phone is elsewhere) is accepted: the provider repeats this check before
 /// every connection, so it can never connect to a public host over http.
+///
+/// What the name resolved to is recorded in [verdicts] (default: the
+/// app-wide [localHostVerdicts]), so privacy badges can call an opt-in host
+/// name local once DNS confirmed it ([locationOf]).
 Future<BaseUrlCheck> verifyBaseUrl(
   Uri uri, {
   required bool allowLocalNetwork,
   Future<List<InternetAddress>> Function(String host)? resolver,
+  LocalHostVerdicts? verdicts,
 }) async {
   final syntax = checkBaseUrl(uri.toString(), allowLocalNetwork: allowLocalNetwork);
   if (syntax is! BaseUrlOk) return syntax;
+  final resolve = resolver ?? InternetAddress.lookup;
+  Future<List<InternetAddress>> recording(String host) async {
+    final addresses = await resolve(host);
+    (verdicts ?? localHostVerdicts).record(host, addresses);
+    return addresses;
+  }
+
   try {
-    await baseUrlPolicy(allowLocalNetwork: allowLocalNetwork, resolver: resolver).check(syntax.uri.toString());
+    await baseUrlPolicy(allowLocalNetwork: allowLocalNetwork, resolver: recording).check(syntax.uri.toString());
     return syntax;
   } on UrlPolicyViolation catch (v) {
     if (v.reason.startsWith('host does not resolve')) return syntax;

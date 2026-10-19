@@ -45,9 +45,11 @@ class ContextRing extends StatelessWidget {
         : 'Context ${estimate ? 'about ' : ''}$percent% used of ${formatTokenCount(b.usableInput)} tokens, $words';
     final theme = Theme.of(context);
     return Semantics(
+      container: true,
       button: true,
       label: label,
       hint: 'Show details',
+      onTap: onTap,
       excludeSemantics: true,
       child: Tooltip(
         message: b == null ? 'Context' : 'Context: $percent% used',

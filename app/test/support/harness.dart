@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show InternetAddress;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/services.dart';
@@ -16,6 +17,7 @@ import 'package:sherpa/state/connectivity.dart';
 import 'package:sherpa/state/in_memory/in_memory_preferences_store.dart';
 import 'package:sherpa/state/in_memory/in_memory_provider_registry.dart';
 import 'package:sherpa/state/observable_session_store.dart';
+import 'package:sherpa/state/provider_location.dart';
 import 'package:sherpa/state/providers.dart';
 import 'package:sherpa/state/services.dart';
 import 'package:sherpa/state/ui_preferences.dart';
@@ -83,9 +85,12 @@ final class Harness {
     DateTime? now,
     UiSettings ui = const UiSettings(),
     this.chat = FakeChatScreen.new,
-  })  : clock = FakeClock(now ?? DateTime.utc(2026, 10, 18, 12)),
+    ProviderRegistry Function(InMemoryProviderRegistry registry)? wrapRegistry,
+  })  : _wrapRegistry = wrapRegistry,
+        clock = FakeClock(now ?? DateTime.utc(2026, 10, 18, 12)),
         ui = InMemoryUiPreferencesStore(ui),
         prefs = InMemoryPreferencesStore(defaultModel: defaultModel, onboardingComplete: onboarded) {
+    localHostVerdicts.clear(); // DNS verdicts are app-wide; start each test clean
     for (final e in keys.entries) {
       unawaited(secrets.write(e.key, e.value));
     }
@@ -109,6 +114,10 @@ final class Harness {
   final InMemorySecretStore secrets = InMemorySecretStore();
   final ObservableSessionStore store = ObservableSessionStore(InMemorySessionStore());
   late final InMemoryProviderRegistry registry;
+  final ProviderRegistry Function(InMemoryProviderRegistry registry)? _wrapRegistry;
+
+  /// What the app sees as its registry: [registry], or a wrapper around it.
+  late final ProviderRegistry appRegistry = _wrapRegistry?.call(registry) ?? registry;
   final InMemoryPreferencesStore prefs;
   final InMemoryUiPreferencesStore ui;
   // Lives as long as the test isolate; closing it would end the app's stream.
@@ -117,17 +126,25 @@ final class Harness {
   final RecordingHaptics haptics = RecordingHaptics();
   final Map<String, String?> apiKeysSeen = {};
 
+  /// Fake DNS: names not listed resolve to a public address (real lookups
+  /// never complete inside widget tests).
+  final Map<String, List<InternetAddress>> dns = {};
+
+  Future<List<InternetAddress>> resolve(String host) async =>
+      dns[host.toLowerCase()] ?? [InternetAddress('93.184.216.34')];
+
   List<Override> get overrides => [
         clockProvider.overrideWithValue(clock),
         idGeneratorProvider.overrideWithValue(ids),
         secretStoreProvider.overrideWithValue(secrets),
         sessionStoreProvider.overrideWithValue(store),
-        providerRegistryProvider.overrideWithValue(registry),
+        providerRegistryProvider.overrideWithValue(appRegistry),
         preferencesProvider.overrideWithValue(prefs),
         uiPreferencesStoreProvider.overrideWithValue(ui),
         connectivityStreamProvider.overrideWithValue(connectivity.stream),
         hapticsDriverProvider.overrideWithValue(haptics),
         chatScreenBuilderProvider.overrideWithValue(chat),
+        hostResolverProvider.overrideWithValue(resolve),
       ];
 
   Widget app() => ProviderScope(overrides: overrides, retry: noRetry, child: const SherpaApp());

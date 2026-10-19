@@ -444,6 +444,7 @@ class _ToolGroupViewState extends ConsumerState<ToolGroupView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Semantics(
+          container: true,
           button: true,
           expanded: expanded,
           label: extra.isEmpty ? title : '$title, $extra',

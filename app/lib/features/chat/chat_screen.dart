@@ -153,7 +153,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       case ChatErrorAction.addProvider:
         _push(_routes.newProvider);
       case ChatErrorAction.retry:
-        unawaited(_controller.retryLast());
+        // Repeats what failed (the run, or the share/switch/send that threw).
+        unawaited(_controller.retryError());
       case ChatErrorAction.changeModel:
         unawaited(_pickModel());
       case ChatErrorAction.newChat:

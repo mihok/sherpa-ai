@@ -431,7 +431,9 @@ Map<String, ToolExecutionView> toolViewsFromPath(
   for (final m in path) {
     if (m.role != Role.tool) continue;
     for (final r in m.toolResults) {
-      final def = lookup(r.toolName);
+      // A proxied call (`call_tool`) names the tool that actually ran.
+      final target = r.meta[ToolResultPart.metaTool];
+      final def = target is String ? lookup(target) : lookup(r.toolName);
       final text = r.text;
       final status = !r.isError
           ? ToolRunStatus.succeeded
@@ -443,7 +445,7 @@ Map<String, ToolExecutionView> toolViewsFromPath(
       final view = ToolExecutionView(
         callId: r.callId,
         toolName: r.toolName,
-        displayName: def?.displayName ?? r.toolName,
+        displayName: def?.displayName ?? (target is String ? target : r.toolName),
         sourceLabel: sourceLabel?.call(def?.source),
         status: status,
         duration: r.durationMs == null ? null : Duration(milliseconds: r.durationMs!),

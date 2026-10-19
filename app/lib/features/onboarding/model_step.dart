@@ -83,7 +83,7 @@ class _ModelStepState extends State<ModelStep> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(widget.config.displayName, style: theme.textTheme.titleSmall),
-            PrivacyBadge(location: locationOf(widget.config), host: hostLabel(widget.config.baseUrl)),
+            PrivacyBadge(location: locationOf(widget.config), host: privacyHostLabel(widget.config)),
           ],
         ),
         SizedBox(height: t.space.lg),

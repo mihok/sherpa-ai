@@ -3,8 +3,10 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa/design/haptics.dart';
 import 'package:sherpa/state/services.dart';
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_net/sherpa_net.dart';
 
 import '../../support/harness.dart';
+import '../../support/url_policy_registry.dart';
 
 Finder field(String label) => fieldLabeled(label);
 
@@ -98,6 +100,39 @@ void main() {
     await tapText(tester, 'Start chatting');
     expect(h.registry.configs.single.allowLocalNetwork, isTrue);
     expect(h.prefs.defaultModel?.modelId, 'qwen3:8b');
+  });
+
+  testWidgets('a plain-http name that resolves publicly is refused before the key is stored', (tester) async {
+    final h = Harness(onboarded: false); // fake DNS: unknown names are public
+    await pumpApp(tester, h);
+    await tapText(tester, 'Get started');
+    await tapText(tester, 'Ollama');
+    await tester.enterText(fieldLabeled('Server address'), 'http://ollama.myvps.example.com:11434/v1');
+    await tapText(tester, 'This is a server on my own network');
+    await tapText(tester, 'Connect');
+    expect(find.text('This is a public internet address. Use https:// so your messages are encrypted on the way.'),
+        findsOneWidget);
+    expect(find.text('Pick a model'), findsNothing);
+    expect(h.registry.configs, isEmpty);
+    expect(h.haptics.calls, contains(HapticKind.error));
+  });
+
+  testWidgets("the registry's own URL refusal is shown under the address", (tester) async {
+    final h = Harness(
+      onboarded: false,
+      wrapRegistry: (inner) => RefusingRegistry(
+        inner,
+        const UrlPolicyViolation('http://192.168.1.20:11434/v1', 'linkLocal address 169.254.1.1 is not allowed'),
+      ),
+    );
+    await pumpApp(tester, h);
+    await tapText(tester, 'Get started');
+    await tapText(tester, 'Ollama');
+    await tester.enterText(fieldLabeled('Server address'), 'http://192.168.1.20:11434/v1');
+    await tapText(tester, 'This is a server on my own network');
+    await tapText(tester, 'Connect');
+    expect(find.text("Sherpa won't connect to link-local or reserved addresses."), findsOneWidget);
+    expect(find.text('Pick a model'), findsNothing);
   });
 
   testWidgets('back steps through the flow instead of leaving it', (tester) async {

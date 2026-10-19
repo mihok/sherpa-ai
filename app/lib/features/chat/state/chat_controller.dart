@@ -16,6 +16,7 @@ import 'chat_view_state.dart';
 import 'draft_builder.dart';
 import 'frame_scheduler.dart';
 import 'model_selection.dart';
+import 'notice_copy.dart';
 import 'transcript_model.dart';
 import 'ui_approval_handler.dart';
 
@@ -67,7 +68,23 @@ class ChatController extends Notifier<ChatViewState> {
 
   AgentRunner? _runner;
   ModelChoice? _runnerChoice;
+
+  /// The provider instance [_runner] talks to. The registry builds a new
+  /// instance whenever a provider is edited (base URL, key, headers), so an
+  /// unchanged [ModelChoice] alone doesn't mean the runner is current.
+  ModelProvider? _runnerProvider;
   bool _runnerStale = false;
+
+  /// What "Try again" on the current error card repeats (see [retryError]).
+  ({ChatError error, Future<void> Function() again})? _retry;
+
+  /// Notices the user dismissed that the runner repeats on every run of a
+  /// chat ([_repeatingNotices]): once is enough.
+  final Set<String> _dismissedNotices = {};
+
+  /// Said again by every run once true (the chat stays tainted); other
+  /// notices report a new event each time and are shown again.
+  static const _repeatingNotices = {'untrusted_content'};
 
   StreamSubscription<AgentEvent>? _runSub;
   StreamSubscription<List<ProviderConfig>>? _registrySub;
@@ -122,8 +139,8 @@ class ChatController extends Notifier<ChatViewState> {
     }
     _approvals = UiApprovalHandler(onChanged: _onApprovalChanged, clock: _clock);
     ref.onDispose(_dispose);
-    _registrySub = _registry.changes.listen((_) => unawaited(_guarded(_refreshModel)));
-    _prefsSub = _prefs?.changes.listen((_) => unawaited(_guarded(_refreshModel)));
+    _registrySub = _registry.changes.listen((_) => _onRegistryChanged());
+    _prefsSub = _prefs?.changes.listen((_) => unawaited(_guarded(_refreshModel, failed: "update this chat's model")));
     _loaded = _load();
     return ChatViewState(sessionId: sessionId);
   }
@@ -147,6 +164,7 @@ class ChatController extends Notifier<ChatViewState> {
       anchorAt: state.items.length,
       pendingUser: trimmed,
       open: (runner) => runner.send(sessionId, [TextPart(trimmed)]),
+      again: () => send(trimmed),
     );
   }
 
@@ -172,13 +190,14 @@ class ChatController extends Notifier<ChatViewState> {
     final message = await _message(assistantMessageId);
     final parentId = message?.parentId;
     if (message == null || parentId == null) {
-      _showError(chatErrorFrom(StateError('cannot retry $assistantMessageId'), model: state.model));
+      _showError(actionErrorFrom(StateError('cannot retry $assistantMessageId'), failed: 'regenerate this reply'));
       return;
     }
     await _launch(
       anchorAt: _itemIndexOf(assistantMessageId),
       keepThrough: parentId,
       open: (runner) => runner.regenerate(sessionId, fromMessageId: parentId),
+      again: () => retry(assistantMessageId),
     );
   }
 
@@ -186,12 +205,18 @@ class ChatController extends Notifier<ChatViewState> {
   /// regenerated from its parent (keeping earlier tool work); a finished
   /// turn is regenerated as a whole; a turn that never produced output is
   /// re-run from its user or tool message.
+  ///
+  /// "Stopped" counts as partial: after Stop during the text that follows a
+  /// tool step, only that step is regenerated, so the tools that already
+  /// ran are kept and never executed a second time.
   Future<void> retryLast() async {
     if (_runActive) return;
     final leaf = _path.isEmpty ? null : _path.last;
     if (leaf == null) return;
     if (leaf.role == Role.assistant) {
-      final partial = leaf.finishReason == FinishReason.error.name || leaf.metadata['error'] != null;
+      final partial = leaf.finishReason == FinishReason.error.name ||
+          leaf.finishReason == FinishReason.cancelled.name ||
+          leaf.metadata['error'] != null;
       if (partial) return retry(leaf.id);
       final turn = _turnContaining(leaf.id);
       return retry(turn?.firstMessageId ?? leaf.id);
@@ -199,6 +224,7 @@ class ChatController extends Notifier<ChatViewState> {
     await _launch(
       anchorAt: state.items.length,
       open: (runner) => runner.regenerate(sessionId, fromMessageId: leaf.id),
+      again: retryLast,
     );
   }
 
@@ -212,6 +238,7 @@ class ChatController extends Notifier<ChatViewState> {
     await _launch(
       anchorAt: _itemIndexOf(leaf.id),
       open: (runner) => runner.regenerate(sessionId, fromMessageId: leaf.id),
+      again: continueRun,
     );
   }
 
@@ -222,7 +249,7 @@ class ChatController extends Notifier<ChatViewState> {
     if (trimmed.isEmpty || _runActive) return;
     final message = await _message(userMessageId);
     if (message == null || message.role != Role.user) {
-      _showError(chatErrorFrom(StateError('cannot edit $userMessageId'), model: state.model));
+      _showError(actionErrorFrom(StateError('cannot edit $userMessageId'), failed: 'edit this message'));
       return;
     }
     await _launch(
@@ -230,6 +257,7 @@ class ChatController extends Notifier<ChatViewState> {
       keepBefore: userMessageId,
       pendingUser: trimmed,
       open: (runner) => runner.edit(sessionId, userMessageId, [TextPart(trimmed)]),
+      again: () => edit(userMessageId, trimmed),
     );
   }
 
@@ -237,9 +265,13 @@ class ChatController extends Notifier<ChatViewState> {
   /// where the new branch starts ([keepThrough] / [keepBefore]), the pending
   /// user text and the live "thinking" turn appear immediately, and all of
   /// it is rolled back if the run can't start (no provider, store error).
+  /// [again] is the public call that launched it: "Try again" on a failure
+  /// to start repeats it (resends the message) rather than regenerating an
+  /// earlier reply.
   Future<void> _launch({
     required int anchorAt,
     required Stream<AgentEvent> Function(AgentRunner runner) open,
+    required Future<void> Function() again,
     String? pendingUser,
     String? keepThrough,
     String? keepBefore,
@@ -262,12 +294,13 @@ class ChatController extends Notifier<ChatViewState> {
         status: ChatRunStatus.idle,
         items: restored,
         historyCount: math.min(state.historyCount, restored.length),
-        error: error,
+        error: error == null ? null : _bindRetry(error, again),
       ));
     }
 
     _runActive = true;
     _stopping = false;
+    _retry = null;
     applyOptimistic();
     final items = _buildItems();
     _flush(base: state.copyWith(
@@ -306,7 +339,7 @@ class ChatController extends Notifier<ChatViewState> {
   /// chosen sibling.
   Future<void> switchBranch(String messageId, BranchDirection direction) async {
     if (_runActive) return;
-    await _guarded(() async {
+    await _guarded(failed: 'switch to that version', () async {
       final message = await _message(messageId);
       if (message == null) return;
       final siblings = _ordered(await _store.children(sessionId, message.parentId))
@@ -338,7 +371,7 @@ class ChatController extends Notifier<ChatViewState> {
       await _platform.copyText(text);
       return true;
     } on Object catch (e) {
-      _showError(chatErrorFrom(e));
+      _showError(actionErrorFrom(e, failed: 'copy the text'), again: () => copy(messageId));
       return false;
     }
   }
@@ -347,25 +380,23 @@ class ChatController extends Notifier<ChatViewState> {
   Future<void> share(String messageId) async {
     final text = _visibleTextOf(messageId);
     if (text.isEmpty) return;
-    await _guarded(() => _platform.shareText(text, subject: state.title.isEmpty ? null : state.title));
+    await _guarded(
+      failed: 'share this reply',
+      () => _platform.shareText(text, subject: state.title.isEmpty ? null : state.title),
+    );
   }
 
   /// Switches the chat to another provider/model. Future turns use it; a
   /// running turn finishes on the model it started with.
   Future<void> changeModel(ModelChoice choice) async {
-    await _guarded(() async {
+    await _guarded(failed: 'switch the model', () async {
       final session = await _requireSession();
       await _store.putSession(session.copyWith(
         providerId: choice.providerId,
         modelId: choice.modelId,
         updatedAt: _clock.now(),
       ));
-      if (_runActive) {
-        _runnerStale = true;
-      } else {
-        _runner = null;
-        _runnerChoice = null;
-      }
+      _invalidateRunner();
       if (_isSetupError(state.error)) _commit(state.copyWith(error: null));
       await _refreshModel();
       unawaited(_quiet(_estimateBudget));
@@ -376,7 +407,7 @@ class ChatController extends Notifier<ChatViewState> {
   /// last checkpoint. Approvals that were pending are asked again.
   Future<void> resumeIfInterrupted() async {
     if (_runActive) return;
-    await _guarded(() async {
+    await _guarded(failed: 'resume the interrupted reply', () async {
       await _loaded;
       final cp = await _store.getCheckpoint(sessionId);
       if (cp == null || cp.isTerminal || cp.leafMessageId == null) {
@@ -395,7 +426,7 @@ class ChatController extends Notifier<ChatViewState> {
   /// valid to continue.
   Future<void> discardInterrupted() async {
     if (_runActive) return;
-    await _guarded(() async {
+    await _guarded(failed: 'discard the interrupted reply', () async {
       AgentRunner? runner;
       try {
         runner = await _ensureRunner();
@@ -423,14 +454,35 @@ class ChatController extends Notifier<ChatViewState> {
       ));
       return id;
     } on Object catch (e) {
-      _showError(chatErrorFrom(e));
+      // Retrying from the card wouldn't navigate; "New chat" goes through
+      // the screen, which does.
+      _showError(actionErrorFrom(e, failed: 'start a new chat', actions: const [ChatErrorAction.newChat]));
       return null;
     }
   }
 
-  void dismissError() => _commit(state.copyWith(error: null));
+  /// "Try again" on the error card: repeats exactly what failed. A failed
+  /// run is retried from where it stopped ([retryLast]); a failed action
+  /// (share, copy, branch switch, model change, a send that could not
+  /// start) is repeated as that action, so a failed share never
+  /// regenerates a reply.
+  Future<void> retryError() async {
+    final pending = _retry;
+    _retry = null;
+    if (pending == null || !identical(pending.error, state.error)) return;
+    _commit(state.copyWith(error: null));
+    await pending.again();
+  }
 
-  void dismissNotice(String code) => _dismissNotice(code);
+  void dismissError() {
+    _retry = null;
+    _commit(state.copyWith(error: null));
+  }
+
+  void dismissNotice(String code) {
+    if (_repeatingNotices.contains(code)) _dismissedNotices.add(code);
+    _dismissNotice(code);
+  }
 
   // ---------------------------------------------------------------------------
   // Context (M3). The inspector, "Compact now" and undo go through the
@@ -527,7 +579,13 @@ class ChatController extends Notifier<ChatViewState> {
       unawaited(_quiet(_estimateBudget));
     } on Object catch (e) {
       if (_disposed) return;
-      _commit(state.copyWith(loading: false, error: chatErrorFrom(e)));
+      _commit(state.copyWith(
+        loading: false,
+        error: _bindRetry(chatErrorFrom(e), () async {
+          _loaded = _load();
+          await _loaded;
+        }),
+      ));
     }
   }
 
@@ -641,12 +699,19 @@ class ChatController extends Notifier<ChatViewState> {
     ));
   }
 
+  /// The runner for the next run, rebuilt when the model choice changed, the
+  /// registry changed ([_onRegistryChanged]) or the provider now resolves
+  /// to another instance (an edit the change event didn't reach us for).
   Future<AgentRunner> _ensureRunner() async {
     await _loaded;
     final choice = await _choiceForRun();
-    final existing = _runner;
-    if (existing != null && _runnerChoice == choice && !_runnerStale) return existing;
     final provider = await _registry.resolve(choice.providerId);
+    final existing = _runner;
+    if (existing != null && _runnerChoice == choice && !_runnerStale && identical(_runnerProvider, provider)) {
+      return existing;
+    }
+    final base = ref.read(chatContextManagerProvider);
+    final extras = ref.read(chatRunnerExtrasProvider)(provider, choice, base);
     final runner = AgentRunner(
       store: _store,
       provider: provider,
@@ -654,7 +719,8 @@ class ChatController extends Notifier<ChatViewState> {
       tools: _router,
       approvals: ref.read(approvalPolicyProvider),
       approvalHandler: _approvals,
-      contextManager: ref.read(chatContextManagerProvider),
+      contextManager: extras.contextManager ?? base,
+      counter: extras.counter,
       memory: ref.read(memoryMonitorProvider),
       clock: _clock,
       ids: ref.read(idGeneratorProvider),
@@ -663,8 +729,32 @@ class ChatController extends Notifier<ChatViewState> {
     );
     _runner = runner;
     _runnerChoice = choice;
+    _runnerProvider = provider;
     _runnerStale = false;
     return runner;
+  }
+
+  /// A registry change can rebuild the active provider: an edited base URL,
+  /// key or header must never keep going to the old endpoint while the
+  /// privacy badge already shows the new one. The change event doesn't say
+  /// which provider changed (and a key edit leaves every config as it was),
+  /// so the runner is always invalidated; building one is cheap.
+  void _onRegistryChanged() {
+    _invalidateRunner();
+    unawaited(_guarded(_refreshModel, failed: "update this chat's model"));
+  }
+
+  /// Drops the runner now when idle; while a run uses it, marks it stale so
+  /// the run finishes on what it started with and the next run rebuilds.
+  void _invalidateRunner() {
+    if (_runActive) {
+      _runnerStale = true;
+      return;
+    }
+    _runner = null;
+    _runnerChoice = null;
+    _runnerProvider = null;
+    _runnerStale = false;
   }
 
   Future<ModelChoice> _choiceForRun() async {
@@ -764,29 +854,34 @@ class ChatController extends Notifier<ChatViewState> {
         _setStatus(ChatRunStatus.streaming);
         // Results of a step whose calls were all denied are persisted without
         // a ToolCallFinished event; pick them up before the next reply lands.
-        if (step > 1) unawaited(_guarded(_reloadPath));
+        if (step > 1) unawaited(_guarded(_reloadPath, failed: 'refresh the conversation'));
       case Checkpointed(:final checkpoint):
         if (_reloadOnCheckpoint && checkpoint.leafMessageId != null) {
           // The first checkpoint names the run's starting leaf: for send and
           // edit that is the user message the runner just persisted.
           _reloadOnCheckpoint = false;
           if (_pendingUser != null) _pendingUserId = checkpoint.leafMessageId;
-          unawaited(_guarded(_reloadPath));
+          unawaited(_guarded(_reloadPath, failed: 'refresh the conversation'));
         }
       case ContextPrepared(:final budget, :final level):
         _flush(base: state.copyWith(budget: budget, contextLevel: level, budgetIsEstimate: false));
       case ModelStreamed(:final messageId, :final event):
         final draft = _draft?.messageId == messageId ? _draft! : (_draft = DraftBuilder(messageId));
         draft.apply(event, _clock.now());
-        if (state.notices.any((n) => n.code == 'retrying')) {
-          _flush(base: state.copyWith(notices: state.notices.where((n) => n.code != 'retrying').toList()));
+        var notices = state.notices;
+        if (notices.any((n) => n.code == 'retrying')) notices = notices.where((n) => n.code != 'retrying').toList();
+        final notice = event is ProviderNotice ? providerNoticeFor(event) : null;
+        if (notice != null) notices = _withNotice(notices, notice);
+        if (!identical(notices, state.notices)) {
+          _flush(base: state.copyWith(notices: notices));
         } else {
           _markDirty();
         }
       case AssistantMessageCompleted(:final message):
         _onAssistantCompleted(message);
-      case ToolApprovalRequested(:final call):
-        _liveTools[call.id] = _toolView(call, ToolRunStatus.awaitingApproval);
+      case ToolApprovalRequested(:final call, :final tool):
+        // For a proxy such as `call_tool`, [call] and [tool] are the target.
+        _liveTools[call.id] = _toolView(call, ToolRunStatus.awaitingApproval, def: tool);
         _invalidateTools();
         _flush(base: state.copyWith(status: ChatRunStatus.awaitingApproval));
       case ToolApprovalResolved(:final callId, :final approved):
@@ -817,14 +912,8 @@ class ChatController extends Notifier<ChatViewState> {
       case PlanUpdated():
         break; // The plan is visible through the update_plan tool result.
       case RunNotice(:final code, :final message):
-        final notice = ChatNotice(
-          code: code,
-          message: _noticeCopy(code, message),
-          kind: code == 'retrying' ? ChatNoticeKind.progress : ChatNoticeKind.info,
-          // The ladder's advice comes with the way to act on it.
-          action: code == 'handoff_recommended' ? ChatNoticeAction.handOff : null,
-        );
-        _flush(base: state.copyWith(notices: [...state.notices.where((n) => n.code != code), notice]));
+        final notices = _withNotice(state.notices, runNoticeFor(code, message));
+        if (!identical(notices, state.notices)) _flush(base: state.copyWith(notices: notices));
       case RunFinished():
         unawaited(_finishRun(e));
     }
@@ -842,7 +931,8 @@ class ChatController extends Notifier<ChatViewState> {
         // runner never rewrites a message after completing it.
         m = m.copyWith(metadata: {...m.metadata, 'reasoningMs': thought.inMilliseconds});
         final hinted = m;
-        unawaited(_guarded(() => _store.putMessage(sessionId, hinted)));
+        // A display hint: losing it is not worth an error card.
+        unawaited(_quiet(() => _store.putMessage(sessionId, hinted)));
       }
     }
     if (_applyMessage(m) && draft != null) _draft = null;
@@ -900,7 +990,8 @@ class ChatController extends Notifier<ChatViewState> {
         ));
       case RunOutcome.needsUserAction || RunOutcome.failed:
         status = ChatRunStatus.error;
-        error = chatErrorFrom(e.error, outcome: e.outcome, detail: e.detail, model: state.model);
+        // A failed run left a reply (or a request) to retry from.
+        error = _bindRetry(chatErrorFrom(e.error, outcome: e.outcome, detail: e.detail, model: state.model), retryLast);
     }
     final items = _buildItems();
     _flush(base: state.copyWith(
@@ -917,6 +1008,7 @@ class ChatController extends Notifier<ChatViewState> {
     if (_runnerStale) {
       _runner = null;
       _runnerChoice = null;
+      _runnerProvider = null;
       _runnerStale = false;
     }
     _completeRun();
@@ -938,7 +1030,7 @@ class ChatController extends Notifier<ChatViewState> {
   void _onApprovalChanged(PendingApproval? pending) {
     if (_disposed) return;
     if (pending != null) {
-      _liveTools[pending.call.id] = _toolView(pending.call, ToolRunStatus.awaitingApproval);
+      _liveTools[pending.call.id] = _toolView(pending.call, ToolRunStatus.awaitingApproval, def: pending.tool);
       _invalidateTools();
       unawaited(_platform.haptic(ChatHaptic.approvalRequested));
     }
@@ -969,7 +1061,7 @@ class ChatController extends Notifier<ChatViewState> {
     }
     final parentMatches = _path.isEmpty ? m.parentId == null : m.parentId == _path.last.id;
     if (!parentMatches) {
-      unawaited(_guarded(_reloadPath));
+      unawaited(_guarded(_reloadPath, failed: 'refresh the conversation'));
       return false;
     }
     _setPath([..._path, m]);
@@ -1129,8 +1221,8 @@ class ChatController extends Notifier<ChatViewState> {
   // ---------------------------------------------------------------------------
   // Tool views
 
-  ToolExecutionView _toolView(ToolCall call, ToolRunStatus status) {
-    final def = _router.lookup(call.name);
+  ToolExecutionView _toolView(ToolCall call, ToolRunStatus status, {ToolDefinition? def}) {
+    def ??= _router.lookup(call.name);
     return ToolExecutionView(
       callId: call.id,
       toolName: call.name,
@@ -1187,7 +1279,36 @@ class ChatController extends Notifier<ChatViewState> {
     _flush(base: state.copyWith(status: status));
   }
 
-  void _showError(ChatError error) => _commit(state.copyWith(error: error));
+  /// Shows [error]. Its "Try again" repeats [again], the operation that
+  /// failed; without one the card offers no retry.
+  void _showError(ChatError error, {Future<void> Function()? again}) =>
+      _commit(state.copyWith(error: _bindRetry(error, again)));
+
+  /// Binds [error]'s retry action to [again] (see [retryError]); drops the
+  /// action when nothing can be retried, so "Try again" never means
+  /// "regenerate the last reply" for something that wasn't a run.
+  ChatError _bindRetry(ChatError error, Future<void> Function()? again) {
+    final offers = error.actions.contains(ChatErrorAction.retry);
+    final bound = offers && again == null
+        ? error.withActions([for (final a in error.actions) if (a != ChatErrorAction.retry) a])
+        : error;
+    _retry = offers && again != null ? (error: bound, again: again) : null;
+    return bound;
+  }
+
+  /// Adds [notice] (replacing one with the same code). Notices the user
+  /// dismissed stay dismissed when the runner repeats them, and one tool
+  /// call cut off by the length limit is reported once, not by both the
+  /// provider and the runner.
+  List<ChatNotice> _withNotice(List<ChatNotice> notices, ChatNotice notice) {
+    if (_dismissedNotices.contains(notice.code)) return notices;
+    if (notice.code == 'tool_args_truncated' && notices.any((n) => n.code == 'tool_call_truncated')) return notices;
+    return [
+      ...notices.where((n) =>
+          n.code != notice.code && !(notice.code == 'tool_call_truncated' && n.code == 'tool_args_truncated')),
+      notice,
+    ];
+  }
 
   void _dismissNotice(String code) {
     if (!state.notices.any((n) => n.code == code)) return;
@@ -1206,15 +1327,6 @@ class ChatController extends Notifier<ChatViewState> {
         ChatErrorKind.contextOverflow,
       }.contains(e.kind);
 
-  /// The runner's notice text is technical (`rateLimited: retrying in
-  /// 800 ms`); the transcript shows a calm sentence instead.
-  static String _noticeCopy(String code, String message) {
-    if (code != 'retrying') return message;
-    if (message.startsWith('${ProviderErrorKind.rateLimited.name}:')) return 'Rate limited — retrying shortly…';
-    if (message.startsWith('${ProviderErrorKind.overloaded.name}:')) return 'The server is busy — retrying…';
-    return 'Connection problem — retrying…';
-  }
-
   /// Best-effort work whose failure must not surface as an error.
   Future<void> _quiet(Future<void> Function() body) async {
     try {
@@ -1224,14 +1336,18 @@ class ChatController extends Notifier<ChatViewState> {
     }
   }
 
-  /// Runs [body]; any failure becomes a visible, actionable error.
-  Future<void> _guarded(Future<void> Function() body) async {
+  /// Runs [body], an action that is not a run; a failure becomes a visible
+  /// error ("Couldn't [failed]") whose "Try again" runs [body] again.
+  Future<void> _guarded(Future<void> Function() body, {required String failed}) async {
     try {
       await body();
     } on Object catch (e, st) {
       if (_disposed) return;
       debugPrint('chat[$sessionId]: $e\n$st');
-      _showError(chatErrorFrom(e, model: state.model));
+      _showError(
+        actionErrorFrom(e, failed: failed, model: state.model),
+        again: () => _guarded(body, failed: failed),
+      );
     }
   }
 

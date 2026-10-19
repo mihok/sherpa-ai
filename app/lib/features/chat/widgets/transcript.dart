@@ -275,7 +275,12 @@ class ChatTranscriptState extends ConsumerState<ChatTranscript> {
     final live = <Widget>[
       for (final item in liveItems) _tile(item),
       for (final n in notices)
-        NoticeTile(key: ValueKey('notice:${n.code}'), notice: n, onAction: widget.onNoticeAction),
+        NoticeTile(
+          key: ValueKey('notice:${n.code}'),
+          notice: n,
+          onAction: widget.onNoticeAction,
+          onDismiss: n.dismissible ? () => ref.read(provider.notifier).dismissNotice(n.code) : null,
+        ),
       if (error != null)
         ChatErrorCard(
           key: const ValueKey('error'),
@@ -370,8 +375,10 @@ class JumpToLatestButton extends StatelessWidget {
                 opacity: visible ? 1 : 0,
                 duration: motion.fast,
                 child: Semantics(
+                  container: true,
                   button: true,
                   label: follow.unread ? 'Jump to latest, new messages below' : 'Jump to latest',
+                  onTap: visible ? onPressed : null,
                   excludeSemantics: true,
                   child: Badge(
                     isLabelVisible: follow.unread,

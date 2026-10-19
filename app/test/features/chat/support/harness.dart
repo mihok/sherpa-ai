@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa/design/tokens.dart';
 import 'package:sherpa/features/chat/state/chat_controller.dart';
@@ -50,10 +51,12 @@ final class ChatHarness {
     AgentConfig agentConfig = const AgentConfig(),
     List<ProviderConfig>? configs,
     Map<String, ModelProvider>? providers,
+    ToolRouter? router,
+    List<Override> overrides = const [],
   }) {
     this.provider = provider ??
         ScriptedProvider(turns, info: kCloudInfo, eventDelay: eventDelay, capabilitiesValue: caps);
-    router = LocalToolRouter(tools);
+    this.router = router ?? LocalToolRouter(tools);
     registry = FakeProviderRegistry(
       configs: configs ?? (configured ? [kCloudConfig] : const []),
       providers: providers ?? (configured ? {kProviderId: this.provider} : const {}),
@@ -65,12 +68,13 @@ final class ChatHarness {
         preferencesProvider.overrideWithValue(prefs),
         clockProvider.overrideWithValue(clock),
         idGeneratorProvider.overrideWithValue(ids),
-        toolRouterProvider.overrideWithValue(router),
+        toolRouterProvider.overrideWithValue(this.router),
         approvalPolicyProvider.overrideWithValue(policy),
         chatFrameSchedulerProvider.overrideWithValue(frames ?? MicrotaskFrameScheduler()),
         chatPlatformProvider.overrideWithValue(platform),
         chatAgentConfigProvider.overrideWithValue(agentConfig),
         chatRetrySleepProvider.overrideWithValue((_) async {}),
+        ...overrides,
       ],
     );
   }
@@ -82,7 +86,7 @@ final class ChatHarness {
   final RecordingPlatformActions platform = RecordingPlatformActions();
   late final ApprovalPolicy policy = ApprovalPolicy(clock: clock);
   late final ModelProvider provider;
-  late final LocalToolRouter router;
+  late final ToolRouter router;
   late final FakeProviderRegistry registry;
   late final ProviderContainer container;
 

@@ -85,9 +85,11 @@ final class PrivacyBadgeData {
 }
 
 /// Classifies a configured endpoint before (or without) building the
-/// provider, with the app-wide rules in `state/provider_location.dart`.
+/// provider, with the app-wide rules in `state/provider_location.dart`: an
+/// opt-in host name DNS hasn't confirmed as local is "remote" and its host
+/// reads "(unverified)".
 PrivacyBadgeData privacyForConfig(ProviderConfig config) =>
-    PrivacyBadgeData(location: locationOf(config), host: hostLabel(config.baseUrl));
+    PrivacyBadgeData(location: locationOf(config), host: privacyHostLabel(config));
 
 /// What a built provider reports about itself.
 PrivacyBadgeData privacyForProvider(ProviderInfo info) => PrivacyBadgeData(

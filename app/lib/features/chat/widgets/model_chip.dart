@@ -38,9 +38,11 @@ class ModelChip extends StatelessWidget {
     final name = s?.modelName ?? 'Choose model';
     final semantics = s == null ? 'Choose a model' : 'Model: ${s.modelName}. ${s.privacy.description}';
     return Semantics(
+      container: true,
       button: true,
       label: semantics,
       hint: 'Change model',
+      onTap: onTap,
       excludeSemantics: true,
       child: Tooltip(
         message: s == null ? 'Choose a model' : '${s.providerName} · ${s.privacy.description}',

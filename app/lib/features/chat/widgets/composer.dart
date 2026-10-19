@@ -250,11 +250,17 @@ class _ChatComposerState extends State<ChatComposer> {
                   duration: motion.fast,
                   switchInCurve: motion.standard,
                   transitionBuilder: (child, a) => ScaleTransition(scale: a, child: child),
+                  // Each button is its own semantics node with the tap action:
+                  // `excludeSemantics` drops the IconButton's, and without
+                  // `container` the label would merge into the screen-wide
+                  // node above, which has no tap (TalkBack couldn't Stop).
                   child: widget.running
                       ? Semantics(
                           key: const ValueKey('stop'),
+                          container: true,
                           button: true,
                           label: 'Stop response',
+                          onTap: widget.onStop,
                           excludeSemantics: true,
                           child: IconButton.filled(
                             tooltip: 'Stop (Esc)',
@@ -269,9 +275,11 @@ class _ChatComposerState extends State<ChatComposer> {
                         )
                       : Semantics(
                           key: const ValueKey('send'),
+                          container: true,
                           button: true,
                           enabled: widget.canSend && _hasText,
                           label: 'Send message',
+                          onTap: widget.canSend && _hasText ? _submit : null,
                           excludeSemantics: true,
                           child: IconButton.filled(
                             tooltip: 'Send',

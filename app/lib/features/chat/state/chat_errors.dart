@@ -26,13 +26,19 @@ enum ChatErrorKind {
 
 /// The buttons an error card can offer. The screen maps each to navigation
 /// or a controller call; the controller never navigates itself.
+///
+/// [retry] ("Try again") repeats exactly what failed: the run that ended
+/// with this error, or the action (share, copy, branch switch…) that threw.
+/// The controller binds it to that operation (`ChatController.retryError`)
+/// and drops it from errors with nothing to repeat.
 enum ChatErrorAction { fixProvider, addProvider, retry, changeModel, newChat }
 
 /// An error mapped to calm, specific copy and the actions that can fix it.
 ///
-/// Rule: every error names its cause in plain words and offers at least one
-/// way forward; "retry" is offered only where retrying can help (never for
-/// a spending cap or a rejected key).
+/// Rule: every error names its cause in plain words and offers a way
+/// forward (the card can always be dismissed); "retry" is offered only
+/// where retrying can help (never for a spending cap or a rejected key) and
+/// only repeats what failed.
 @immutable
 final class ChatError {
   const ChatError({
@@ -54,6 +60,16 @@ final class ChatError {
   final String? detail;
   final String? providerId;
   final Duration? retryAfter;
+
+  ChatError withActions(List<ChatErrorAction> actions) => ChatError(
+        kind: kind,
+        title: title,
+        message: message,
+        actions: actions,
+        detail: detail,
+        providerId: providerId,
+        retryAfter: retryAfter,
+      );
 }
 
 /// Thrown by the controller when a run can't start for a setup reason.
@@ -202,6 +218,39 @@ ChatError chatErrorFrom(
     message: 'Your conversation is saved. Try again.',
     actions: const [ChatErrorAction.retry],
     detail: detail ?? error?.toString(),
+  );
+}
+
+/// Maps the failure of an action that is not a run (share, copy, branch
+/// switch, model change, new chat…) to a [ChatError].
+///
+/// There is no reply to regenerate, so the run's "Try again" is never
+/// implied: the card offers [actions], the ways forward that fit what
+/// failed. [ChatErrorAction.retry] among them means "do [failed] again",
+/// and the caller binds it to that action.
+ChatError actionErrorFrom(
+  Object error, {
+  required String failed,
+  List<ChatErrorAction> actions = const [ChatErrorAction.retry],
+  ModelSelection? model,
+}) {
+  final mapped = chatErrorFrom(error, model: model);
+  if (mapped.kind != ChatErrorKind.unknown) {
+    // Setup and provider errors keep their own fixes; "retry" only when the
+    // caller can repeat the action.
+    return mapped.withActions([
+      for (final a in mapped.actions)
+        if (a != ChatErrorAction.retry || actions.contains(ChatErrorAction.retry)) a,
+    ]);
+  }
+  return ChatError(
+    kind: ChatErrorKind.unknown,
+    title: "Couldn't $failed",
+    message: actions.contains(ChatErrorAction.retry)
+        ? 'Your conversation is saved. Try again.'
+        : 'Your conversation is saved.',
+    actions: actions,
+    detail: error.toString(),
   );
 }
 

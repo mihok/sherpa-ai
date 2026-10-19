@@ -25,6 +25,9 @@ final class FakeProviderRegistry implements ProviderRegistry {
   final Set<String> failingModelLists = {};
   int modelCalls = 0;
 
+  /// The next this many [resolve] calls throw (a store or keychain error).
+  int failResolves = 0;
+
   void setProvider(String id, ModelProvider provider) => _providers[id] = provider;
 
   @override
@@ -59,8 +62,13 @@ final class FakeProviderRegistry implements ProviderRegistry {
   Future<bool> hasApiKey(String providerId) async => true;
 
   @override
-  Future<ModelProvider> resolve(String providerId) async =>
-      _providers[providerId] ?? (throw StateError('unknown provider $providerId'));
+  Future<ModelProvider> resolve(String providerId) async {
+    if (failResolves > 0) {
+      failResolves--;
+      throw StateError('keychain unavailable');
+    }
+    return _providers[providerId] ?? (throw StateError('unknown provider $providerId'));
+  }
 
   @override
   Future<List<ModelDescriptor>> models(String providerId, {bool refresh = false}) async {
@@ -106,11 +114,30 @@ final class RecordingPlatformActions implements ChatPlatformActions {
   final List<String> shared = [];
   final List<ChatHaptic> haptics = [];
 
-  @override
-  Future<void> copyText(String text) async => copied.add(text);
+  /// The next this many share / copy calls throw, like a platform channel
+  /// error (a share sheet that is already open).
+  int failShares = 0;
+  int failCopies = 0;
+  int shareAttempts = 0;
 
   @override
-  Future<void> shareText(String text, {String? subject}) async => shared.add(text);
+  Future<void> copyText(String text) async {
+    if (failCopies > 0) {
+      failCopies--;
+      throw StateError('clipboard unavailable');
+    }
+    copied.add(text);
+  }
+
+  @override
+  Future<void> shareText(String text, {String? subject}) async {
+    shareAttempts++;
+    if (failShares > 0) {
+      failShares--;
+      throw StateError('share sheet already open');
+    }
+    shared.add(text);
+  }
 
   @override
   Future<void> haptic(ChatHaptic kind) async => haptics.add(kind);
@@ -190,6 +217,11 @@ final class ManualProvider implements ModelProvider {
     _current = c;
     cancel?.whenCancelled.then((_) {
       if (c.isClosed) return;
+      if (identical(_current, c)) {
+        // Ready for the next stream (a retry after Stop).
+        _current = null;
+        _started = Completer();
+      }
       c.add(const Finish(FinishReason.cancelled));
       unawaited(c.close());
     });
@@ -266,3 +298,70 @@ FakeTool destructiveTool(String name, {String? title}) => FakeTool(
       title: title,
       annotations: const ToolAnnotations(readOnlyHint: false, destructiveHint: true),
     );
+
+/// A server tool the model reaches through a `call_tool` proxy (MCP
+/// deferred tools): [resolve] names the target, which [lookup] doesn't know
+/// (deferred), and its server is not trusted.
+final class ProxyToolRouter implements ToolRouter {
+  ProxyToolRouter({this.serverId = 'github', this.serverName = 'GitHub'});
+
+  final String serverId;
+  final String serverName;
+  final List<ToolCall> executed = [];
+
+  static const proxyName = 'call_tool';
+
+  ToolDefinition get proxy => const ToolDefinition(
+        name: proxyName,
+        description: 'Calls a deferred tool by name',
+        inputSchema: {'type': 'object'},
+        annotations: ToolAnnotations(readOnlyHint: false, destructiveHint: false, openWorldHint: false),
+      );
+
+  ToolDefinition target(String name) => ToolDefinition(
+        name: name,
+        title: 'Create issue',
+        description: 'Creates an issue',
+        inputSchema: const {'type': 'object'},
+        // Says it is harmless; the server isn't trusted, so that is ignored.
+        annotations: const ToolAnnotations(readOnlyHint: false, destructiveHint: false, openWorldHint: false),
+        source: ToolSource(ToolSourceKind.mcp, serverId: serverId, serverName: serverName),
+      );
+
+  @override
+  Future<List<ToolDefinition>> toolsForTurn({
+    required String sessionId,
+    String? query,
+    int? schemaTokenBudget,
+    ToolSelectionHints? hints,
+  }) async =>
+      [proxy];
+
+  @override
+  ToolDefinition? lookup(String name) => name == proxyName ? proxy : null;
+
+  @override
+  ResolvedToolCall? resolve(ToolCall call, {required String sessionId}) {
+    if (call.name != proxyName) return null;
+    final name = call.arguments['name']! as String;
+    final args = (call.arguments['arguments'] as Map?)?.cast<String, Object?>() ?? const {};
+    return ResolvedToolCall(call: ToolCall(id: call.id, name: name, arguments: args), tool: target(name));
+  }
+
+  @override
+  Future<ToolResult> execute(ToolCall call, ToolExecutionContext context) async {
+    executed.add(call);
+    return ToolResult.text('created');
+  }
+}
+
+/// Records what the runner asked of it, then passes through.
+final class RecordingContextManager implements ContextManager {
+  final List<ContextRequest> requests = [];
+
+  @override
+  Future<PreparedContext> prepare(ContextRequest request) {
+    requests.add(request);
+    return const PassthroughContextManager().prepare(request);
+  }
+}

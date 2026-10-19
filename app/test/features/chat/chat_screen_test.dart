@@ -1,3 +1,4 @@
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -458,6 +459,106 @@ void main() {
     expect(find.text('Resume'), findsNothing);
   });
 
+  testWidgets('a failed share offers "Try again", which shares again instead of regenerating', (tester) async {
+    h = ChatHarness(turns: [ScriptedTurn.text('An answer.')]);
+    await h.createSession();
+    await pumpChatScreen(tester, h);
+    await typeAndSend(tester, 'Question');
+    await stream(tester, frames: 10);
+    await tester.pumpAndSettle();
+    h.platform.failShares = 1;
+    await tester.tap(find.byTooltip('Share reply'));
+    await tester.pumpAndSettle();
+    expect(find.text("Couldn't share this reply"), findsOneWidget);
+    await tester.tap(find.text('Try again'));
+    await tester.pumpAndSettle();
+    expect(find.text("Couldn't share this reply"), findsNothing);
+    expect(h.platform.shared, ['An answer.']);
+    expect(h.scripted.requests, hasLength(1), reason: 'no new model call');
+    expect(find.byTooltip('Previous version'), findsNothing, reason: 'no new branch');
+  });
+
+  testWidgets('a repaired call: only Deny and Allow once, with the reason', (tester) async {
+    final tool = writeTool('save_note', title: 'Save note');
+    h = ChatHarness(
+      tools: [tool],
+      turns: [
+        ScriptedTurn.toolCalls(const [ToolCall(id: 'c1', name: 'save_note', arguments: {'text': 'milk'}, repaired: true)]),
+        ScriptedTurn.text('Saved.'),
+      ],
+    );
+    await h.createSession();
+    await pumpChatScreen(tester, h, size: const Size(900, 900));
+    await typeAndSend(tester, 'Save');
+    await stream(tester, frames: 10);
+
+    expect(find.text("The model's request had to be repaired"), findsOneWidget);
+    expect(find.textContaining('Sherpa repaired them'), findsOneWidget, reason: "the policy's reason");
+    expect(find.text('Deny'), findsOneWidget);
+    expect(find.text('Allow once'), findsOneWidget);
+    expect(find.text('Allow for this chat'), findsNothing);
+    expect(find.text('Always allow'), findsNothing);
+    expect(find.text('A corrected request can only be allowed once.'), findsOneWidget);
+    await tester.tap(find.text('Allow once'));
+    await stream(tester, frames: 10);
+    await tester.pumpAndSettle();
+    expect(tool.calls.single, {'text': 'milk'});
+  });
+
+  testWidgets('a proxied call shows the target tool, its server and arguments; no "Always"', (tester) async {
+    h = ChatHarness(
+      router: ProxyToolRouter(),
+      turns: [
+        ScriptedTurn.toolCalls([
+          call('c1', ProxyToolRouter.proxyName, {
+            'name': 'github__create_issue',
+            'arguments': {'title': 'Crash on launch'},
+          }),
+        ]),
+        ScriptedTurn.text('Filed.'),
+      ],
+    );
+    await h.createSession();
+    await pumpChatScreen(tester, h, size: const Size(900, 900));
+    await typeAndSend(tester, 'File it');
+    await stream(tester, frames: 10);
+
+    expect(find.text('Allow “Create issue”?'), findsOneWidget);
+    expect(find.text('github__create_issue · GitHub'), findsOneWidget);
+    expect(find.textContaining('"title": "Crash on launch"'), findsOneWidget);
+    expect(find.textContaining('call_tool'), findsNothing);
+    expect(find.text('Allow for this chat'), findsOneWidget);
+    expect(find.text('Always allow'), findsNothing);
+    expect(find.text("Tools from a server you haven't trusted can't be allowed permanently."), findsOneWidget);
+    await tester.tap(find.text('Deny'));
+    await stream(tester, frames: 10);
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('dismissible notices close', (tester) async {
+    final tool = writeTool('save_note');
+    h = ChatHarness(tools: [tool], turns: [
+      ScriptedTurn([
+        const ToolCallStart(index: 0, id: 'c1', name: 'save_note'),
+        ToolCallComplete(
+          index: 0,
+          call: const ToolCall(id: 'c1', name: 'save_note', arguments: {}, argumentsError: 'truncated'),
+        ),
+        const Finish(FinishReason.length),
+      ]),
+      ScriptedTurn.text('Shorter this time.'),
+    ]);
+    await h.createSession();
+    await pumpChatScreen(tester, h);
+    await typeAndSend(tester, 'Save a long note');
+    await stream(tester, frames: 20);
+    await tester.pumpAndSettle();
+    expect(find.textContaining("didn't run that call"), findsOneWidget);
+    await tester.tap(find.byTooltip('Dismiss'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining("didn't run that call"), findsNothing);
+  });
+
   group('accessibility', () {
     testWidgets('one live region announces phases, never the streaming text', (tester) async {
       final handle = tester.ensureSemantics();
@@ -492,6 +593,47 @@ void main() {
       await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
       await expectLater(tester, meetsGuideline(iOSTapTargetGuideline));
       await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
+      handle.dispose();
+    });
+
+    testWidgets('Stop, Send, the model chip and the context ring are operable buttons for screen readers',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      final p = ManualProvider(info: kCloudInfo);
+      h = ChatHarness(provider: p);
+      await h.createSession();
+      await pumpChatScreen(tester, h);
+      await tester.pumpAndSettle();
+
+      SemanticsNode node(String label) => tester.getSemantics(find.bySemanticsLabel(RegExp(label)).first);
+      for (final label in ['^Model: ', '^Context ']) {
+        final n = node(label);
+        expect(n.getSemanticsData().hasAction(SemanticsAction.tap), isTrue, reason: '$label has a tap action');
+        expect(n.getSemanticsData().flagsCollection.isButton, isTrue);
+        expect(n.rect.width, lessThan(400), reason: '$label is its own node, not the whole screen');
+      }
+
+      await tester.enterText(find.byType(TextField), 'Hello');
+      await tester.pump();
+      final send = node('^Send message');
+      expect(send.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+      tester.semantics.tap(find.semantics.byLabel('Send message'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(h.state.isRunActive, isTrue, reason: 'the semantics tap sent the message');
+
+      p.emit(const TextDelta('Streaming'));
+      await stream(tester, frames: 3);
+      final stop = node('^Stop response');
+      expect(stop.rect.width, lessThan(100), reason: 'Stop is not merged into a screen-wide node');
+      tester.semantics.tap(find.semantics.byLabel('Stop response'));
+      await stream(tester, frames: 5);
+      await tester.pumpAndSettle();
+      expect(h.state.status, ChatRunStatus.cancelled, reason: 'TalkBack / VoiceOver can stop the reply');
+
+      tester.semantics.tap(find.semantics.byLabel(RegExp('^Context ')));
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsOneWidget, reason: 'the ring opens its details');
       handle.dispose();
     });
 
