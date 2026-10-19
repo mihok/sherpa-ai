@@ -14,11 +14,16 @@ memory pressure, and is a full **MCP** host: tools, resources, prompts, elicitat
 | Milestone | Scope | Status |
 |---|---|---|
 | [M1](docs/milestones/M1.md) | Core agent loop, remote providers, chat UI | **Done** |
-| M2 | Hugging Face directory, device fit, downloads, on-device inference + optimization | In progress (Hub client, device fit, native engine, on-device provider landed; app wiring next) |
-| M3 | Context manager: pruning, compaction, handoff, memory monitor | Core ladder landed; UI and memory plugin pending |
-| M4 | MCP client, OAuth, approvals, tool budget | In progress (MCP client and OAuth packages landed) |
-| M5 | MCP Apps host, elicitation, sampling | Planned |
-| M6 | Polish, accessibility, background execution, perf budgets, evals | In progress ([accessibility audit](docs/milestones/M6-accessibility.md) done outside chat, home and the shell) |
+| [M2](docs/milestones/M2.md) | Hugging Face directory, device fit, downloads, on-device inference (llama.cpp, MLX, LiteRT-LM, Gemini Nano, Apple FM) + optimization | **Done** |
+| [M3](docs/milestones/M3.md) | Context manager: pruning, compaction, handoff, memory monitor, inspector | **Done** |
+| [M4](docs/milestones/M4.md) | MCP client, OAuth, tool hygiene, approvals, tool budget | **Done** |
+| [M5](docs/milestones/M5.md) | MCP Apps host, elicitation, sampling | **Done** |
+| [M6](docs/milestones/M6.md) | Polish, [accessibility](docs/milestones/M6-accessibility.md), background execution, perf budgets, evals | **Done** |
+
+Every milestone is verified in a Linux container (unit, widget, golden and integration tests; a real
+llama.cpp engine and small models on the host; Android debug builds). **Nothing has run on a phone yet**,
+iOS has not been compiled (no macOS here), and CI has not run either (see M6 notes). Each milestone's notes
+list exactly what was and wasn't verified.
 
 ## Repository layout
 
@@ -34,6 +39,11 @@ memory pressure, and is a full **MCP** host: tools, resources, prompts, elicitat
 | `packages/sherpa_mcp` | MCP client for both protocol eras (stateless 2026-07-28 and session-based), Streamable HTTP + SSE transports |
 | `packages/sherpa_auth` | OAuth 2.1 for MCP servers and Hugging Face: discovery, PKCE, client registration, token storage |
 | `packages/sherpa_platform` | Native device signals (Pigeon): memory pressure, device profile, backup exclusion, background-run guard |
+| `packages/sherpa_litert` | Android providers: LiteRT-LM (`.litertlm`) and Gemini Nano (ML Kit GenAI Prompt API) |
+| `packages/sherpa_apple_ml` | iOS providers: MLX (mlx-swift-lm) and Apple Foundation Models |
+| `packages/sherpa_webview` | Sandboxed WebView for MCP Apps: shell page, srcdoc iframe, CSP, bridge |
+| `packages/sherpa_evals` | Eval suites L0–L4 (scripted, local model, remote) and host benchmarks |
+| `bench/` | Perf baselines per device class; frame-timing benchmark scripts |
 | `app/` | The Flutter app |
 | `native/` | `sherpa_engine` (C ABI over llama.cpp) and pinned build scripts |
 | `docs/` | Plan, research digests, milestone notes |
