@@ -1,0 +1,35 @@
+name: sherpa_apple_ml
+description: >-
+  iOS-only on-device model providers for Sherpa: MLX Swift (mlx-swift-lm) for
+  mlx-community models and Apple Foundation Models (iOS 26+), behind Pigeon.
+  On every other platform the providers compile and report "unsupported".
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  crypto: ^3.0.7
+  flutter:
+    sdk: flutter
+  meta: ^1.19.0
+  sherpa_core: any
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  pigeon: ^29.0.10
+
+# iOS only. There is deliberately no Android/desktop implementation: the Dart
+# classes detect the platform and report AppleMlStatus.unsupported there.
+# Native code: ios/sherpa_apple_ml (SwiftPM, MLX + Foundation Models) and
+# ios/sherpa_apple_ml.podspec (CocoaPods fallback: Foundation Models only,
+# because MLX ships no podspec; see README "Packaging").
+flutter:
+  plugin:
+    platforms:
+      ios:
+        pluginClass: SherpaAppleMlPlugin

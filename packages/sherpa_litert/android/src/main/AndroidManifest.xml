@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- LiteRT-LM GPU backend (developers.google.com/edge/litert-lm/android): vendor libraries outside the NDK
+             are only visible to apps targeting 31+ when declared. required="false" so Play still installs on
+             devices without them (the CPU backend is the fallback). -->
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+    </application>
+</manifest>

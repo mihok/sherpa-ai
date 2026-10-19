@@ -1,0 +1,7 @@
+.dart_tool/
+build/
+.build/
+.swiftpm/
+/pubspec.lock
+# Swift type-check scratch output (tool/typecheck_swift.sh)
+/tool/.typecheck/

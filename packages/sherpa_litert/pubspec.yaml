@@ -1,0 +1,34 @@
+name: sherpa_litert
+description: >-
+  Android-only on-device ModelProviders for Sherpa: LiteRT-LM (.litertlm
+  models, CPU/GPU/NPU) and Gemini Nano through the ML Kit GenAI Prompt API
+  (AICore). Kept out of sherpa_inference so the llama.cpp FFI plugin stays
+  lean.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  meta: ^1.19.0
+  sherpa_core: any
+  sherpa_hub: any
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  pigeon: ^29.0.10
+
+# Android only. On iOS and desktop the Dart classes compile and report
+# "unsupported" (UnsupportedLiteRtBackend); no native code is registered.
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: io.github.mihok.sherpa_litert
+        pluginClass: SherpaLitertPlugin

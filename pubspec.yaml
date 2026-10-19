@@ -10,12 +10,14 @@ environment:
 # without melos. Members must declare `resolution: workspace`.
 workspace:
   - app
+  - packages/sherpa_apple_ml
   - packages/sherpa_auth
   - packages/sherpa_core
   - packages/sherpa_data
   - packages/sherpa_evals
   - packages/sherpa_hub
   - packages/sherpa_inference
+  - packages/sherpa_litert
   - packages/sherpa_markdown
   - packages/sherpa_mcp
   - packages/sherpa_net
