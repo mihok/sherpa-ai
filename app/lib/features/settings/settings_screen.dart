@@ -77,6 +77,14 @@ class SettingsScreen extends ConsumerWidget {
           trailing: const Icon(Icons.chevron_right),
           onTap: () => context.go(Routes.huggingFace),
         ),
+        const SectionHeader('Tools'),
+        ListTile(
+          leading: const Icon(Icons.extension_outlined),
+          title: const Text('Tools & servers'),
+          subtitle: const Text('MCP tool servers, reviews and approvals'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.go(Routes.tools),
+        ),
         const SectionHeader('Privacy'),
         ListTile(
           leading: const Icon(Icons.shield_outlined),

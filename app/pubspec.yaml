@@ -23,6 +23,7 @@ dependencies:
   file_picker: ^13.1.0
   flutter_riverpod: ^3.4.3
   flutter_secure_storage: ^11.2.0
+  flutter_web_auth_2: ^5.1.0
   go_router: ^18.1.0
   http: ^1.6.0
   material_ui: ^1.7.0
@@ -31,10 +32,13 @@ dependencies:
   path_provider: ^2.1.6
   qr_flutter: ^4.1.0
   share_plus: ^13.3.1
+  sherpa_auth: any
   sherpa_core: any
   sherpa_data: any
   sherpa_hub: any
+  sherpa_inference: any
   sherpa_markdown: any
+  sherpa_mcp: any
   sherpa_net: any
   sherpa_platform: any
   sherpa_providers: any

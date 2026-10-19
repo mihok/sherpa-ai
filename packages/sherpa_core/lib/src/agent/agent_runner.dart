@@ -10,6 +10,7 @@ import '../common/json.dart';
 import '../context/context_manager.dart';
 import '../context/passthrough_context_manager.dart';
 import '../context/token_estimator.dart';
+import '../context/untrusted.dart';
 import '../memory/memory_monitor.dart';
 import '../model/content.dart';
 import '../model/message.dart';
@@ -643,9 +644,12 @@ final class AgentRunner {
       'automatically because Sherpa cannot confirm that repeating it is safe; ask the user before trying again.';
 
   /// True when the context holds output of a non-built-in tool (MCP or
-  /// on-device server) or an MCP resource: content an attacker may control.
+  /// on-device server), an MCP resource, or a message flagged untrusted
+  /// ([UntrustedData.messageMetadataKey], e.g. an imported handoff):
+  /// content an attacker may control.
   Future<bool> _isTainted(String sessionId, String leafId) async {
     for (final m in await _store.path(sessionId, leafId)) {
+      if (m.metadata[UntrustedData.messageMetadataKey] == true) return true;
       if (m.content.any((p) => p is EmbeddedResourcePart || p is ResourceLinkPart || p is UiResourcePart)) {
         return true;
       }

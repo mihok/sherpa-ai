@@ -108,6 +108,7 @@ final class HandoffBuilder {
     String? notes,
     List<ToolDefinition> tools = const [],
     ToolDefinition? Function(String name)? toolLookup,
+    ToolAnnotations Function(ToolDefinition tool)? annotationsFor,
     CancellationToken? cancel,
   }) async {
     final session = await store.getSession(sessionId);
@@ -136,6 +137,7 @@ final class HandoffBuilder {
               plan: plan,
               tools: tools,
               toolLookup: toolLookup,
+              annotationsFor: annotationsFor,
               counter: counter,
               pendingApprovals: _pending(checkpoint),
             ),
@@ -249,9 +251,13 @@ Future<SessionRecord> startSessionFromHandoff({
   String? modelId,
   String? nonce,
   Random? random,
+  bool trustedSource = false,
 }) async {
   final now = clock.now();
   final from = fromSessionId ?? bundle.source.sessionId ?? 'bundle:${Digest.fnv64(bundle.encode())}';
+  // A bundle from a file, a QR code or pasted text was written by whoever
+  // produced it; so was one whose session had read untrusted content.
+  final untrusted = !trustedSource || bundle.summary.taint.isNotEmpty;
   final seed = Message(
     id: ids.next('msg'),
     role: Role.user,
@@ -266,6 +272,7 @@ Future<SessionRecord> startSessionFromHandoff({
         'createdAt': bundle.createdAt.toUtc().toIso8601String(),
         'fromSessionId': from,
       },
+      if (untrusted) UntrustedData.messageMetadataKey: true,
     },
   );
   final ack = Message(

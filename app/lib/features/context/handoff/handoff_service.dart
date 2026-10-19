@@ -90,6 +90,9 @@ final class HandoffService {
         ids: ids,
         clock: clock,
         fromSessionId: fromSessionId,
+        // Continuing one of this device's own chats; an imported bundle
+        // (no source session) stays untrusted.
+        trustedSource: fromSessionId != null,
         providerId: model?.providerId,
         modelId: model?.modelId,
         systemPrompt: systemPrompt,

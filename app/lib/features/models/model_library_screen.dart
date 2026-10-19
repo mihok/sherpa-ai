@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:sherpa_inference/sherpa_inference.dart' show EngineCrashReport, InferencePhase;
 
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
@@ -14,6 +15,7 @@ import '../../services/downloads/downloads.dart';
 import '../../state/providers.dart';
 import '../../state/ui_preferences.dart';
 import '../home/relative_time.dart';
+import 'state/local_inference_providers.dart';
 import 'state/local_model_choice.dart';
 import 'state/models_providers.dart';
 import 'widgets/format.dart';
@@ -105,6 +107,7 @@ class _ModelLibraryScreenState extends ConsumerState<ModelLibraryScreen> {
             padding: EdgeInsets.only(bottom: 96 + MediaQuery.paddingOf(context).bottom),
             children: [
               _UsageHeader(models: list, freeBytes: free),
+              const LocalEngineBanner(),
               ListTile(
                 leading: const Icon(Icons.travel_explore_rounded),
                 title: const Text('Browse Hugging Face'),
@@ -200,6 +203,103 @@ class _UsageHeader extends StatelessWidget {
   }
 }
 
+/// The on-device engine's news, above the library: the previous run's
+/// crash report (until dismissed) and why local models can't run, if so.
+class LocalEngineBanner extends ConsumerWidget {
+  const LocalEngineBanner({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    final status = ref.watch(localEngineStatusProvider).value;
+    final crash = status?.crashReport;
+    final unavailable = status?.unavailableMessage;
+    if (crash == null && unavailable == null) return const SizedBox.shrink();
+    Widget card({required IconData icon, required Color color, required String title, required String body, Widget? action}) =>
+        Padding(
+          padding: EdgeInsets.fromLTRB(t.space.lg, t.space.xs, t.space.lg, t.space.xs),
+          child: Semantics(
+            container: true,
+            liveRegion: true,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(t.radius.lg),
+                border: Border.all(color: color.withValues(alpha: 0.5)),
+              ),
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(t.space.lg, t.space.md, t.space.sm, t.space.sm),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(icon, color: color),
+                    SizedBox(width: t.space.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: theme.textTheme.titleSmall),
+                          SizedBox(height: t.space.xxs),
+                          Text(body, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                          ?action,
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+    return Column(
+      children: [
+        if (crash != null)
+          card(
+            icon: Icons.report_problem_outlined,
+            color: t.semantic.warning,
+            title: 'The on-device engine stopped last time',
+            body: '${crash.description} '
+                '${_downgraded(crash) ? 'Sherpa now opens that model with a shorter context. ' : ''}'
+                'Your chats are safe.',
+            action: Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: TextButton(
+                onPressed: () => ref.read(localInferenceProvider)?.acknowledgeCrashReport(),
+                child: const Text('Dismiss'),
+              ),
+            ),
+          ),
+        if (unavailable != null)
+          card(
+            icon: Icons.memory_rounded,
+            color: theme.colorScheme.outline,
+            title: "On-device chat isn't available",
+            body: '$unavailable Models stay in your library; chats can use a provider meanwhile.',
+            action: status!.canRetry
+                ? Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: TextButton(
+                      onPressed: () => unawaited(ref.read(localInferenceProvider)?.retryEngine()),
+                      child: const Text('Try again'),
+                    ),
+                  )
+                : null,
+          ),
+      ],
+    );
+  }
+}
+
+/// The lifecycle halves a model's context after a crash while loading or
+/// generating with it (ModelLifecycleManager.start).
+bool _downgraded(EngineCrashReport crash) {
+  final p = crash.phase;
+  return p.modelId != null &&
+      p.nCtx != null &&
+      (p.phase == InferencePhase.loading || p.phase == InferencePhase.generating);
+}
+
 class _EmptyLibrary extends StatelessWidget {
   const _EmptyLibrary();
 
@@ -229,6 +329,7 @@ class LibraryModelTile extends ConsumerWidget {
     final scheme = theme.colorScheme;
     final m = model;
     final use = ref.watch(useLocalModelInChatProvider);
+    final engineProblem = ref.watch(localEngineStatusProvider).value?.unavailableMessage;
     final now = ref.watch(clockProvider).now();
     final ctx = m.defaultContextLength;
     final facts = <Widget>[
@@ -311,9 +412,11 @@ class LibraryModelTile extends ConsumerWidget {
                     ],
                     SizedBox(height: t.space.sm),
                     Tooltip(
-                      message: use == null ? 'On-device chat arrives with the local engine.' : 'Start a chat that runs on this phone',
+                      message: use == null
+                          ? 'On-device chat arrives with the local engine.'
+                          : engineProblem ?? 'Start a chat that runs on this phone',
                       child: FilledButton.tonalIcon(
-                        onPressed: use == null || !m.usable
+                        onPressed: use == null || !m.usable || engineProblem != null
                             ? null
                             : () async {
                                 ref.read(hapticsProvider).light();

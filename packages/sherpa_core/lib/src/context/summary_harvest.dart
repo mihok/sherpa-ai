@@ -158,7 +158,7 @@ abstract final class SummaryComposer {
             handles.addAll(_handlesInResult(p));
             final source = _taintSource(p.toolName, def);
             if (source != null) taint.add(TaintRecord(source: source, firstMessageId: m.id));
-            final effect = call == null ? null : _sideEffect(call, p, def);
+            final effect = call == null ? null : _sideEffect(call, p, def, input.annotationsFor);
             if (effect != null) effects.add(effect);
           case ResourceLinkPart(:final uri) || EmbeddedResourcePart(:final uri):
             artifacts.add(uri);
@@ -390,11 +390,24 @@ abstract final class SummaryComposer {
     'not executed: context was compacted',
   ];
 
-  static SideEffectRecord? _sideEffect(ToolCall call, ToolResultPart result, ToolDefinition? def) {
+  /// The hints a decision may rely on: [annotationsFor] (the approval
+  /// policy's trust-aware view) when given, else the declared ones for
+  /// built-in tools only. An untrusted server's `readOnlyHint` is a claim,
+  /// not a fact (R01 §6.2), so its calls stay in the ledger.
+  static ToolAnnotations trustedAnnotations(ToolDefinition def, ToolAnnotations Function(ToolDefinition)? annotationsFor) =>
+      annotationsFor?.call(def) ??
+      (def.source.kind == ToolSourceKind.builtin ? def.annotations : def.annotations.untrustedDefaults);
+
+  static SideEffectRecord? _sideEffect(
+    ToolCall call,
+    ToolResultPart result,
+    ToolDefinition? def,
+    ToolAnnotations Function(ToolDefinition)? annotationsFor,
+  ) {
     if (call.name == UpdatePlanTool.toolName) return null;
     // Unknown definitions count as side effects: wrongly listing a read as
     // "done" costs a re-read, wrongly omitting a write can repeat it.
-    if (def != null && def.annotations.isReadOnly) return null;
+    if (def != null && trustedAnnotations(def, annotationsFor).isReadOnly) return null;
     if (result.isError && _notExecuted.any(result.text.trimLeft().startsWith)) return null;
     // Summaries travel in handoff bundles: secret-named argument values are
     // masked before the preview is encoded, and the digest is taken over the

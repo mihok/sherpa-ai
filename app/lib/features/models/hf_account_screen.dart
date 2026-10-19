@@ -7,18 +7,22 @@ import 'package:material_ui/material_ui.dart';
 import '../../design/tokens.dart';
 import '../../design/widgets/section_header.dart';
 import '../../state/ui_preferences.dart';
+import '../mcp/consent_sheet.dart';
+import '../mcp/widgets/mcp_widgets.dart' show NoteBox;
 import '../providers/fields.dart';
 import '../settings/settings_page.dart';
 import 'state/hub_account.dart';
 import 'state/models_providers.dart';
 
-/// Settings › Hugging Face account: paste a token, verify it, sign out.
+/// Settings › Hugging Face account: sign in with Hugging Face (OAuth, R08
+/// §8) or paste a token, verify it, sign out.
 ///
 /// A token unlocks gated models whose terms the user accepted and doubles
 /// the anonymous rate limits, which matters on shared mobile networks
 /// (R08 §6: one throttle was observed far below the documented quota from
-/// a shared IP). OAuth sign-in is a later step (R08 §8.3); a pasted
-/// fine-grained or read token is the documented fallback.
+/// a shared IP). The browser sign-in needs the build's OAuth client id;
+/// without one the button is hidden and a pasted fine-grained or read token
+/// is the way in.
 class HuggingFaceAccountScreen extends ConsumerStatefulWidget {
   const HuggingFaceAccountScreen({super.key});
 
@@ -29,6 +33,7 @@ class HuggingFaceAccountScreen extends ConsumerStatefulWidget {
 class _HuggingFaceAccountScreenState extends ConsumerState<HuggingFaceAccountScreen> {
   final TextEditingController _token = TextEditingController();
   String? _error;
+  String? _oauthError;
   bool _busy = false;
 
   static const _tokensUrl = 'https://huggingface.co/settings/tokens';
@@ -60,13 +65,53 @@ class _HuggingFaceAccountScreenState extends ConsumerState<HuggingFaceAccountScr
     }
   }
 
+  Future<void> _signInWithBrowser() async {
+    if (_busy) return;
+    final account = ref.read(hubAccountProvider);
+    final scopes = account.oauth?.scopes ?? const <String>[];
+    final ok = await showOAuthConsentSheet(
+      context,
+      OAuthConsentDetails(
+        title: 'Sign in with Hugging Face',
+        intro: 'Use your Hugging Face account instead of pasting a token.',
+        serverLabel: 'Hugging Face',
+        serverHost: 'huggingface.co',
+        authorizationOrigin: 'https://huggingface.co',
+        scopes: scopes,
+        steps: const [
+          'Sherpa opens huggingface.co in a secure browser window. Sherpa cannot see your password.',
+          "After you approve, Sherpa receives a token, keeps it in this phone's secure storage and sends it to "
+              'huggingface.co only.',
+          'You can sign out here any time; that deletes the token.',
+        ],
+      ),
+    );
+    if (!ok || !mounted) return;
+    setState(() {
+      _busy = true;
+      _oauthError = null;
+    });
+    final haptics = ref.read(hapticsProvider);
+    try {
+      final p = await account.signInWithBrowser();
+      if (!mounted) return;
+      haptics.success();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Signed in as ${p.name}')));
+    } on HubSignInException catch (e) {
+      haptics.error();
+      if (mounted) setState(() => _oauthError = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _signOut() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Sign out of Hugging Face?'),
         content: const Text('The token is deleted from this phone. Downloads of gated models will stop working '
-            'until you add a token again.'),
+            'until you sign in again.'),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Sign out')),
@@ -99,6 +144,13 @@ class _HuggingFaceAccountScreenState extends ConsumerState<HuggingFaceAccountScr
             if (p.orgs.isNotEmpty) 'Member of ${p.orgs.join(', ')}',
           ].join(' · ')),
         ),
+        if (p.scopes.isNotEmpty)
+          SettingsPadding(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: t.space.sm),
+              child: Text('Allowed: ${p.scopes.map(describeScope).join('; ')}.', style: muted),
+            ),
+          ),
         SettingsPadding(
           child: Text(
             'Sherpa sends this token to huggingface.co only, never to download mirrors or any other server. '
@@ -126,7 +178,31 @@ class _HuggingFaceAccountScreenState extends ConsumerState<HuggingFaceAccountScr
             ),
           ),
         ),
-        const SectionHeader('Access token'),
+        const SectionHeader('Sign in'),
+        if (ref.read(hubAccountProvider).canSignInWithBrowser)
+          SettingsPadding(
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: FilledButton.icon(
+                onPressed: _busy ? null : () => unawaited(_signInWithBrowser()),
+                icon: const Icon(Icons.login_rounded),
+                label: const Text('Sign in with Hugging Face'),
+              ),
+            ),
+          )
+        else
+          const SettingsPadding(child: NoteBox(text: HubAccount.browserSignInUnavailable)),
+        if (_oauthError != null)
+          SettingsPadding(
+            child: Padding(
+              padding: EdgeInsets.only(top: t.space.sm),
+              child: Semantics(
+                liveRegion: true,
+                child: Text(_oauthError!, style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error)),
+              ),
+            ),
+          ),
+        const SectionHeader('Or paste an access token'),
         SettingsPadding(
           child: ApiKeyField(
             controller: _token,

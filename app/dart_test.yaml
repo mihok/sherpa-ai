@@ -1,3 +1,7 @@
 tags:
   golden:
   benchmark:
+  # Runs the real host-built engine (libsherpa_engine.so) on a real GGUF;
+  # skipped unless SHERPA_ENGINE_LIB and SHERPA_TEST_MODEL are set.
+  engine:
+    timeout: 10x

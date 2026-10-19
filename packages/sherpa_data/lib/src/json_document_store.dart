@@ -19,8 +19,24 @@ abstract final class DocumentCollections {
   /// Configured MCP servers (never their OAuth tokens).
   static const mcpServers = 'mcp_servers';
 
+  /// Approved MCP tool definitions (hash + pinned subset), one per tool.
+  static const mcpToolPins = 'mcp_tool_pins';
+
+  /// MCP tool switches: global and per-session enablement and pins.
+  static const mcpToolSettings = 'mcp_tool_settings';
+
+  /// Remembered "allow" answers for tool calls (scope, expiry, hash).
+  static const approvalGrants = 'approval_grants';
+
+  /// Notes of the built-in memory tool server (user data, one per key).
+  static const memoryNotes = 'memory_notes';
+
   /// Download records (pinned revision, progress, verification state).
   static const downloads = 'downloads';
+
+  /// On-device engine notes: autotune profiles and crash downgrades, keyed
+  /// by `sherpa_inference`'s `KeyValueStore` keys (no user content).
+  static const inference = 'inference';
 }
 
 /// A small keyed JSON store over the `documents` table, for app records

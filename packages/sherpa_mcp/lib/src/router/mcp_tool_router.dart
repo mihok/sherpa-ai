@@ -393,7 +393,9 @@ final class McpToolRouter implements ToolRouter {
 
   /// A changed tool was re-approved: its old "always" grants were for the
   /// old definition. Wire to `ApprovalPolicy.revoke` (R11 §9.7: grants are
-  /// for a server + tool + hash).
+  /// for a server + tool + hash). Definitions carry `definitionHash`, so
+  /// stale grants no longer match anyway; this also drops them from the
+  /// user's list of grants.
   final void Function(String modelName)? onGrantsInvalidated;
 
   final TokenCounter _counter;
@@ -587,9 +589,11 @@ final class McpToolRouter implements ToolRouter {
       uiResourceUri: t.uiResourceUri,
       modelVisible: t.modelVisible,
       // Flagged or not yet approved: the policy asks even where it would
-      // auto-approve. (Binding grants to `definitionHash:
-      // review.currentHash` is the next step; see ApprovalGrant.)
+      // auto-approve.
       requiresConfirmation: review.quarantined || review.flagged,
+      // Grants are bound to the reviewed definition (R11 §9.7: "always" is
+      // per server + tool + hash), so a changed tool needs a new grant.
+      definitionHash: review.currentHash,
     );
   }
 
@@ -1131,7 +1135,8 @@ final class McpToolRouter implements ToolRouter {
       McpRpcException(:final error) when err.isInvalidParams =>
         '"$name" rejected the request: ${_clip(error.message)}. Fix the arguments and call it again.',
       McpRpcException(:final error) => '"$server" returned an error for "$name": ${_clip(error.message)}',
-      McpInputDeclinedException() => 'The user declined what "$name" asked for, so it could not finish.',
+      McpInputDeclinedException() => '"$name" asked for input that was not given (the user declined, or Sherpa cannot '
+          'provide that kind of input yet), so it could not finish. Do not retry it; tell the user if it matters.',
       McpTaskFailedException(:final error) => '"$name" failed: ${_clip(error?.message ?? 'no details given')}',
       McpLimitExceededException() => '"$name" returned more data than Sherpa accepts. Ask for less.',
       McpProtocolException() => '"$server" sent an invalid response for "$name".',

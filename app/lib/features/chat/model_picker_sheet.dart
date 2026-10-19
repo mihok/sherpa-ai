@@ -10,13 +10,16 @@ import '../../design/tokens.dart';
 import '../../design/widgets/privacy_badge.dart';
 import '../../state/providers.dart';
 import '../../state/services.dart';
+import 'local_model_picker_section.dart';
 import 'state/chat_dependencies.dart';
 import 'state/model_selection.dart';
 import 'widgets/chat_style.dart';
 
-/// Lists every configured provider's models, each section labelled with
-/// where messages go (on device, local network, or which remote host), and
-/// returns the picked [ModelChoice].
+/// Lists the models on this device (when on-device inference is wired:
+/// [LocalModelPickerSection], each with its fit) and every configured
+/// provider's models, each section labelled with where messages go (on
+/// device, local network, or which remote host), and returns the picked
+/// [ModelChoice].
 ///
 /// ```dart
 /// final choice = await ModelPickerSheet.show(context, current: selection);
@@ -103,6 +106,10 @@ class _ModelPickerSheetState extends ConsumerState<ModelPickerSheet> {
             ),
           ),
           SizedBox(height: tokens.space.lg),
+          LocalModelPickerSection(
+            current: widget.current,
+            onPick: (choice) => Navigator.of(context).pop(choice),
+          ),
           if (_configs.isEmpty)
             _EmptyProviders(onAdd: _addProvider)
           else
@@ -284,9 +291,13 @@ class _ModelRow extends StatelessWidget {
       if (caps.reasoning != ReasoningSupport.none) 'reasoning',
       if (caps.vision) 'images',
     ].join(' · ');
+    // A real button node: screen readers activate the row itself (the
+    // InkWell's own semantics are excluded below).
     return Semantics(
+      container: true,
       button: true,
       selected: selected,
+      onTap: onTap,
       label: '${model.displayName}. $facts. ${privacy.description}',
       excludeSemantics: true,
       child: InkWell(

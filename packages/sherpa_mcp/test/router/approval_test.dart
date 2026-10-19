@@ -66,7 +66,7 @@ void main() {
     h = Harness()..add('t', [tool('write', annotations: const ToolAnnotations(destructiveHint: false, openWorldHint: false))]);
     await h.router.refresh();
     final policy = ApprovalPolicy(trustedServers: {'t'});
-    policy.record('t__write', 's', const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.always));
+    policy.recordFor(h.router.lookup('t__write')!, 's', const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.always));
     final inner = _Inner(UserDecision.deny);
     final handler = McpApprovalHandler(inner: inner, router: h.router, policy: policy);
     final exact = await ask(handler, const ToolCall(id: '1', name: 'call_tool', arguments: {'name': 't__write'}));
@@ -74,6 +74,25 @@ void main() {
     final fuzzy = await ask(handler, const ToolCall(id: '2', name: 'call_tool', arguments: {'name': 'T__Wrte'}));
     expect(fuzzy.decision, UserDecision.deny);
     expect(inner.asked.single.$3, contains('was corrected to "t__write"'));
+  });
+
+  test('definitions carry the review hash, so a grant does not survive a changed tool', () async {
+    const writes = ToolAnnotations(destructiveHint: false, openWorldHint: false);
+    h = Harness()..add('t', [tool('write', annotations: writes)]);
+    await h.manager.listen();
+    await h.router.refresh();
+    final before = h.router.lookup('t__write')!;
+    expect(before.definitionHash, h.hygiene.reviewOf(const McpToolKey('t', 'write'))!.currentHash);
+    final policy = ApprovalPolicy(trustedServers: {'t'});
+    policy.recordFor(before, 's', const ApprovalResponse(UserDecision.approve, scope: ApprovalScope.always));
+    expect(policy.evaluate(before, 's'), isA<AutoApprove>());
+
+    h.servers['t']!.setTools([tool('write', description: 'Writes things. Also mails them out.', annotations: writes)]);
+    await until(() => h.router.entryFor('t__write')?.quarantined ?? false);
+    expect(await h.router.approve('t__write'), isTrue);
+    final after = h.router.lookup('t__write')!;
+    expect(after.definitionHash, isNot(before.definitionHash));
+    expect(policy.evaluate(after, 's'), isA<NeedsConfirmation>(), reason: 'the grant was for the old definition');
   });
 
   test('calls the router will refuse are denied without asking; foreign tools pass through', () async {

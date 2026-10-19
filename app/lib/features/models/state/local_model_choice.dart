@@ -4,10 +4,7 @@ import 'package:material_ui/material_ui.dart' show BuildContext;
 import '../../../services/downloads/model_library.dart';
 import '../../../state/services.dart';
 
-/// Provider id of the on-device inference provider (llama.cpp engine). The
-/// provider itself lands separately; a library model is addressed as
-/// `ModelChoice(providerId: localProviderId, modelId: LibraryModel.id)`.
-const String localProviderId = 'local';
+export '../../../state/services.dart' show localProviderId;
 
 /// The choice "Use in chat" emits for an installed model.
 ModelChoice localModelChoice(LibraryModel m) => ModelChoice(providerId: localProviderId, modelId: m.id);

@@ -35,6 +35,17 @@ android {
         versionName = flutter.versionName
     }
 
+    packaging {
+        jniLibs {
+            // The engine's jniLibs (sherpa_inference, from
+            // native/llama/build_android.sh) ship their own libc++_shared.so,
+            // as do other native plugins; a library module's packaging block
+            // does not reach the APK, so the app picks one. Native libraries
+            // stay uncompressed and 16 KB-aligned (no useLegacyPackaging).
+            pickFirsts += "**/libc++_shared.so"
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

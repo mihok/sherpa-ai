@@ -5,6 +5,14 @@ import 'package:material_ui/material_ui.dart';
 import '../design/widgets/state_views.dart';
 import '../features/context/handoff/handoff_import_screen.dart';
 import '../features/home/home_screen.dart';
+import '../features/mcp/add_server_screen.dart';
+import '../features/mcp/approvals_screen.dart';
+import '../features/mcp/registry_screen.dart';
+import '../features/mcp/server_console_screen.dart';
+import '../features/mcp/server_detail_screen.dart';
+import '../features/mcp/servers_screen.dart';
+import '../features/mcp/state/mcp_providers.dart' show sourceFromName;
+import '../features/mcp/tool_review_screen.dart';
 import '../features/models/downloads_screen.dart';
 import '../features/models/hf_account_screen.dart';
 import '../features/models/model_detail_screen.dart';
@@ -16,6 +24,7 @@ import '../features/settings/privacy_screen.dart';
 import '../features/settings/provider_form_screen.dart';
 import '../features/settings/providers_screen.dart';
 import '../features/settings/settings_screen.dart';
+import '../services/mcp/deep_link.dart';
 import '../shell/app_shell.dart';
 import '../state/providers.dart';
 import 'chat_route.dart';
@@ -43,6 +52,14 @@ import 'sherpa_page.dart';
 /// /settings/models/browse/:owner/:name   a repo: variants, fit, download
 /// /settings/models/downloads     download queue
 /// /settings/huggingface          Hugging Face token
+/// /settings/tools                MCP tool servers (built in and added)
+/// /settings/tools/add            add a server (?url=&name=&source=link|qr|registry)
+/// /settings/tools/registry       search the MCP Registry
+/// /settings/tools/approvals      remembered tool approvals
+/// /settings/tools/servers/:id    one server: health, trust, tools, console
+/// /settings/tools/servers/:id/console        its redacted debug log
+/// /settings/tools/servers/:id/review/:tool   review a new or changed tool
+/// sherpa://mcp/add?url=…         deep link → the add screen (always confirmed)
 /// ```
 ///
 /// Everything but onboarding is nested under `/`, so the back stack is
@@ -56,7 +73,9 @@ final routerProvider = Provider<GoRouter>((ref) {
     // Only ever redirect *into* onboarding. Leaving it is an explicit
     // navigation, so "Run setup again" from settings works.
     redirect: (context, state) =>
-        !prefs.onboardingComplete && state.matchedLocation != Routes.onboarding ? Routes.onboarding : null,
+        !prefs.onboardingComplete && state.matchedLocation != Routes.onboarding
+            ? Routes.onboarding
+            : McpAddLink.redirectFor(state.uri, addRoute: Routes.addServer),
     errorPageBuilder: (context, state) => SherpaPage<void>(key: state.pageKey, child: const NotFoundScreen()),
     routes: [
       GoRoute(
@@ -185,6 +204,66 @@ final routerProvider = Provider<GoRouter>((ref) {
                     path: 'huggingface',
                     pageBuilder: (context, state) =>
                         SherpaPage<void>(key: state.pageKey, child: const HuggingFaceAccountScreen()),
+                  ),
+                  GoRoute(
+                    path: 'tools',
+                    pageBuilder: (context, state) =>
+                        SherpaPage<void>(key: state.pageKey, restorationId: 'tools', child: const ToolServersScreen()),
+                    routes: [
+                      GoRoute(
+                        path: 'add',
+                        pageBuilder: (context, state) {
+                          final q = state.uri.queryParameters;
+                          return SherpaPage<void>(
+                            key: state.pageKey,
+                            child: AddServerScreen(
+                              key: ValueKey('add:${q['url']}:${q['source']}'),
+                              initialUrl: q['url'],
+                              initialName: q['name'],
+                              source: sourceFromName(q['source']),
+                              registryName: q['registry'],
+                              description: q['description'],
+                            ),
+                          );
+                        },
+                      ),
+                      GoRoute(
+                        path: 'registry',
+                        pageBuilder: (context, state) =>
+                            SherpaPage<void>(key: state.pageKey, child: const RegistrySearchScreen()),
+                      ),
+                      GoRoute(
+                        path: 'approvals',
+                        pageBuilder: (context, state) =>
+                            SherpaPage<void>(key: state.pageKey, restorationId: 'tool-approvals', child: const ApprovalsScreen()),
+                      ),
+                      GoRoute(
+                        path: 'servers/:id',
+                        pageBuilder: (context, state) => SherpaPage<void>(
+                          key: state.pageKey,
+                          child: ServerDetailScreen(serverId: state.pathParameters['id']!),
+                        ),
+                        routes: [
+                          GoRoute(
+                            path: 'console',
+                            pageBuilder: (context, state) => SherpaPage<void>(
+                              key: state.pageKey,
+                              child: ServerConsoleScreen(serverId: state.pathParameters['id']!),
+                            ),
+                          ),
+                          GoRoute(
+                            path: 'review/:tool',
+                            pageBuilder: (context, state) => SherpaPage<void>(
+                              key: state.pageKey,
+                              child: ToolReviewScreen(
+                                serverId: state.pathParameters['id']!,
+                                toolName: state.pathParameters['tool']!,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ],
               ),

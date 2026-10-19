@@ -677,6 +677,7 @@ final class CompactionInput {
     this.systemPrompt,
     this.tools = const [],
     this.toolLookup,
+    this.annotationsFor,
     this.plan,
     this.counter,
     this.userMessageTokens = 4000,
@@ -714,6 +715,12 @@ final class CompactionInput {
   /// Resolves tools no longer offered this turn (deferred / tool search), so
   /// read-only calls stay out of the side-effect ledger.
   final ToolDefinition? Function(String name)? toolLookup;
+
+  /// The annotations Sherpa trusts for a tool (`ApprovalPolicy.annotationsFor`):
+  /// a server's own `readOnlyHint` only counts when the server is trusted,
+  /// so an untrusted "read-only" call still lands in the side-effect
+  /// ledger. Without it, only built-in tools' declared hints are trusted.
+  final ToolAnnotations Function(ToolDefinition tool)? annotationsFor;
   final Plan? plan;
   final TokenCounter? counter;
 

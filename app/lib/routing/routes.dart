@@ -16,6 +16,31 @@ abstract final class Routes {
   static const downloads = '/settings/models/downloads';
   static const huggingFace = '/settings/huggingface';
 
+  /// MCP tool servers: the list, add (by URL, QR, registry or deep link),
+  /// the registry search, remembered approvals, one server, its console and
+  /// a tool's review.
+  static const tools = '/settings/tools';
+  static const addServer = '/settings/tools/add';
+  static const toolRegistry = '/settings/tools/registry';
+  static const toolApprovals = '/settings/tools/approvals';
+
+  static String toolServer(String serverId) => '$tools/servers/${Uri.encodeComponent(serverId)}';
+
+  static String toolServerConsole(String serverId) => '${toolServer(serverId)}/console';
+
+  static String toolReview(String serverId, String toolName) =>
+      '${toolServer(serverId)}/review/${Uri.encodeComponent(toolName)}';
+
+  /// The add screen filled in (`source`: url, registry, link or qr).
+  static String addServerWith({required String url, String? name, String? source, String? registryName, String? description}) =>
+      Uri(path: addServer, queryParameters: {
+        'url': url,
+        'name': ?name,
+        'source': ?source,
+        'registry': ?registryName,
+        'description': ?description,
+      }).toString();
+
   /// A Hub repo's detail page (`owner/name` as two path segments).
   static String modelDetail(String repoId) {
     final i = repoId.indexOf('/');

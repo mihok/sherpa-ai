@@ -30,6 +30,31 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- "Add this tool server" links: sherpa://mcp/add?url=…
+                 Routed by Flutter's deep linking to go_router, which always
+                 shows a confirmation; nothing is added automatically. The
+                 scheme differs from the OAuth redirect scheme on purpose. -->
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="true" />
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sherpa" android:host="mcp" android:pathPrefix="/add" />
+            </intent-filter>
+        </activity>
+        <!-- OAuth redirect (io.github.mihok.sherpa:/oauth/callback) for MCP
+             servers and Hugging Face, when the browser falls back from Auth
+             Tab to a Custom Tab (flutter_web_auth_2). -->
+        <activity
+            android:name="com.linusu.flutter_web_auth_2.CallbackActivity"
+            android:exported="true"
+            android:taskAffinity="">
+            <intent-filter android:label="flutter_web_auth_2">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="io.github.mihok.sherpa" />
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

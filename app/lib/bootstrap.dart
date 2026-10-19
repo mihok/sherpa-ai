@@ -17,7 +17,9 @@ import 'package:sherpa_providers/sherpa_providers.dart';
 
 import 'features/chat/state/chat_dependencies.dart';
 import 'features/context/data/data_erase.dart';
+import 'features/mcp/mcp_bootstrap.dart';
 import 'features/models/models_bootstrap.dart';
+import 'features/models/state/local_inference_providers.dart';
 import 'features/models/state/models_providers.dart';
 import 'routing/chat_route.dart';
 import 'routing/chat_screen_binding.dart';
@@ -63,22 +65,29 @@ Future<List<Override>> bootstrap({bool inMemory = false}) async {
   final ui = DocumentUiPreferencesStore(docs);
   await Future.wait([registry.load(), prefs.load(), ui.load()]);
   final models = await modelFeatureOverrides(docs: docs, hubClient: _httpClient(), device: PlatformDeviceProfileSource());
+  // Wraps the registry with the on-device provider ("local").
+  final local = await localInferenceOverrides(registry: registry);
+  final mcp = await mcpFeatureOverrides(docs: docs, secrets: secrets);
   unawaited(_excludeModelStorageFromBackup());
 
   return [
     secretStoreProvider.overrideWithValue(secrets),
     sessionStoreProvider.overrideWithValue(sessions),
-    providerRegistryProvider.overrideWithValue(registry),
     preferencesProvider.overrideWithValue(prefs),
     uiPreferencesStoreProvider.overrideWithValue(ui),
     chatScreenBuilderProvider.overrideWithValue(buildChatScreen),
     contextScreensProvider.overrideWithValue(contextScreens),
-    dataEraseHooksProvider.overrideWith((ref) => [() => _eraseModels(ref)]),
+    dataEraseHooksProvider.overrideWith((ref) => [() => _eraseModels(ref), () => _eraseLocalInference(ref)]),
     chatContextManagerProvider.overrideWith(_contextManager),
     memoryMonitorProvider.overrideWithValue(PlatformMemoryMonitor()),
     ...models,
+    ...local,
+    ...mcp,
   ];
 }
+
+/// Saved KV prefixes and engine notes of the on-device provider.
+Future<void> _eraseLocalInference(Ref ref) async => ref.read(localInferenceProvider)?.eraseAll();
 
 /// "Delete all data" also removes downloads in flight and every model in
 /// the library (files first via the library's own record-then-files order).
@@ -128,6 +137,9 @@ Future<void> _excludeModelStorageFromBackup() async {
 ContextManager _contextManager(Ref ref) => LadderContextManager(
       strategy: const ExtractiveContextStrategy(),
       toolLookup: ref.watch(toolRouterProvider).lookup,
+      // The side-effect ledger believes declared hints only from trusted
+      // sources, like the approval policy.
+      annotationsFor: ref.watch(approvalPolicyProvider).annotationsFor,
     );
 
 /// Opens the encrypted database, never falling back to plaintext.
@@ -174,20 +186,24 @@ Future<List<Override>> _inMemoryOverrides() async {
   final secrets = InMemorySecretStore();
   final client = _httpClient();
   final models = await inMemoryModelFeatureOverrides();
+  final registry = InMemoryProviderRegistry(
+    secrets: secrets,
+    factory: (config, apiKey) => createProvider(config, apiKey: apiKey, client: client),
+  );
+  final local = await inMemoryLocalInferenceOverrides(registry: registry);
+  final mcp = await inMemoryMcpFeatureOverrides(secrets: secrets);
   return [
     secretStoreProvider.overrideWithValue(secrets),
     sessionStoreProvider.overrideWithValue(ObservableSessionStore(InMemorySessionStore())),
-    providerRegistryProvider.overrideWithValue(InMemoryProviderRegistry(
-      secrets: secrets,
-      factory: (config, apiKey) => createProvider(config, apiKey: apiKey, client: client),
-    )),
     preferencesProvider.overrideWithValue(InMemoryPreferencesStore()),
     uiPreferencesStoreProvider.overrideWithValue(InMemoryUiPreferencesStore()),
     chatScreenBuilderProvider.overrideWithValue(buildChatScreen),
     contextScreensProvider.overrideWithValue(contextScreens),
-    dataEraseHooksProvider.overrideWith((ref) => [() => _eraseModels(ref)]),
+    dataEraseHooksProvider.overrideWith((ref) => [() => _eraseModels(ref), () => _eraseLocalInference(ref)]),
     chatContextManagerProvider.overrideWith(_contextManager),
     ...models,
+    ...local,
+    ...mcp,
   ];
 }
 

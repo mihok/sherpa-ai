@@ -86,6 +86,7 @@ final class LadderContextManager implements ContextManager {
     this.memoryPolicy = const MemoryContextPolicy(),
     this.location,
     this.toolLookup,
+    this.annotationsFor,
     Clock clock = const SystemClock(),
     Random? random,
   }) : _clock = clock,
@@ -104,6 +105,10 @@ final class LadderContextManager implements ContextManager {
   /// Resolves tools not offered this turn (e.g. `ToolRouter.lookup`), so
   /// read-only calls stay out of the side-effect ledger.
   final ToolDefinition? Function(String name)? toolLookup;
+
+  /// Trust-aware annotations (`ApprovalPolicy.annotationsFor`) for the
+  /// side-effect ledger; see [CompactionInput.annotationsFor].
+  final ToolAnnotations Function(ToolDefinition tool)? annotationsFor;
   final Clock _clock;
   final Random _random;
   final Map<String, String> _nonces = {};
@@ -392,6 +397,7 @@ final class LadderContextManager implements ContextManager {
       systemPrompt: p.system,
       tools: p.tools,
       toolLookup: toolLookup,
+      annotationsFor: annotationsFor,
       plan: p.request.plan,
       counter: p.counter,
       userMessageTokens: min((0.2 * w).floor(), 4000),

@@ -27,6 +27,12 @@ abstract final class UntrustedData {
 
   static bool isValidNonce(String nonce) => _nonceShape.hasMatch(nonce);
 
+  /// `Message.metadata` flag (value `true`) for a message whose content
+  /// did not come from the user of this app even though it has the user
+  /// role, e.g. an imported handoff seed. The agent loop counts such a
+  /// message as untrusted content in the session (Rule of Two, R11 §9.7).
+  static const String messageMetadataKey = 'untrusted';
+
   /// Neutralises anything inside [text] that looks like a wrapper tag.
   static String escape(String text) => text.replaceAllMapped(_tag, (m) => '&lt;${m[1]}${m[2]}');
 

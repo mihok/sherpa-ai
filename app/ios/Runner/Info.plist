@@ -9,7 +9,23 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Sherpa uses the camera only to scan a handoff QR code that you choose to import.</string>
+	<string>Sherpa uses the camera only to scan a QR code you choose: a handoff to import or a tool server to add.</string>
+	<!-- "Add this tool server" links: sherpa://mcp/add?url=… (always confirmed in the app).
+	     The OAuth redirect scheme (io.github.mihok.sherpa) is not listed: ASWebAuthenticationSession
+	     receives it itself. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>io.github.mihok.sherpa.links</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>sherpa</string>
+			</array>
+		</dict>
+	</array>
+	<key>FlutterDeepLinkingEnabled</key>
+	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Sherpa connects to model and tool servers you run on your local network.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>

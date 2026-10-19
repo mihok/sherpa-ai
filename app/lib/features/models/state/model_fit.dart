@@ -80,6 +80,19 @@ enum FitBadgeKind {
       };
 }
 
+/// The sentence under an unknown badge.
+const String fitNotCheckedReason = 'Fit not checked: the model header could not be read.';
+
+/// The sentence under a fit badge: the first blocking reason, else the
+/// first warning, else how much of the budget the model needs.
+String fitReasonText(FitResult f) {
+  final blocking = f.reasons.where((r) => r.severity == FitSeverity.blocking);
+  if (blocking.isNotEmpty) return blocking.first.message;
+  final warn = f.reasons.where((r) => r.severity == FitSeverity.warning);
+  if (warn.isNotEmpty) return warn.first.message;
+  return 'Needs about ${_gb(f.demandBytes)} of the ~${_gb(f.budgetBytes)} available.';
+}
+
 /// One downloadable (or explicitly not downloadable) variant of a repo.
 @immutable
 final class VariantRow {
@@ -125,12 +138,8 @@ final class VariantRow {
   String get reason {
     if (blockedReasons.isNotEmpty) return blockedReasons.first;
     final f = fit;
-    if (f == null) return 'Fit not checked: the model header could not be read.';
-    final blocking = f.reasons.where((r) => r.severity == FitSeverity.blocking);
-    if (blocking.isNotEmpty) return blocking.first.message;
-    final warn = f.reasons.where((r) => r.severity == FitSeverity.warning);
-    if (warn.isNotEmpty) return warn.first.message;
-    return 'Needs about ${_gb(f.demandBytes)} of the ~${_gb(f.budgetBytes)} available.';
+    if (f == null) return fitNotCheckedReason;
+    return fitReasonText(f);
   }
 
   /// Bits per weight to show: measured when the parameter count is known,

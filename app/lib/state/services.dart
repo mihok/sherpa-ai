@@ -19,9 +19,20 @@ final class ModelChoice {
 /// Health of one configured endpoint, from the last probe.
 enum EndpointStatus { unknown, ok, unauthorized, unreachable, error }
 
+/// Provider id of the built-in on-device provider (llama.cpp over the model
+/// library). It has no [ProviderConfig]: a registry wired for local
+/// inference (`LocalProviderRegistry`) resolves it itself, so it never
+/// appears in [ProviderRegistry.configs] and can't be added, edited or
+/// removed. A library model is chosen as
+/// `ModelChoice(providerId: localProviderId, modelId: LibraryModel.id)`.
+const String localProviderId = 'local';
+
 /// App-level registry of configured model providers. Persists
 /// [ProviderConfig]s, keeps API keys in the [SecretStore], and builds
 /// [ModelProvider] instances on demand.
+///
+/// [resolve], [models] and [probe] also answer [localProviderId] when the
+/// registry is wired for on-device inference; [configs] never lists it.
 abstract interface class ProviderRegistry {
   List<ProviderConfig> get configs;
 

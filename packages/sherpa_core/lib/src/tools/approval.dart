@@ -124,6 +124,7 @@ final class ApprovalPolicy {
     Set<String> trustedServers = const {},
     List<ApprovalGrant> grants = const [],
     this.autoRunReadOnly = true,
+    this.onGrantsChanged,
   })  : _clock = clock,
         _trusted = {...trustedServers},
         _grants = [...grants];
@@ -133,7 +134,15 @@ final class ApprovalPolicy {
   final List<ApprovalGrant> _grants;
   final bool autoRunReadOnly;
 
+  /// Called with the new [grants] after every change (a grant recorded,
+  /// revoked or expired), so the app can persist them: export with
+  /// `ApprovalGrant.toJson`, import through the `grants` constructor
+  /// argument.
+  final void Function(List<ApprovalGrant> grants)? onGrantsChanged;
+
   List<ApprovalGrant> get grants => List.unmodifiable(_grants);
+
+  void _changed() => onGrantsChanged?.call(grants);
 
   /// The risk the tool's annotations DECLARE, trusted or not: display only.
   /// Decisions use [riskFor].
@@ -255,6 +264,7 @@ final class ApprovalPolicy {
       expiresAt: response.expiresIn == null ? null : now.add(response.expiresIn!),
       definitionHash: definitionHash,
     ));
+    _changed();
   }
 
   /// Like [record], bound to [tool]'s current definition, but never stores
@@ -278,7 +288,25 @@ final class ApprovalPolicy {
     );
   }
 
-  void revoke(String toolName) => _grants.removeWhere((g) => g.toolName == toolName);
+  void revoke(String toolName) => revokeWhere((g) => g.toolName == toolName);
+
+  /// Removes one grant (as listed by [grants]).
+  void revokeGrant(ApprovalGrant grant) => revokeWhere((g) => identical(g, grant));
+
+  /// Removes every grant matching [test]; returns how many were removed.
+  int revokeWhere(bool Function(ApprovalGrant grant) test) {
+    final before = _grants.length;
+    _grants.removeWhere(test);
+    final removed = before - _grants.length;
+    if (removed > 0) _changed();
+    return removed;
+  }
+
+  /// Drops grants whose expiry has passed (they no longer cover anything).
+  int pruneExpired() {
+    final now = _clock.now();
+    return revokeWhere((g) => g.expiresAt != null && !now.isBefore(g.expiresAt!));
+  }
 
   void trustServer(String serverId) => _trusted.add(serverId);
   void untrustServer(String serverId) => _trusted.remove(serverId);
