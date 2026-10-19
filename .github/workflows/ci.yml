@@ -39,11 +39,10 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get --enforce-lockfile
+      # Every Flutter package and the app. The on-device engine's
+      # integration tests skip here: no engine library or model on runners.
       - name: flutter test (packages + app)
-        run: |
-          for dir in packages/sherpa_markdown app; do
-            (cd "$dir" && flutter test --reporter=compact)
-          done
+        run: tools/test_all.sh --flutter
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
