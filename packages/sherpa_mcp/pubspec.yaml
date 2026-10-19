@@ -1,0 +1,22 @@
+name: sherpa_mcp
+description: >-
+  Sherpa's pure-Dart, dual-era MCP client: JSON-RPC, Streamable HTTP
+  (2026-07-28 stateless and 2025 session eras), the deprecated HTTP+SSE
+  transport, in-process transports, era detection and one era-agnostic
+  connection API.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  http: ^1.6.0
+  meta: ^1.19.0
+  sherpa_core: any
+  sherpa_net: any
+
+dev_dependencies:
+  shelf: ^1.4.3
+  test: ^1.31.1

@@ -15,6 +15,7 @@ workspace:
   - packages/sherpa_data
   - packages/sherpa_hub
   - packages/sherpa_markdown
+  - packages/sherpa_mcp
   - packages/sherpa_net
   - packages/sherpa_platform
   - packages/sherpa_providers
