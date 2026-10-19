@@ -224,6 +224,10 @@ Finder fieldLabeled(String label) =>
 
 Future<void> tapText(WidgetTester tester, String text, {int index = 0}) async {
   final f = find.text(text);
+  if (f.evaluate().length <= index) {
+    // Lazy lists (settings) only build rows near the viewport: scroll first.
+    await tester.scrollUntilVisible(f, 200, scrollable: find.byType(Scrollable).first);
+  }
   await tester.ensureVisible(f.at(index));
   await tester.pumpAndSettle();
   await tester.tap(f.at(index));

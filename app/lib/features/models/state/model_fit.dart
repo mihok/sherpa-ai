@@ -1,0 +1,345 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart' show immutable;
+import 'package:sherpa_hub/sherpa_hub.dart';
+
+/// The shape facts of a model, from one GGUF header peek.
+@immutable
+final class ModelShape {
+  const ModelShape({required this.architecture, required this.metadata, this.parameterCount, this.bytesFetched});
+
+  final ModelArchitecture architecture;
+  final GgufMetadata metadata;
+
+  /// Exact count from the GGUF tensor table.
+  final int? parameterCount;
+
+  /// What the peek cost (shown in the tooltip: it is mobile data too).
+  final int? bytesFetched;
+}
+
+/// Reads a model's architecture without downloading it.
+abstract interface class ModelShapeSource {
+  Future<ModelShape> peek(String repo, String commit, String path);
+}
+
+/// One Range-request peek of a GGUF header (2 MB first, up to ~8 MB for
+/// big vocabularies, R08 §5.6). Layers, KV heads, head size and trained
+/// context are the same for every quant of a repo, so one peek of the
+/// default variant sizes all of them; the bytes per variant come from the
+/// real file sizes, never from names or the repo-level `gguf` summary
+/// (which describes one arbitrary file, R08 §0.5).
+final class HubModelShapeSource implements ModelShapeSource {
+  HubModelShapeSource(this.client);
+
+  final HfHubClient client;
+  final Map<(String, String, String), Future<ModelShape>> _cache = {};
+
+  @override
+  Future<ModelShape> peek(String repo, String commit, String path) {
+    final key = (repo, commit, path);
+    final cached = _cache[key];
+    if (cached != null) return cached;
+    final f = _peek(repo, commit, path);
+    _cache[key] = f;
+    // Failures are not cached: signing in or reconnecting should retry.
+    unawaited(f.then<void>((_) {}, onError: (Object _) => _cache.remove(key)));
+    return f;
+  }
+
+  Future<ModelShape> _peek(String repo, String commit, String path) async {
+    final peek = await client.readGgufHeader(repo, commit, path, readTensorInfo: true, maxBytes: 16 << 20);
+    final arch = ModelArchitecture.fromGguf(peek.header.metadata, parameterCount: peek.header.parameterCount);
+    if (arch == null) throw const GgufFormatException('the header lacks the layer and head counts');
+    return ModelShape(
+      architecture: arch,
+      metadata: peek.header.metadata,
+      parameterCount: peek.header.parameterCount,
+      bytesFetched: peek.bytesFetched,
+    );
+  }
+}
+
+/// The verdict a variant row shows.
+enum FitBadgeKind {
+  fits,
+  tight,
+  wontFit,
+
+  /// The shape could not be read (gated, offline, not GGUF).
+  unknown,
+
+  /// Unsafe or unloadable: never downloadable.
+  blocked;
+
+  static FitBadgeKind of(FitVerdict v) => switch (v) {
+        FitVerdict.fits => fits,
+        FitVerdict.tight => tight,
+        FitVerdict.wontFit => wontFit,
+      };
+}
+
+/// One downloadable (or explicitly not downloadable) variant of a repo.
+@immutable
+final class VariantRow {
+  const VariantRow({
+    required this.variant,
+    required this.downloadBytes,
+    required this.kind,
+    this.mmproj,
+    this.fit,
+    this.effectiveBpw,
+    this.recommended = false,
+    this.blockedReasons = const [],
+    this.warnings = const [],
+  });
+
+  final RepoVariant variant;
+
+  /// Every byte the plan would fetch: shards + paired projector.
+  final int downloadBytes;
+  final FitBadgeKind kind;
+
+  /// The projector llama.cpp's own rules pair with this variant.
+  final HubRepoFile? mmproj;
+  final FitResult? fit;
+
+  /// Weight bytes × 8 / parameters: what the file really spends per weight
+  /// (names lie for small models: gemma-3-270m Q2_K is 7.07, R08 §0.20).
+  final double? effectiveBpw;
+  final bool recommended;
+  final List<String> blockedReasons;
+  final List<String> warnings;
+
+  String get label => variant.label;
+
+  /// Download is never offered for Won't fit or unsafe/unloadable files.
+  bool get canDownload => kind != FitBadgeKind.blocked && kind != FitBadgeKind.wontFit;
+
+  /// Tight, or unknown because the shape could not be read: the user
+  /// confirms with the reason in front of them.
+  bool get needsConfirm => kind == FitBadgeKind.tight || kind == FitBadgeKind.unknown;
+
+  /// The sentence under the badge.
+  String get reason {
+    if (blockedReasons.isNotEmpty) return blockedReasons.first;
+    final f = fit;
+    if (f == null) return 'Fit not checked: the model header could not be read.';
+    final blocking = f.reasons.where((r) => r.severity == FitSeverity.blocking);
+    if (blocking.isNotEmpty) return blocking.first.message;
+    final warn = f.reasons.where((r) => r.severity == FitSeverity.warning);
+    if (warn.isNotEmpty) return warn.first.message;
+    return 'Needs about ${_gb(f.demandBytes)} of the ~${_gb(f.budgetBytes)} available.';
+  }
+
+  /// Bits per weight to show: measured when the parameter count is known,
+  /// else the label's nominal figure.
+  double? get bitsPerWeight => effectiveBpw ?? variant.quant?.bpw ?? variant.quant?.ggufType?.typicalFileBpw;
+
+  bool get bpwMeasured => effectiveBpw != null;
+}
+
+/// Everything the detail screen shows about fit, computed from the Hub
+/// listing, one header peek and the device profile. Pure: no IO.
+@immutable
+final class ModelAssessment {
+  const ModelAssessment({required this.rows, required this.summary, this.recommended, this.otherFiles = const []});
+
+  /// Usable variants first (best quality first), blocked ones last.
+  final List<VariantRow> rows;
+  final VariantRow? recommended;
+  final String summary;
+
+  /// Sidecars and files that are not a model variant (imatrix, configs,
+  /// pickles…), each with why it is not offered.
+  final List<(HubRepoFile file, String why)> otherFiles;
+}
+
+/// The file whose header the detail screen peeks: the default variant's
+/// first shard (llama.cpp's own `-hf` pick, R08 §13.2).
+HubRepoFile? peekTarget(CatalogModelDetails d) {
+  final v = d.defaultVariant;
+  if (v == null || v.runtime != SherpaRuntime.llamaCpp) return null;
+  return v.weights.first;
+}
+
+/// Builds the rows. [shape] null = header unknown (rows get
+/// [FitBadgeKind.unknown]); [platform] gates MLX (iOS) and LiteRT
+/// (Android).
+ModelAssessment assessVariants(
+  CatalogModelDetails details,
+  DeviceProfile device, {
+  ModelShape? shape,
+  FitOptions options = const FitOptions(),
+}) {
+  final files = [for (final f in details.files) f.file];
+  final rows = <VariantRow>[];
+  final candidates = <QuantCandidate>[];
+  final mmprojFor = <String, HubRepoFile?>{};
+  final blockedFor = <String, List<String>>{};
+  for (final v in details.variants) {
+    final blocked = [
+      ...v.blockedReasons,
+      if (!v.complete) 'Missing part(s) ${v.missingParts.join(', ')} of ${v.expectedParts}.',
+      ?_platformBlock(v, device.platform),
+    ];
+    blockedFor[v.id] = blocked;
+    final mm = v.runtime == SherpaRuntime.llamaCpp ? pairSidecar(details.id, v, files, role: FileRole.mmproj) : null;
+    mmprojFor[v.id] = mm;
+    if (blocked.isEmpty && v.runtime == SherpaRuntime.llamaCpp) {
+      candidates.add(QuantCandidate(
+        id: v.id,
+        weightBytes: v.weightBytes,
+        quant: v.quant,
+        mmprojBytes: mm?.size ?? mm?.lfsSize ?? 0,
+        parameterCount: shape?.parameterCount ?? details.parameterCount,
+      ));
+    }
+  }
+  final arch = shape?.architecture;
+  final rec = arch == null || candidates.isEmpty ? null : recommendQuant(device, arch, candidates, options: options);
+  final params = shape?.parameterCount ?? details.parameterCount;
+
+  for (final v in details.variants) {
+    final blocked = blockedFor[v.id]!;
+    final mm = mmprojFor[v.id];
+    final bytes = v.totalBytes + (mm?.size ?? mm?.lfsSize ?? 0);
+    FitResult? fit;
+    if (blocked.isEmpty && arch != null && v.runtime == SherpaRuntime.llamaCpp) {
+      fit = assessFit(
+        device,
+        ModelFootprintInput(
+          architecture: arch,
+          weightBytes: v.weightBytes,
+          mmprojBytes: mm?.size ?? mm?.lfsSize ?? 0,
+          quant: v.quant?.ggufType,
+          label: v.label,
+        ),
+        options: options,
+      );
+    }
+    final kind = blocked.isNotEmpty
+        ? FitBadgeKind.blocked
+        : fit == null
+            ? FitBadgeKind.unknown
+            : FitBadgeKind.of(fit.verdict);
+    final ranked = rec?.ranked.where((r) => r.candidate.id == v.id).firstOrNull;
+    final eff = ranked?.effectiveBpw ?? effectiveBitsPerWeight(v.weightBytes, params);
+    rows.add(VariantRow(
+      variant: v,
+      downloadBytes: bytes,
+      kind: kind,
+      mmproj: mm,
+      fit: fit,
+      effectiveBpw: eff,
+      recommended: rec?.best?.candidate.id == v.id,
+      blockedReasons: List.unmodifiable(blocked),
+      warnings: v.warnings,
+    ));
+  }
+
+  int quality(VariantRow r) => r.kind == FitBadgeKind.blocked ? 1 : 0;
+  rows.sort((a, b) {
+    final q = quality(a).compareTo(quality(b));
+    if (q != 0) return q;
+    return b.downloadBytes.compareTo(a.downloadBytes);
+  });
+
+  final recommended = rows.where((r) => r.recommended).firstOrNull;
+  final variantFiles = {for (final v in details.variants) for (final f in [...v.weights, ...v.support]) f.path};
+  final pairedProjectors = {for (final m in mmprojFor.values) ?m?.path};
+  final others = <(HubRepoFile, String)>[];
+  for (final f in details.files) {
+    final path = f.file.path;
+    if (variantFiles.contains(path) || pairedProjectors.contains(path)) continue;
+    if (f.file.isDirectory) continue;
+    final safety = FileSafety.check(f.file, repoSecurity: details.security);
+    final role = f.name.role.value;
+    final why = !safety.allowed
+        ? safety.reason!
+        : role != FileRole.model
+            ? role.explanation
+            : f.name.flags.where((x) => x.blocking).map((x) => x.explanation).firstOrNull ?? 'Not part of a model variant';
+    others.add((f.file, why));
+  }
+
+  String labelOf(RankedQuant? r) =>
+      rows.where((x) => x.variant.id == r?.candidate.id).firstOrNull?.label ?? r?.candidate.id ?? '';
+  final String summary;
+  if (arch == null) {
+    summary = rows.any((r) => r.kind != FitBadgeKind.blocked)
+        ? "Fit couldn't be checked; sizes are real, the memory estimate is missing."
+        : 'Nothing in this repository can run in Sherpa.';
+  } else if (rec?.best != null) {
+    summary = '${labelOf(rec!.best)} is the best quality that fits this device with headroom.';
+  } else if (rec?.fallback != null) {
+    summary = 'Nothing fits with headroom; ${labelOf(rec!.fallback)} might load, but memory is tight.';
+  } else if (candidates.isEmpty) {
+    summary = 'No variant in this repository can run in Sherpa.';
+  } else {
+    summary = 'No variant of this model fits this device.';
+  }
+  return ModelAssessment(rows: List.unmodifiable(rows), recommended: recommended, summary: summary, otherFiles: others);
+}
+
+String? _platformBlock(RepoVariant v, DevicePlatform p) => switch (v.runtime) {
+      SherpaRuntime.mlx when p != DevicePlatform.ios => 'MLX models run on iPhone and iPad only.',
+      SherpaRuntime.litert when p != DevicePlatform.android => 'LiteRT-LM models run on Android only.',
+      SherpaRuntime.mlx || SherpaRuntime.litert => null,
+      SherpaRuntime.llamaCpp => null,
+      SherpaRuntime.none => null,
+    };
+
+/// A browse card's estimate, before any file size is known.
+@immutable
+final class CardFitEstimate {
+  const CardFitEstimate({required this.verdict, required this.estimatedBytes, required this.parameters, required this.bits});
+
+  final FitVerdict verdict;
+  final int estimatedBytes;
+  final int parameters;
+  final double bits;
+
+  String get explanation =>
+      'Estimated from ${_params(parameters)} parameters at ~${formatBpw(bits)} bits per weight (a typical 4-bit '
+      'download). Open the model to check its real file sizes against this device.';
+}
+
+/// List responses carry no file sizes (R08 §2.4), so cards estimate from
+/// the parameter count — `safetensors.total` when the Hub has it, else the
+/// size in the name — at a typical 4-bit quant, and say it's an estimate.
+/// Effective-parameter labels (`E2B`) are skipped: their raw weights are
+/// far larger (R08 §13.4).
+CardFitEstimate? estimateCardFit(CatalogEntry e, DeviceProfile device) {
+  final size = e.name.size?.value;
+  final params = e.summary?.safetensors?.total ??
+      (size == null || size.kind == ParamSizeKind.effective ? null : size.approximateParameters);
+  if (params == null || params <= 0) return null;
+  final bits = switch (e.name.format) {
+    ModelFormat.mlx || ModelFormat.litert => 4.5,
+    _ => QuantTypes.q4_k_m.typicalFileBpw ?? 4.9,
+  };
+  final bytes = (params * bits / 8).round();
+  final b = params / 1e9;
+  final layers = b < 1 ? 24 : b < 4 ? 28 : b < 10 ? 36 : b < 40 ? 48 : 80;
+  final arch = ModelArchitecture.dense(layers: layers, kvHeads: 8, headDim: 128, trainContextLength: 4096);
+  final fit = assessFit(device, ModelFootprintInput(architecture: arch, weightBytes: bytes), computeMaxContext: false);
+  return CardFitEstimate(verdict: fit.verdict, estimatedBytes: bytes, parameters: params, bits: bits);
+}
+
+String _params(int n) {
+  final b = n / 1e9;
+  if (b >= 10) return '${b.round()}B';
+  if (b >= 1) {
+    final t = b.toStringAsFixed(1);
+    return '${t.endsWith('.0') ? t.substring(0, t.length - 2) : t}B';
+  }
+  return '${math.max(1, (n / 1e6).round())}M';
+}
+
+String _gb(int bytes) {
+  final g = bytes / (1024 * 1024 * 1024);
+  if (g >= 1) return '${g.toStringAsFixed(g >= 10 ? 0 : 1)} GB';
+  return '${(bytes / (1024 * 1024)).round()} MB';
+}

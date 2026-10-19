@@ -4,6 +4,11 @@ import 'package:material_ui/material_ui.dart';
 
 import '../design/widgets/state_views.dart';
 import '../features/home/home_screen.dart';
+import '../features/models/downloads_screen.dart';
+import '../features/models/hf_account_screen.dart';
+import '../features/models/model_detail_screen.dart';
+import '../features/models/model_directory_screen.dart';
+import '../features/models/model_library_screen.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/settings/about_screen.dart';
 import '../features/settings/privacy_screen.dart';
@@ -28,6 +33,11 @@ import 'sherpa_page.dart';
 /// /settings/providers/:id        edit a provider
 /// /settings/privacy              privacy dashboard
 /// /settings/about                versions and licenses
+/// /settings/models               on-device models (library, disk usage, import)
+/// /settings/models/browse        Hugging Face browser
+/// /settings/models/browse/:owner/:name   a repo: variants, fit, download
+/// /settings/models/downloads     download queue
+/// /settings/huggingface          Hugging Face token
 /// ```
 ///
 /// Everything but onboarding is nested under `/`, so the back stack is
@@ -110,6 +120,42 @@ final routerProvider = Provider<GoRouter>((ref) {
                     path: 'about',
                     pageBuilder: (context, state) =>
                         SherpaPage<void>(key: state.pageKey, restorationId: 'about', child: const AboutScreen()),
+                  ),
+                  GoRoute(
+                    path: 'models',
+                    pageBuilder: (context, state) =>
+                        SherpaPage<void>(key: state.pageKey, restorationId: 'models', child: const ModelLibraryScreen()),
+                    routes: [
+                      GoRoute(
+                        path: 'browse',
+                        pageBuilder: (context, state) => SherpaPage<void>(
+                          key: state.pageKey,
+                          restorationId: 'model-browse',
+                          child: const ModelDirectoryScreen(),
+                        ),
+                        routes: [
+                          GoRoute(
+                            path: ':owner/:name',
+                            pageBuilder: (context, state) => SherpaPage<void>(
+                              key: state.pageKey,
+                              child: ModelDetailScreen(
+                                repoId: '${state.pathParameters['owner']}/${state.pathParameters['name']}',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      GoRoute(
+                        path: 'downloads',
+                        pageBuilder: (context, state) =>
+                            SherpaPage<void>(key: state.pageKey, restorationId: 'downloads', child: const DownloadsScreen()),
+                      ),
+                    ],
+                  ),
+                  GoRoute(
+                    path: 'huggingface',
+                    pageBuilder: (context, state) =>
+                        SherpaPage<void>(key: state.pageKey, child: const HuggingFaceAccountScreen()),
                   ),
                 ],
               ),

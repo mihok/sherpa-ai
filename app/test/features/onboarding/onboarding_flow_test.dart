@@ -141,6 +141,9 @@ void main() {
     expect(find.text('Meet Sherpa'), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(find.text('Model providers'), findsOneWidget);
+    // Back on the settings page (still scrolled to where the row was).
+    expect(find.text('Meet Sherpa'), findsNothing);
+    expect(find.text('Run setup again'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Settings'), findsOneWidget);
   });
 }

@@ -63,6 +63,20 @@ class SettingsScreen extends ConsumerWidget {
           enabled: configs.isNotEmpty,
           onTap: () => unawaited(showDefaultModelSheet(context)),
         ),
+        ListTile(
+          leading: const Icon(Icons.download_for_offline_outlined),
+          title: const Text('Models & downloads'),
+          subtitle: const Text('Run models on this phone; browse Hugging Face'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.go(Routes.models),
+        ),
+        ListTile(
+          leading: const Icon(Icons.key_outlined),
+          title: const Text('Hugging Face account'),
+          subtitle: const Text('Token for gated models and higher limits'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.go(Routes.huggingFace),
+        ),
         const SectionHeader('Privacy'),
         ListTile(
           leading: const Icon(Icons.shield_outlined),
