@@ -20,10 +20,10 @@ memory pressure, and is a full **MCP** host: tools, resources, prompts, elicitat
 | [M5](docs/milestones/M5.md) | MCP Apps host, elicitation, sampling | **Done** |
 | [M6](docs/milestones/M6.md) | Polish, [accessibility](docs/milestones/M6-accessibility.md), background execution, perf budgets, evals | **Done** |
 
-Every milestone is verified in a Linux container (unit, widget, golden and integration tests; a real
-llama.cpp engine and small models on the host; Android debug builds). **Nothing has run on a phone yet**,
-iOS has not been compiled (no macOS here), and CI has not run either (see M6 notes). Each milestone's notes
-list exactly what was and wasn't verified.
+Every milestone is verified by tests (unit, widget, golden, integration and an accessibility audit; a real
+llama.cpp engine and small models on a Linux host) and on CI, which builds the Android APK (16 KB-aligned)
+and the iOS app (Xcode 26.6). **Nothing has run on a phone yet.** Each milestone's notes list exactly what
+was and wasn't verified.
 
 ## Repository layout
 
