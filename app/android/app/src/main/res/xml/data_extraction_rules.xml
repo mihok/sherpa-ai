@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ (API 31+): cloud backup AND device-to-device transfer.
+     The encrypted database (app/lib/bootstrap.dart: sherpa.db in
+     getApplicationSupportDirectory() = Context.filesDir, domain "file") is
+     useless anywhere else: its key is device-only (Keystore, never backed up),
+     so a restored copy can only be quarantined as unreadable. Excluding it
+     keeps ciphertext off Google's servers and out of the backup quota.
+     Paths are exact names (no wildcards in this format), so the SQLite
+     sidecars are listed one by one. Everything not excluded keeps the
+     platform default (included). -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="sherpa.db" />
+        <exclude domain="file" path="sherpa.db-wal" />
+        <exclude domain="file" path="sherpa.db-shm" />
+        <exclude domain="file" path="sherpa.db-journal" />
+        <!-- flutter_secure_storage wraps the database key with a device-only Keystore
+             key; restored prefs fail with "Failed to unwrap key" (its README). All
+             Sherpa state lives in the excluded DB or the Keystore, so no prefs are
+             worth restoring. -->
+        <exclude domain="sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="sherpa.db" />
+        <exclude domain="file" path="sherpa.db-wal" />
+        <exclude domain="file" path="sherpa.db-shm" />
+        <exclude domain="file" path="sherpa.db-journal" />
+        <!-- flutter_secure_storage wraps the database key with a device-only Keystore
+             key; restored prefs fail with "Failed to unwrap key" (its README). All
+             Sherpa state lives in the excluded DB or the Keystore, so no prefs are
+             worth restoring. -->
+        <exclude domain="sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>

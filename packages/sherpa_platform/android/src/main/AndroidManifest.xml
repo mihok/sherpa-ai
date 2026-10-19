@@ -1,0 +1,25 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Merged into the app. Permission names checked against the API 37
+         android.jar: there is no FOREGROUND_SERVICE_SHORT_SERVICE permission;
+         shortService needs only FOREGROUND_SERVICE (R07 §4.1). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Runtime permission on API 33+; the app asks for it (see README).
+         Without it the service still runs but its notification only shows
+         in the foreground-services task manager. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+        <!-- Main process on purpose: the service exists to keep the Dart
+             agent loop alive while a reply or a user-started run finishes. -->
+        <service
+            android:name="io.github.mihok.sherpa_platform.RunService"
+            android:exported="false"
+            android:foregroundServiceType="shortService|specialUse">
+            <!-- Reviewed by Google Play for specialUse (R07 §4.1). -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device LLM inference for a user-started agent task" />
+        </service>
+    </application>
+</manifest>

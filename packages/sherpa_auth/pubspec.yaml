@@ -1,0 +1,23 @@
+name: sherpa_auth
+description: >-
+  Pure-Dart OAuth 2.1 client for Sherpa: MCP authorization (2026-07-28
+  algorithm: RFC 9728 / RFC 8414 discovery with issuer checks, CIMD and
+  DCR registration, PKCE S256, RFC 8707 resource, RFC 9207 iss, step-up,
+  rotating single-flight refresh) and Sign in with Hugging Face.
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  crypto: ^3.0.7
+  http: ^1.6.0
+  meta: ^1.19.0
+  sherpa_core: any
+  sherpa_net: any
+
+dev_dependencies:
+  shelf: ^1.4.3
+  test: ^1.31.1

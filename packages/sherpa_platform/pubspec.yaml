@@ -1,0 +1,34 @@
+name: sherpa_platform
+description: >-
+  Flutter plugin for Sherpa's OS signals: memory pressure, thermal and power
+  state, a device snapshot for model fit, kill forensics, backup exclusion and
+  background-run leases (Android foreground service, iOS background tasks).
+publish_to: none
+version: 0.1.0
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  meta: ^1.19.0
+  sherpa_core: any
+  sherpa_hub: any
+
+dev_dependencies:
+  fake_async: ^1.3.3
+  flutter_test:
+    sdk: flutter
+  pigeon: ^29.0.10
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: io.github.mihok.sherpa_platform
+        pluginClass: SherpaPlatformPlugin
+      ios:
+        pluginClass: SherpaPlatformPlugin

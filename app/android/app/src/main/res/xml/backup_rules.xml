@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and lower (android:fullBackupContent); API 31+ devices use
+     data_extraction_rules.xml instead. Same exclusions, same reason: the
+     database key is device-only, so a backed-up sherpa.db cannot be opened. -->
+<full-backup-content>
+    <exclude domain="file" path="sherpa.db" />
+    <exclude domain="file" path="sherpa.db-wal" />
+    <exclude domain="file" path="sherpa.db-shm" />
+    <exclude domain="file" path="sherpa.db-journal" />
+    <!-- flutter_secure_storage wraps the database key with a device-only Keystore
+         key; restored prefs fail with "Failed to unwrap key" (its README). All
+         Sherpa state lives in the excluded DB or the Keystore, so no prefs are
+         worth restoring. -->
+    <exclude domain="sharedpref" path="." />
+</full-backup-content>
