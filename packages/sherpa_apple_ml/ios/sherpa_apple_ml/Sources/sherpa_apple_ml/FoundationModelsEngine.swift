@@ -162,23 +162,22 @@
         mode = nil
       }
       return GenerationOptions(
-        samplingMode: mode, temperature: r.greedy ? nil : s.temperature,
+        sampling: mode, temperature: r.greedy ? nil : s.temperature,
         maximumResponseTokens: s.maxTokens.map { Int($0) })
     }
 
-    // MARK: Usage (iOS 27: LanguageModelSession.usage)
+    // MARK: Usage
+    //
+    // `LanguageModelSession.usage` is iOS 27 SDK API. The app builds with the
+    // iOS 26 SDK (Xcode 26, CI's macos-26 image), where the symbol does not
+    // exist even behind #available, so usage is not reported yet.
 
     private struct UsageCounts {
       var input = 0, cached = 0, output = 0, reasoning = 0
     }
 
     private static func usage(of session: LanguageModelSession) -> UsageCounts? {
-      if #available(iOS 27.0, macOS 27.0, *) {
-        let u = session.usage
-        return UsageCounts(
-          input: u.input.totalTokenCount, cached: u.input.cachedTokenCount,
-          output: u.output.totalTokenCount, reasoning: u.output.reasoningTokenCount)
-      }
+      _ = session
       return nil
     }
 
@@ -192,7 +191,8 @@
       return e
     }
 
-    // MARK: Errors (iOS 26 GenerationError, iOS 27 LanguageModelError)
+    // MARK: Errors (iOS 26 SDK: LanguageModelSession.GenerationError; the iOS 27
+    // LanguageModelError type is not in the SDK the app builds with)
 
     private static func event(for error: Error) -> AmEvent {
       if error is CancellationError { return AmEvent.make(.finished, code: "cancelled") }
@@ -213,21 +213,6 @@
         case .unsupportedLanguageOrLocale:
           return AmEvent.make(.error, code: ErrorCode.unsupportedLanguage.rawValue, message: message)
         case .decodingFailure: return AmEvent.make(.error, code: ErrorCode.server.rawValue, message: message)
-        @unknown default: return AmEvent.make(.error, code: ErrorCode.unknown.rawValue, message: message)
-        }
-      }
-      if #available(iOS 27.0, macOS 27.0, *), let e = error as? LanguageModelError {
-        let message = "\(e)"
-        switch e {
-        case .contextSizeExceeded: return AmEvent.make(.error, code: ErrorCode.contextOverflow.rawValue, message: message)
-        case .rateLimited: return AmEvent.make(.error, code: ErrorCode.rateLimited.rawValue, message: message)
-        case .refusal: return AmEvent.make(.finished, code: "refusal", message: message)
-        case .guardrailViolation: return AmEvent.make(.finished, code: "guardrail", message: message)
-        case .timeout: return AmEvent.make(.error, code: ErrorCode.timeout.rawValue, message: message)
-        case .unsupportedLanguageOrLocale:
-          return AmEvent.make(.error, code: ErrorCode.unsupportedLanguage.rawValue, message: message)
-        case .unsupportedCapability, .unsupportedTranscriptContent, .unsupportedGenerationGuide:
-          return AmEvent.make(.error, code: ErrorCode.invalidRequest.rawValue, message: message)
         @unknown default: return AmEvent.make(.error, code: ErrorCode.unknown.rawValue, message: message)
         }
       }
