@@ -14,9 +14,9 @@ memory pressure, and is a full **MCP** host: tools, resources, prompts, elicitat
 | Milestone | Scope | Status |
 |---|---|---|
 | [M1](docs/milestones/M1.md) | Core agent loop, remote providers, chat UI | **Done** |
-| M2 | Hugging Face directory, device fit, downloads, on-device inference + optimization | In progress (Hub client, name parser and device-fit engine landed) |
+| M2 | Hugging Face directory, device fit, downloads, on-device inference + optimization | In progress (Hub client, device fit, native engine, on-device provider landed; app wiring next) |
 | M3 | Context manager: pruning, compaction, handoff, memory monitor | Core ladder landed; UI and memory plugin pending |
-| M4 | MCP client, OAuth, approvals, tool budget | Planned |
+| M4 | MCP client, OAuth, approvals, tool budget | In progress (MCP client and OAuth packages landed) |
 | M5 | MCP Apps host, elicitation, sampling | Planned |
 | M6 | Polish, accessibility, background execution, perf budgets, evals | Planned |
 
@@ -30,6 +30,10 @@ memory pressure, and is a full **MCP** host: tools, resources, prompts, elicitat
 | `packages/sherpa_data` | Encrypted Drift/SQLite persistence |
 | `packages/sherpa_markdown` | Incremental streaming Markdown renderer |
 | `packages/sherpa_hub` | Hugging Face Hub client, model-name parser, device-fit engine, download planner |
+| `packages/sherpa_inference` | On-device inference: FFI bindings to `sherpa_engine`, engine hosts, `LlamaCppProvider`, model lifecycle (admission, memory pressure), scheduler, autotune, persistent prefix (KV) cache |
+| `packages/sherpa_mcp` | MCP client for both protocol eras (stateless 2026-07-28 and session-based), Streamable HTTP + SSE transports |
+| `packages/sherpa_auth` | OAuth 2.1 for MCP servers and Hugging Face: discovery, PKCE, client registration, token storage |
+| `packages/sherpa_platform` | Native device signals (Pigeon): memory pressure, device profile, backup exclusion, background-run guard |
 | `app/` | The Flutter app |
 | `native/` | `sherpa_engine` (C ABI over llama.cpp) and pinned build scripts |
 | `docs/` | Plan, research digests, milestone notes |
