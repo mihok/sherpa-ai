@@ -70,6 +70,8 @@ android {
 
     defaultConfig {
         minSdk = 29
+        // JNI lookups by name (see the file) survive the app's R8 pass.
+        consumerProguardFiles("consumer-rules.pro")
         ndk {
             // The engine is arm64-v8a only (native/llama/build_android.sh). On other ABIs (x86_64
             // emulators) the shim is absent, InferenceService reports "engine unavailable" — the same
