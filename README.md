@@ -98,6 +98,72 @@ pieces: `Heading` / `HeadingGroup` for headings, `LiveAnnouncement` for progress
 at milestones, `SectionHeader(count:)` for list lengths, `motionStyleOf(context)` / `MotionPageRoute` for
 anything that animates.
 
+### Release builds
+
+The `android-release` job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds the release APK
+(arm64-v8a, with the on-device engine) on pushes to `main`, on `v*` tags and on manual runs (Actions → ci →
+Run workflow). Pull requests skip it: a cold engine build alone takes about 5 minutes.
+
+1. Installs the NDK and CMake pinned in `native/llama/llama.lock` if the runner lacks them.
+2. Restores `native/llama/out/android` from the cache, keyed by a hash of `native/llama/llama.lock`,
+   `native/llama/*.sh` and `native/engine/**`. On a miss it runs `native/llama/build_android.sh` with
+   `SHERPA_STRICT=1`; a failing engine gate (alignment, NEEDED, variants, exports, size budget) fails the job.
+   To force a rebuild, delete the `android-engine-Linux-…` entry under Actions → Caches.
+3. Writes `app/android/key.properties` and the keystore from the secrets below (deleted at the end of the job),
+   then runs `flutter build apk --release --target-platform android-arm64`.
+4. Runs [`tools/check_release_apk.sh`](tools/check_release_apk.sh): `apksigner verify` (prints the certificate
+   SHA-256), `zipalign -c -P 16 -v 4`, not debuggable, the INTERNET permission, the `:inference` service, the
+   engine libraries stored uncompressed, and the JNI names native code looks up (every class named by
+   `lib/arm64-v8a/*.so`, `EngineError.<init>(I[B)V`, `ProgressSink.onProgress(F)Z`, `NativeEngine`'s natives
+   against the shim's `RegisterNatives` table) in the dex.
+5. Uploads `sherpa-<version>-<commit>-arm64-release.apk` as an artifact (the `.apk` itself, kept 30 days) and a
+   `…-symbols` artifact (R8 `mapping.txt`, unstripped engine libraries), and puts the APK's SHA-256 in the job
+   summary.
+
+Without the secrets (forks, or before they are added) the APK is signed with the debug key and named
+`…-arm64-debug-signed.apk`, and the job summary says so: it installs, but cannot update an install signed with
+the release key. On a `v*` tag, `android-release-publish` attaches a release-signed APK and its `.sha256` to the
+tag's GitHub Release once the tests pass, creating the release as a draft if it does not exist yet. The tag must
+match the app version (`v0.1.0` for `version: 0.1.0+N`); a debug-signed APK is never attached.
+
+Repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `SHERPA_RELEASE_KEYSTORE_BASE64` | the keystore (`.jks`), base64 on one line |
+| `SHERPA_RELEASE_STORE_PASSWORD` | the keystore password |
+| `SHERPA_RELEASE_KEY_ALIAS` | the key's alias |
+| `SHERPA_RELEASE_KEY_PASSWORD` | the key password (for a PKCS12 keystore, keytool's default, the store password) |
+
+```sh
+# Once: create the key (keep the .jks and its passwords backed up, outside the repository).
+keytool -genkeypair -v -keystore sherpa-release.jks -storetype PKCS12 -keyalg RSA -keysize 4096 \
+  -validity 10000 -alias sherpa-upload
+# The base64 value (Linux and macOS), straight into the secret with the GitHub CLI:
+base64 < sherpa-release.jks | tr -d '\n' > sherpa-release.jks.b64
+gh secret set SHERPA_RELEASE_KEYSTORE_BASE64 < sherpa-release.jks.b64 && rm sherpa-release.jks.b64
+gh secret set SHERPA_RELEASE_STORE_PASSWORD      # prompts for the value
+gh secret set SHERPA_RELEASE_KEY_ALIAS --body sherpa-upload
+gh secret set SHERPA_RELEASE_KEY_PASSWORD
+# Optional: pin the certificate (the job then fails on any other key).
+keytool -list -keystore sherpa-release.jks -alias sherpa-upload | sed -n 's/.*(SHA-256): //p'
+gh variable set SHERPA_RELEASE_CERT_SHA256 --body '<that fingerprint>'
+```
+
+GitHub masks every secret value wherever it appears in the logs, so pick an alias that occurs nowhere else
+(`sherpa-upload`, not `sherpa` or `release`).
+
+Locally, the same build and checks (the script finds the build tools through `ANDROID_HOME`):
+
+```sh
+native/llama/build_android.sh                  # once, and after engine changes
+(cd app && flutter build apk --release --target-platform android-arm64)
+tools/check_release_apk.sh --require-release-key            # app/build/app/outputs/flutter-apk/app-release.apk
+```
+
+Release signing reads `app/android/key.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`;
+gitignored); without it, release builds fall back to the debug key.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

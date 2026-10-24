@@ -3,7 +3,12 @@ name: ci
 on:
   push:
     branches: [main]
+    # v* tags also attach the signed release APK to that tag's GitHub Release
+    # (android-release-publish).
+    tags: ['v*']
   pull_request:
+  # Manual runs (Actions > ci > Run workflow) build the release APK too.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -73,6 +78,249 @@ jobs:
         run: |
           zipalign=$(ls "$ANDROID_HOME"/build-tools/*/zipalign | sort -V | tail -1)
           "$zipalign" -c -P 16 -v 4 app/build/app/outputs/flutter-apk/app-debug.apk | tail -3
+
+  # The release APK (arm64-v8a) with the on-device engine, signed, checked
+  # and uploaded (kept 30 days). Runs on pushes to main, v* tags and manual
+  # runs, not on pull requests: a cold engine build alone takes ~5 minutes.
+  # Signed with the release key from the SHERPA_RELEASE_* secrets; without
+  # them (forks, or before they are set up) with the debug key, and the
+  # artifact name ends in -debug-signed. README "Release builds" has the
+  # secrets and the same steps for a local build.
+  android-release:
+    name: Android release APK (engine, signing, release gates)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      release-key: ${{ steps.signing.outputs.release-key }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      # NDK and CMake at the versions pinned in native/llama/llama.lock (the
+      # engine build runs with SHERPA_STRICT=1, so anything else fails). The
+      # runner's ANDROID_NDK_HOME points at its default NDK: override it.
+      - name: Android NDK + CMake (pinned)
+        run: |
+          . native/llama/llama.lock
+          want=()
+          [ -f "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION/source.properties" ] || want+=("ndk;$ANDROID_NDK_VERSION")
+          [ -x "$ANDROID_HOME/cmake/$ANDROID_CMAKE_VERSION/bin/cmake" ] || want+=("cmake;$ANDROID_CMAKE_VERSION")
+          if [ "${#want[@]}" -gt 0 ]; then
+            sdkmanager="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+            echo "Installing ${want[*]}"
+            yes 2> /dev/null | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+            "$sdkmanager" --install "${want[@]}" > "$RUNNER_TEMP/sdkmanager.log" 2>&1 \
+              || { tail -n 40 "$RUNNER_TEMP/sdkmanager.log"; exit 1; }
+          fi
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+      # native/llama/out/android is rebuilt only when the pins, the build
+      # scripts or the engine sources change. Exact key only: a near match
+      # would ship libraries built from other sources.
+      - name: Restore the engine build
+        id: engine-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: native/llama/out/android
+          key: android-engine-${{ runner.os }}-${{ hashFiles('native/llama/llama.lock', 'native/llama/*.sh', 'native/engine/**') }}
+      # llama.cpp + KleidiAI at the pins, all 7 CPU variants, then the gates
+      # (16 KB LOAD alignment, NEEDED allow-list, variant exports, se_*-only
+      # engine exports, size budget): the script exits non-zero on any.
+      - name: Build the on-device engine
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        env:
+          SHERPA_STRICT: '1'
+        run: JOBS="$(nproc)" native/llama/build_android.sh
+      # Saved right after a passing build, so a later failure (Flutter build,
+      # release gates) does not cost the next run the engine build.
+      - name: Save the engine build
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: native/llama/out/android
+          key: ${{ steps.engine-cache.outputs.cache-primary-key }}
+      - name: Engine gates
+        env:
+          CACHE_HIT: ${{ steps.engine-cache.outputs.cache-hit }}
+        run: |
+          out=native/llama/out/android
+          [ -f "$out/jniLibs/arm64-v8a/libsherpa_engine.so" ] || { echo "::error::no engine in $out/jniLibs"; exit 1; }
+          jq -e '.gates == "pass"' "$out/manifest.json" > /dev/null \
+            || { echo "::error::engine gates did not pass ($out/manifest.json)"; exit 1; }
+          jq -r --arg cached "${CACHE_HIT:-false}" '"- On-device engine: llama.cpp `\(.llama_commit[0:9])`, KleidiAI \(.kleidiai), NDK \(.ndk), \(.cpu_variants | length) CPU variants; \(.bytes_strip_unneeded_total) of \(.size_budget_bytes) budget bytes; gates \(.gates)" + (if $cached == "true" then " (from cache)" else " (built in \(.seconds.total) s)" end)' \
+            "$out/manifest.json" | tee "$RUNNER_TEMP/engine.md"
+      # Release signing from repository secrets. The keystore goes to the
+      # runner's temp directory, app/android/key.properties points at it
+      # (build.gradle.kts reads it), and both are deleted at the end of the
+      # job. Secret values are masked in logs and never printed here.
+      - name: Release signing key
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SHERPA_RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SHERPA_RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SHERPA_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SHERPA_RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "release-key=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Debug-signed APK::The SHERPA_RELEASE_* secrets are not available to this run (a fork, or not set up), so the APK is signed with the debug key."
+            exit 0
+          fi
+          umask 077
+          keystore="$RUNNER_TEMP/sherpa-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d > "$keystore"
+          # Wrong secrets fail here, with a clear message, not deep in Gradle.
+          if ! keytool -list -keystore "$keystore" -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::The keystore in SHERPA_RELEASE_KEYSTORE_BASE64 does not open with SHERPA_RELEASE_STORE_PASSWORD or has no key SHERPA_RELEASE_KEY_ALIAS."
+            exit 1
+          fi
+          # java.util.Properties reads backslashes as escapes.
+          esc() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
+          {
+            printf 'storeFile=%s\n' "$keystore"
+            printf 'storePassword=%s\n' "$(esc "$STORE_PASSWORD")"
+            printf 'keyAlias=%s\n' "$(esc "$KEY_ALIAS")"
+            printf 'keyPassword=%s\n' "$(esc "$KEY_PASSWORD")"
+          } > app/android/key.properties
+          echo "release-key=true" >> "$GITHUB_OUTPUT"
+      - run: flutter pub get --enforce-lockfile
+      - name: Build release APK
+        working-directory: app
+        run: flutter build apk --release --target-platform android-arm64
+      - name: Name the APK
+        env:
+          RELEASE_KEY: ${{ steps.signing.outputs.release-key }}
+        run: |
+          version="$(sed -n 's/^version: *\([^+ ]*\).*/\1/p' app/pubspec.yaml)"
+          suffix=release
+          [ "$RELEASE_KEY" = true ] || suffix=debug-signed
+          name="sherpa-$version-${GITHUB_SHA::7}-arm64-$suffix.apk"
+          mkdir -p "$RUNNER_TEMP/dist"
+          cp app/build/app/outputs/flutter-apk/app-release.apk "$RUNNER_TEMP/dist/$name"
+          {
+            echo "APK_NAME=$name"
+            echo "APK_PATH=$RUNNER_TEMP/dist/$name"
+            echo "APK_SHA256=$(sha256sum "$RUNNER_TEMP/dist/$name" | cut -d' ' -f1)"
+          } >> "$GITHUB_ENV"
+      # tools/check_release_apk.sh: apksigner (cert SHA-256), zipalign -P 16,
+      # not debuggable, INTERNET, the :inference service, engine libraries,
+      # and the JNI names native code looks up (classes, EngineError and
+      # ProgressSink lookups, NativeEngine natives) against the dex. Set the
+      # repository variable SHERPA_RELEASE_CERT_SHA256 to pin the certificate.
+      - name: Release gates
+        env:
+          RELEASE_KEY: ${{ steps.signing.outputs.release-key }}
+          EXPECT_CERT: ${{ vars.SHERPA_RELEASE_CERT_SHA256 }}
+        run: |
+          args=(--summary "$RUNNER_TEMP/checks.md")
+          if [ "$RELEASE_KEY" = true ]; then
+            args+=(--require-release-key)
+            [ -z "$EXPECT_CERT" ] || args+=(--expect-cert "$EXPECT_CERT")
+          fi
+          tools/check_release_apk.sh "${args[@]}" "$APK_PATH"
+      # Uploaded as the .apk itself (no zip), so it installs straight from
+      # the download.
+      - name: Upload APK
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ env.APK_PATH }}
+          archive: false
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+      # For crash reports from this build: R8's mapping.txt (Kotlin/Java
+      # stack traces) and the unstripped engine libraries (native ones).
+      - name: Collect symbols
+        run: |
+          d="$RUNNER_TEMP/symbols"
+          mkdir -p "$d"
+          cp native/llama/out/android/symbols-arm64-v8a.tar.gz native/llama/out/android/manifest.json "$d/"
+          cp app/build/app/outputs/mapping/release/mapping.txt "$d/" || echo "::warning::no R8 mapping.txt"
+          echo "SYMBOLS_NAME=${APK_NAME%.apk}-symbols" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.SYMBOLS_NAME }}
+          path: ${{ runner.temp }}/symbols/
+          retention-days: 30
+          overwrite: true
+      - name: Job summary
+        if: always()
+        env:
+          RELEASE_KEY: ${{ steps.signing.outputs.release-key }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          not_attached=""
+          [[ "$GITHUB_REF" != refs/tags/v* ]] || not_attached=", and it is not attached to the GitHub Release"
+          {
+            echo "## Android release APK"
+            echo
+            if [ -n "${APK_NAME:-}" ]; then
+              echo "- APK: \`$APK_NAME\` ($(du -h "$APK_PATH" | cut -f1)), kept 30 days${ARTIFACT_URL:+: [download]($ARTIFACT_URL)}"
+              echo "- SHA-256: \`$APK_SHA256\`"
+            fi
+            if [ "$RELEASE_KEY" = true ]; then
+              echo "- Signed with the release key (SHERPA_RELEASE_* secrets)."
+            elif [ "$RELEASE_KEY" = false ]; then
+              echo "- **Signed with the debug key**: the SHERPA_RELEASE_* secrets are not available to this run (a fork, or not set up). It installs, but cannot update an install signed with the release key$not_attached."
+            fi
+            cat "$RUNNER_TEMP/engine.md" 2> /dev/null || true
+            echo
+            cat "$RUNNER_TEMP/checks.md" 2> /dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the signing key
+        if: always()
+        run: rm -f app/android/key.properties "$RUNNER_TEMP/sherpa-release.jks"
+
+  # On a v* tag: attach the release-signed APK (never a debug-signed one) to
+  # the tag's GitHub Release once the tests pass. Uploads to the release if
+  # it exists, otherwise creates it as a draft for a person to publish. The
+  # tag must match the app version (v0.1.0 for version: 0.1.0+N).
+  android-release-publish:
+    name: Attach the release APK to the GitHub Release (v* tags)
+    needs: [core, flutter-tests, android-release]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.android-release.outputs.release-key == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: sherpa-*-arm64-release.apk
+          path: dist
+          skip-decompress: true
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mapfile -t apks < <(find dist -type f -name 'sherpa-*-arm64-release.apk')
+          [ "${#apks[@]}" -eq 1 ] || { echo "::error::expected one release APK, found ${#apks[@]}"; exit 1; }
+          apk="${apks[0]}"
+          name="$(basename "$apk")"
+          version="${name#sherpa-}"
+          version="${version%-*-arm64-release.apk}"
+          [ "$TAG" = "v$version" ] || { echo "::error::tag $TAG does not match the app version $version (app/pubspec.yaml)"; exit 1; }
+          (cd "$(dirname "$apk")" && sha256sum "$name" > "$name.sha256")
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$apk" "$apk.sha256" --clobber
+            echo "Attached \`$name\` to the release $TAG." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh release create "$TAG" "$apk" "$apk.sha256" --draft --verify-tag --title "Sherpa $TAG" --generate-notes
+            echo "Created the **draft** release $TAG with \`$name\`: review and publish it on GitHub." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   ios:
     name: iOS build (no codesign)
