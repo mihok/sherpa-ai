@@ -571,6 +571,36 @@ void main() {
       'siblings': [sibling('config.json', 700), sibling('model.safetensors', 3000000000, lfs: true)],
     };
     expect((await HfHubCatalog(client()).details('acme/Qwen2.5-1.5B-Pirate')).versionsBase, 'acme/Qwen2.5-1.5B-Pirate');
+
+    // What it holds decides, not who publishes it: a Transformers fine-tune
+    // under litert-community (FunctionGemma_270M_Mobile_Actions)…
+    hub.modelInfo = {
+      'id': 'litert-community/FunctionGemma_270M_Mobile_Actions',
+      'sha': FakeHub.commit,
+      'library_name': 'transformers',
+      'pipeline_tag': 'text-generation',
+      'tags': ['transformers', 'safetensors', 'base_model:google/functiongemma-270m-it',
+        'base_model:finetune:google/functiongemma-270m-it'],
+      'siblings': [
+        sibling('config.json', 1000),
+        sibling('model.safetensors', 536000000, lfs: true),
+        sibling('tokenizer.json', 33000000, lfs: true),
+      ],
+    };
+    expect((await HfHubCatalog(client()).details('litert-community/FunctionGemma_270M_Mobile_Actions')).versionsBase,
+        'litert-community/FunctionGemma_270M_Mobile_Actions');
+    // …while LiteRT exports with a stray safetensors head (Kev-0.8B-LiteRT) are a conversion.
+    hub.modelInfo = {
+      'id': 'litert-community/Kev-0.8B-LiteRT',
+      'sha': FakeHub.commit,
+      'library_name': 'litert',
+      'tags': ['litert', 'tflite', 'base_model:jaredpalmer/kev-0.8b', 'base_model:finetune:jaredpalmer/kev-0.8b'],
+      'siblings': [
+        sibling('head/kev_0.8b_pointer_head.safetensors', 3200000, lfs: true),
+        sibling('kev-0.8b_rowprefill_L128_fp16fc_i8emb.tflite', 900000000, lfs: true),
+      ],
+    };
+    expect((await HfHubCatalog(client()).details('litert-community/Kev-0.8B-LiteRT')).versionsBase, 'jaredpalmer/kev-0.8b');
     expect(const HubModelInfo(id: 'x/y', tags: ['base_model:finetune:a/b']).baseModel, 'a/b');
     expect(const HubModelInfo(id: 'x/y', tags: ['base_model:finetune:a/b', 'base_model:c/d']).baseModel, 'c/d');
     expect(const HubModelInfo(id: 'x/y', tags: ['base_model:']).baseModel, isNull);

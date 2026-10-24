@@ -215,12 +215,128 @@ void main() {
       final vs = groupVariants('OBLITERATUS/Qwen3.8-27B-OBLITERATED', files, formatHints: hints);
       final mlx = vs.singleWhere((v) => v.format == ModelFormat.mlx);
       expect(mlx.usable, isFalse);
-      expect(mlx.fileProblems, ['This folder holds more than one set of weights (in 1, 18 and 28 parts).']);
+      expect(mlx.fileProblems, ['This folder holds more than one set of weights (in 18 and 28 parts).'],
+          reason: 'the extra file is part of a set, not a third one');
       expect(vs.singleWhere((v) => v.label == 'Q4_K_M').usable, isTrue, reason: 'the GGUF next to it is fine');
       final one = groupVariants('OBLITERATUS/Qwen3.8-27B-OBLITERATED',
           [for (final f in files) if (!f.path.contains('-of-00028') && !f.path.contains('extra')) f],
           formatHints: hints);
       expect(one.singleWhere((v) => v.format == ModelFormat.mlx).usable, isTrue, reason: 'one set is one model');
+    });
+
+    test('one shard set and the extra file its index maps tensors to are one model', () {
+      // OBLITERATUS/Qwen3.8-27B-OBLITERATED's model.safetensors.index.json
+      // maps tensors to the 28-part set and model-extra-00001-of-00001.
+      final files = [
+        _small('config.json', 3000),
+        _small('tokenizer_config.json', 9700),
+        _lfs('tokenizer.json', 11422654),
+        _small('model.safetensors.index.json', 120000),
+        for (var i = 1; i <= 28; i++) _lfs('model-${'$i'.padLeft(5, '0')}-of-00028.safetensors', 2e9.toInt()),
+        _lfs('model-extra-00001-of-00001.safetensors', 1e8.toInt()),
+      ];
+      final v = groupVariants('mlx-community/Some-27B-4bit', files).single;
+      expect(v.usable, isTrue, reason: '${v.blockedReasons}');
+      expect(v.weights, hasLength(29));
+      // The extra file's "1 of 1" does not stand in for the set's part 1.
+      final noFirst = groupVariants('mlx-community/Some-27B-4bit',
+          [for (final f in files) if (f.path != 'model-00001-of-00028.safetensors') f]).single;
+      expect(noFirst.missingParts, [1]);
+      expect(noFirst.usable, isFalse);
+    });
+
+    test('a lone file of another stem that sorts first is not the set whose parts are checked', () {
+      // `embeddings-00001-of-00001` sorts ahead of the set it sits next to;
+      // its "1 of 1" must neither stand in for the set nor hide its part 1.
+      final files = [
+        _small('config.json', 3000),
+        _lfs('tokenizer.json', 11422654),
+        _small('model.safetensors.index.json', 120000),
+        _lfs('embeddings-00001-of-00001.safetensors', 3e8.toInt()),
+        for (var i = 2; i <= 3; i++) _lfs('model-0000$i-of-00003.safetensors', 2e9.toInt()),
+      ];
+      final v = groupVariants('mlx-community/Qwen3-8B-4bit', files).single;
+      expect(v.missingParts, [1], reason: 'one set and its extra file, missing its part 1');
+      expect(v.expectedParts, 3);
+      expect(v.blockedReasons, isEmpty);
+      expect(v.usable, isFalse);
+      final plan = planDownload(repo: 'mlx-community/Qwen3-8B-4bit', commit: _commit, files: files, quant: v.id);
+      expect(plan, isA<PlanRefused>().having((p) => p.reasons, 'reasons', ['Missing part(s) 1 of 3.']));
+      final whole = groupVariants(
+          'mlx-community/Qwen3-8B-4bit', [...files, _lfs('model-00001-of-00003.safetensors', 2e9.toInt())]).single;
+      expect(whole.usable, isTrue, reason: '${whole.blockedReasons}');
+      expect((whole.weights.length, whole.expectedParts), (4, 3));
+    });
+
+    test('two whole shard sets under different stems in one MLX folder are two sets', () {
+      final v = groupVariants('mlx-community/Mistral-7B-4bit', [
+        _small('config.json', 3000),
+        _lfs('tokenizer.json', 1800000),
+        for (var i = 1; i <= 3; i++) _lfs('consolidated-0000$i-of-00003.safetensors', 1e9.toInt()),
+        for (var i = 1; i <= 2; i++) _lfs('model-0000$i-of-00002.safetensors', 15e8.toInt()),
+      ]).single;
+      expect(v.usable, isFalse, reason: 'MLX would load all five files as one model');
+      expect(v.fileProblems, ['This folder holds more than one set of weights (in 2 and 3 parts).']);
+    });
+
+    test('a .bin or .npz the Hub flags is a problem with its file, not only a format nothing runs', () {
+      const sec = HubRepoSecurity(scansDone: true, filesWithIssues: {'llama-2-7b.ggmlv3.q4_0.bin': HubScanStatus.unsafe});
+      final ggml = groupVariants('TheBloke/Llama-2-7B-GGML', [_lfs('llama-2-7b.ggmlv3.q4_0.bin', 3825517184)],
+          repoSecurity: sec).single;
+      expect(ggml.fileProblems, ['The Hub flags llama-2-7b.ggmlv3.q4_0.bin as unsafe']);
+      expect(ggml.hubFlags, ggml.fileProblems);
+      expect(ggml.unsupportedFormat, "Sherpa can't run old GGML files (llama.cpp now reads GGUF).");
+      // A per-file verdict (securityFileStatus) counts the same.
+      const flagged = HubFileSecurity(status: HubScanStatus.suspicious);
+      final npz = groupVariants('mlx-community/mistral-7B-v0.1', [
+        HubRepoFile(path: 'weights.npz', size: 14483498434, lfsSha256: 'a' * 64, lfsSize: 14483498434, security: flagged),
+        _small('config.json', 300),
+      ]).single;
+      expect(npz.fileProblems, ['The Hub flags weights.npz as suspicious']);
+      // The gate reports the verdict; the extension alone only when nothing else is wrong.
+      final verdict = FileSafety.check(_lfs('model.bin', 9),
+          repoSecurity: const HubRepoSecurity(scansDone: true, filesWithIssues: {'model.bin': HubScanStatus.unsafe}));
+      expect((verdict.allowed, verdict.byExtension, verdict.hubFlagged, verdict.reason),
+          (false, false, true, 'The Hub flags model.bin as unsafe'));
+      final named = FileSafety.check(_lfs('model.bin', 9));
+      expect((named.allowed, named.byExtension, named.hubFlagged), (false, true, false));
+      expect(groupVariants('TheBloke/Llama-2-7B-GGML', [_lfs('llama-2-7b.ggmlv3.q4_0.bin', 3825517184)]).single.hubFlags,
+          isEmpty);
+    });
+
+    test("a LiteRT hint names LiteRT's own files: safetensors there stay safetensors, an .npz is not MLX", () {
+      // litert-community/FunctionGemma_270M_Mobile_Actions (library_name
+      // transformers): a Transformers fine-tune published by litert-community.
+      final fg = groupVariants('litert-community/FunctionGemma_270M_Mobile_Actions', [
+        _small('config.json', 1000),
+        _lfs('model.safetensors', 536000000),
+        _lfs('tokenizer.json', 33000000),
+      ]).single;
+      expect(fg.format, ModelFormat.safetensors);
+      expect(fg.unsupportedFormat, "Sherpa can't run Transformers weights (safetensors).");
+      // litert-community/Kev-0.8B-LiteRT: .tflite exports and a safetensors head.
+      final kev = groupVariants('litert-community/Kev-0.8B-LiteRT', [
+        _lfs('head/kev_0.8b_pointer_head.safetensors', 3200000),
+        _lfs('kev-0.8b_rowprefill_L128_fp16fc_i8emb.tflite', 900000000),
+      ]);
+      final head = kev.singleWhere((v) => v.weights.single.path.endsWith('.safetensors'));
+      expect(head.format, ModelFormat.safetensors);
+      expect(head.unsupportedFormat, isNot(contains('.tflite')));
+      expect(kev.singleWhere((v) => v.weights.single.path.endsWith('.tflite')).format, ModelFormat.litert);
+      expect(parseModelName('acme/Gemma3-1B-LiteRT', fileName: 'model.safetensors').format, ModelFormat.safetensors);
+      expect(parseModelName('acme/Gemma3-1B-LiteRT', fileName: 'gemma3.litertlm').format, ModelFormat.litert);
+      expect(parseModelName('mlx-community/Gemma3-1B-4bit', fileName: 'model.safetensors').format, ModelFormat.mlx,
+          reason: 'MLX weights are safetensors: an MLX hint still names them');
+      expect(parseModelName('TheBloke/Llama-2-7B-GPTQ', fileName: 'model.safetensors').format, ModelFormat.gptq);
+
+      // litert-community/Qwen3-TTS-12Hz-0.6B-Base: a lookup table among LiteRT files.
+      final tts = groupVariants('litert-community/Qwen3-TTS-12Hz-0.6B-Base', [
+        _lfs('qwen3_tts_int8.litertlm', 500000000),
+        _lfs('legacy/tables/text_projection_fp32.npz', 4000000),
+      ]);
+      final table = tts.singleWhere((v) => v.format == ModelFormat.mlxNpz);
+      expect(table.unsupportedFormat, "Sherpa can't run NumPy .npz files.");
+      expect(table.blockedReasons, [table.unsupportedFormat], reason: 'not called a pickle either');
     });
 
     test('old GGML and MLX .npz files say why nothing runs them, not that they are pickles', () {
@@ -249,7 +365,8 @@ void main() {
       for (final v in gpt2) {
         expect(v.runtime, SherpaRuntime.none, reason: v.id);
         expect(v.usable, isFalse);
-        expect(v.unsupportedFormat, "Sherpa can't run TensorFlow Lite .tflite files (LiteRT-LM needs a .litertlm file).");
+        expect(v.unsupportedFormat, "Sherpa can't run TensorFlow Lite .tflite files.",
+            reason: 'what runs on this device is the app\'s to say (LiteRT-LM is Android only)');
         expect(v.fileProblems, isEmpty);
       }
       final litert = groupVariants('litert-community/Qwen2.5-1.5B-Instruct', [
@@ -260,8 +377,7 @@ void main() {
       expect(byExt['litertlm']!.runtime, SherpaRuntime.litert);
       expect(byExt['litertlm']!.usable, isTrue);
       expect(byExt['task']!.runtime, SherpaRuntime.none);
-      expect(byExt['task']!.unsupportedFormat,
-          "Sherpa can't run MediaPipe .task bundles (LiteRT-LM needs a .litertlm file).");
+      expect(byExt['task']!.unsupportedFormat, "Sherpa can't run MediaPipe .task bundles.");
       expect(
           planDownload(
               repo: 'litert-community/Qwen2.5-1.5B-Instruct', commit: _commit, files: [byExt['task']!.weights.single]),

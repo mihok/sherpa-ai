@@ -135,7 +135,9 @@ final class VariantRow {
   final double? effectiveBpw;
   final bool recommended;
 
-  /// What is wrong with the files themselves (unsafe, incomplete).
+  /// What is wrong with the files themselves (unsafe, incomplete). For a
+  /// format this device can't run, only the Hub's scanner verdicts: the
+  /// rest would never stop a download that can't happen here.
   final List<String> blockedReasons;
 
   /// Why no runtime on this device loads the variant, and what runs here
@@ -236,10 +238,16 @@ ModelAssessment assessVariants(
   // answer.
   final notForThisDevice = details.variants.isNotEmpty && !details.variants.any((v) => _formatRunsOn(v, p));
   for (final v in details.variants) {
-    final blocked = [
-      ...v.fileProblems,
-      if (!v.complete) 'Missing part(s) ${v.missingParts.join(', ')} of ${v.expectedParts}.',
-    ];
+    // A variant in a format this device can't run is never offered here, so
+    // what is wrong with its files is moot: it reads as plain "can't run
+    // here", save the Hub's own verdict on a file, which holds anywhere.
+    // In a format that runs here, its problems are the story.
+    final blocked = _formatRunsOn(v, p)
+        ? [
+            ...v.fileProblems,
+            if (!v.complete) 'Missing part(s) ${v.missingParts.join(', ')} of ${v.expectedParts}.',
+          ]
+        : v.hubFlags;
     final unsupported = _unsupportedOn(v, p, alone: notForThisDevice);
     blockedFor[v.id] = blocked;
     unsupportedFor[v.id] = unsupported;

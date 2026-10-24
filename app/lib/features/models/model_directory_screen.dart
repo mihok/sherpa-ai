@@ -37,8 +37,8 @@ class ModelDirectoryScreen extends ConsumerStatefulWidget {
   final ValueChanged<String>? onOpenModel;
 
   /// What the list opens on: [DirectoryQuery.versionsOf] from a model page
-  /// whose files don't run on this device. Each one is a list of its own
-  /// ([directoryControllersProvider]).
+  /// whose files don't run on this device. Each page is a list of its own
+  /// ([DirectoryPage]), even when another page opened on the same query.
   final DirectoryQuery initialQuery;
 
   @override
@@ -70,11 +70,19 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
   late final TextEditingController _search = TextEditingController(text: widget.initialQuery.text);
   final ScrollController _scroll = ScrollController();
 
-  NotifierProvider<DirectoryController, DirectoryState> get _provider => directoryControllersProvider(widget.initialQuery);
+  late DirectoryPage _page;
+
+  NotifierProvider<DirectoryController, DirectoryState> get _provider => directoryControllersProvider(_page);
+
+  /// Browse's route on its default list is the one root list; any other
+  /// page (a repo's versions, the browser over onboarding) gets its own.
+  static DirectoryPage _pageFor(ModelDirectoryScreen w) =>
+      w.onOpenModel == null && w.initialQuery == const DirectoryQuery() ? DirectoryPage.root : DirectoryPage(w.initialQuery);
 
   @override
   void initState() {
     super.initState();
+    _page = _pageFor(widget);
     _scroll.addListener(_maybeLoadMore);
   }
 
@@ -82,7 +90,10 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
   void didUpdateWidget(ModelDirectoryScreen old) {
     super.didUpdateWidget(old);
     // The route opened another list (a repo's versions) on this page.
-    if (old.initialQuery != widget.initialQuery) _search.text = ref.read(_provider).query.text;
+    if (old.initialQuery != widget.initialQuery) {
+      _page = _pageFor(widget);
+      _search.text = ref.read(_provider).query.text;
+    }
   }
 
   @override

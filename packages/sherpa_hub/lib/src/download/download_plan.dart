@@ -32,6 +32,7 @@ final class RepoVariant {
     this.missingParts = const [],
     this.blockedReasons = const [],
     this.unsupportedFormat,
+    this.hubFlags = const [],
     this.warnings = const [],
   });
 
@@ -61,6 +62,11 @@ final class RepoVariant {
   /// [blockedReasons]: a fact about the files rather than a fault in them,
   /// which the app words for the device it runs on.
   final String? unsupportedFormat;
+
+  /// The [fileProblems] that are the Hub scanners' verdicts on its files
+  /// (`The Hub flags … as unsafe`): a fact about the upload whatever runs
+  /// it, where its other problems only matter to a device that could.
+  final List<String> hubFlags;
   final List<String> warnings;
 
   bool get complete => missingParts.isEmpty;
@@ -96,11 +102,14 @@ const Set<String> _supportFiles = {
 
 /// Why no Sherpa runtime loads [format], on any device, naming the format
 /// the way its model pages do. Null for the formats Sherpa runs (GGUF,
-/// MLX, LiteRT-LM); which of those run on a given device is the app's call.
+/// MLX, LiteRT-LM); which of those run on a given device is the app's call,
+/// and the app says what runs there, so these lines name no platform.
 /// [fileName], the variant's first weight file, tells a LiteRT-LM bundle
 /// (`.litertlm`) from the TensorFlow Lite and MediaPipe files that the name
-/// parser also reads as LiteRT.
-String? unsupportedFormatReason(ModelFormat format, {required String fileName}) => switch (format) {
+/// parser also reads as LiteRT. [mlxRepo]: the repo is an MLX conversion,
+/// so its `.npz` files are old MLX weights rather than any NumPy arrays.
+String? unsupportedFormatReason(ModelFormat format, {required String fileName, bool mlxRepo = false}) =>
+    switch (format) {
       ModelFormat.safetensors => "Sherpa can't run Transformers weights (safetensors).",
       ModelFormat.pickle => "Sherpa can't run PyTorch weights (.bin, .pt).",
       ModelFormat.gptq => "Sherpa can't run GPTQ weights (made for CUDA GPUs).",
@@ -108,13 +117,12 @@ String? unsupportedFormatReason(ModelFormat format, {required String fileName}) 
       ModelFormat.exl2 => "Sherpa can't run EXL2 weights (made for CUDA GPUs).",
       ModelFormat.exl3 => "Sherpa can't run EXL3 weights (made for CUDA GPUs).",
       ModelFormat.ggml => "Sherpa can't run old GGML files (llama.cpp now reads GGUF).",
-      ModelFormat.mlxNpz => "Sherpa can't run old MLX .npz weights.",
+      ModelFormat.mlxNpz when mlxRepo => "Sherpa can't run old MLX .npz weights.",
+      ModelFormat.mlxNpz => "Sherpa can't run NumPy .npz files.",
       ModelFormat.onnx || ModelFormat.onnxData => "Sherpa can't run ONNX models.",
       ModelFormat.other => "Sherpa can't run these files.",
-      ModelFormat.litert when fileName.toLowerCase().endsWith('.task') =>
-        "Sherpa can't run MediaPipe .task bundles (LiteRT-LM needs a .litertlm file).",
-      ModelFormat.litert when !_isLiteRtLm(fileName) =>
-        "Sherpa can't run TensorFlow Lite .tflite files (LiteRT-LM needs a .litertlm file).",
+      ModelFormat.litert when fileName.toLowerCase().endsWith('.task') => "Sherpa can't run MediaPipe .task bundles.",
+      ModelFormat.litert when !_isLiteRtLm(fileName) => "Sherpa can't run TensorFlow Lite .tflite files.",
       ModelFormat.gguf || ModelFormat.ggufPart || ModelFormat.mlx || ModelFormat.litert => null,
     };
 
@@ -153,6 +161,7 @@ List<RepoVariant> groupVariants(
   final groups = <String, List<HubRepoFile>>{};
   final kinds = <String, ModelFormat>{};
   final mlxWeights = <String, List<HubRepoFile>>{};
+  final mlxRepo = parseModelName(repo, repoHints: formatHints).format == ModelFormat.mlx;
 
   for (final f in files) {
     if (f.isDirectory) continue;
@@ -198,8 +207,11 @@ List<RepoVariant> groupVariants(
       ModelFormat.litert when _isLiteRtLm(fs.first.path) => SherpaRuntime.litert,
       _ => SherpaRuntime.none,
     };
-    final unsupported = runtime == SherpaRuntime.none ? unsupportedFormatReason(format, fileName: fs.first.path) : null;
+    final unsupported = runtime == SherpaRuntime.none
+        ? unsupportedFormatReason(format, fileName: fs.first.path, mlxRepo: mlxRepo)
+        : null;
     final blocked = <String>{};
+    final flagged = <String>{};
     final warnings = <String>{};
     for (final f in fs) {
       final p = parsed[f.path]!;
@@ -208,6 +220,7 @@ List<RepoVariant> groupVariants(
       }
       final s = FileSafety.check(f, repoSecurity: repoSecurity, head: sniffedHeads[f.path]);
       if (!s.allowed && !(s.byExtension && _pickleNamed.contains(format))) blocked.add(s.reason!);
+      if (s.hubFlagged) flagged.add(s.reason!);
       warnings.addAll(s.warnings);
     }
     final q = primary.quant?.value;
@@ -227,6 +240,7 @@ List<RepoVariant> groupVariants(
       missingParts: List.unmodifiable(missing),
       blockedReasons: List.unmodifiable(blocked),
       unsupportedFormat: unsupported,
+      hubFlags: List.unmodifiable(flagged),
       warnings: List.unmodifiable(warnings),
     ));
   }
@@ -238,7 +252,7 @@ List<RepoVariant> groupVariants(
     final fs = [...e.value]..sort((a, b) => a.path.compareTo(b.path));
     final primary = parsed[fs.first.path]!;
     final format = primary.format;
-    final unsupported = unsupportedFormatReason(format, fileName: fs.first.path);
+    final unsupported = unsupportedFormatReason(format, fileName: fs.first.path, mlxRepo: mlxRepo);
     final support = [
       for (final f in files)
         if (!f.isDirectory &&
@@ -247,6 +261,7 @@ List<RepoVariant> groupVariants(
           f,
     ];
     final blocked = <String>{};
+    final flagged = <String>{};
     final warnings = <String>{};
     for (final f in [...fs, ...support]) {
       for (final flag in parsed[f.path]?.flags ?? const <NameFlag>{}) {
@@ -256,18 +271,33 @@ List<RepoVariant> groupVariants(
       }
       final s = FileSafety.check(f, repoSecurity: repoSecurity, head: sniffedHeads[f.path]);
       if (!s.allowed) blocked.add(s.reason!);
+      if (s.hubFlagged) flagged.add(s.reason!);
       warnings.addAll(s.warnings);
     }
     if (unsupported != null) blocked.add(unsupported);
     if (!support.any((f) => f.name.toLowerCase() == 'config.json')) blocked.add('config.json is missing');
-    // MLX loads every weight file in the folder: two shard sets side by
-    // side (`-of-00018` and `-of-00028`) would load as one model.
-    final totals = {for (final f in fs) ?parsed[f.path]!.shard?.value.count}.toList()..sort();
-    if (format == ModelFormat.mlx && totals.length > 1) {
-      blocked.add('This folder holds more than one set of weights (in ${_andList(totals)} parts).');
+    // MLX loads every weight file in the folder: two shard sets side by side
+    // (`model-…-of-00018` and `model-…-of-00028`, or `consolidated-…-of-00003`
+    // and `model-…-of-00002`) would load as one model. A lone file of another
+    // stem next to a set (`model-extra-00001-of-00001`, which the index maps
+    // tensors to) is part of that model, not a second set.
+    final parts = <(String, int), Set<int>>{};
+    for (final f in fs) {
+      if (parsed[f.path]!.shard?.value case ShardInfo(:final index, count: final n?)) {
+        parts.putIfAbsent((_shardStem(f.name), n), () => {}).add(index);
+      }
     }
-    final expected = primary.shard?.value.count;
-    final present = {for (final f in fs) parsed[f.path]!.shard?.value.index ?? 1};
+    final sets = [
+      for (final k in parts.keys)
+        if (k.$2 > 1 || parts.keys.where((o) => o.$1 == k.$1).length > 1) k,
+    ]..sort((a, b) => a.$2.compareTo(b.$2));
+    if (format == ModelFormat.mlx && sets.length > 1) {
+      blocked.add('This folder holds more than one set of weights (in ${_andList([for (final s in sets) s.$2])} parts).');
+    }
+    // The parts to check are the largest set's, wherever its files sort.
+    final main = sets.lastOrNull ?? parts.keys.firstOrNull;
+    final expected = main?.$2;
+    final present = parts[main] ?? const <int>{};
     final missing = expected == null ? <int>[] : [for (var i = 1; i <= expected; i++) if (!present.contains(i)) i];
     out.add(RepoVariant(
       id: dir.isEmpty ? format.name : '$dir/${format.name}',
@@ -282,6 +312,7 @@ List<RepoVariant> groupVariants(
       missingParts: List.unmodifiable(missing),
       blockedReasons: List.unmodifiable(blocked),
       unsupportedFormat: unsupported,
+      hubFlags: List.unmodifiable(flagged),
       warnings: List.unmodifiable(warnings),
     ));
   }
@@ -301,6 +332,12 @@ List<RepoVariant> groupVariants(
 }
 
 int _partIndex(ParsedModelName p) => p.shard?.value.index ?? 1;
+
+/// A weight file's name without its extension and shard suffix: what the
+/// files of one shard set share (`model` for `model-00002-of-00028.safetensors`).
+String _shardStem(String name) => name
+    .replaceFirst(RegExp(r'\.[^.]+$'), '')
+    .replaceFirst(RegExp(r'[-.]\d{1,6}-of-\d{1,6}$', caseSensitive: false), '');
 
 /// `1, 18 and 28`.
 String _andList(List<Object> items) =>

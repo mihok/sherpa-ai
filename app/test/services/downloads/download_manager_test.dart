@@ -57,6 +57,11 @@ void main() {
     return m;
   }
 
+  /// The manager has applied the stop: the transfer's end reaches the
+  /// record a moment after the backend goes idle, and after the view
+  /// already reads paused.
+  bool settled(DownloadJobView v) => v.job.files.every((f) => f.state != DownloadState.downloading);
+
   Future<DownloadJobView> waitOn(DownloadManager m, String id, bool Function(DownloadJobView v) test) async {
     final deadline = DateTime.now().add(const Duration(seconds: 20));
     while (true) {
@@ -149,7 +154,7 @@ void main() {
     final id = await enqueue();
     await rig.waitFor(id, (v) => v.phase == JobPhase.downloading && v.bytesDone > 0);
     await rig.manager.pause(id);
-    await rig.waitFor(id, (v) => v.phase == JobPhase.paused && rig.backend.active == 0);
+    await rig.waitFor(id, (v) => v.phase == JobPhase.paused && rig.backend.active == 0 && settled(v));
     final rec = rig.manager.job(id)!.job.files.firstWhere((f) => f.path == file.path);
     expect(File(rig.layout.partPath(rec.id)).lengthSync(), greaterThan(0));
 
@@ -175,7 +180,7 @@ void main() {
     final pausing = rig.manager.pause(id);
     gate.complete();
     await pausing;
-    final paused = await rig.waitFor(id, (v) => v.phase == JobPhase.paused && rig.backend.active == 0);
+    final paused = await rig.waitFor(id, (v) => v.phase == JobPhase.paused && rig.backend.active == 0 && settled(v));
     final rec = paused.job.files.firstWhere((f) => f.path == 'Tiny-1B-Q4_K_M.gguf');
     expect(rec.state, DownloadState.paused);
     final have = File(rig.layout.partPath(rec.id)).lengthSync();
@@ -207,7 +212,7 @@ void main() {
     expect(emitted, isNotEmpty, reason: 'the list updates at the tap, not when the plugin answers');
     backend.stopConfirmed.complete();
     await pausing;
-    await waitOn(m, id, (v) => rig.backend.active == 0);
+    await waitOn(m, id, (v) => rig.backend.active == 0 && settled(v));
     await sub.cancel();
     expect(emitted, everyElement(JobPhase.paused), reason: 'no flicker back to downloading');
     final rec = m.job(id)!.job.files.firstWhere((f) => f.path == 'Tiny-1B-Q4_K_M.gguf');

@@ -108,8 +108,8 @@ void main() {
       return c;
     }
 
-    Future<DirectoryState> open(ProviderContainer c, DirectoryQuery seed) async {
-      final p = directoryControllersProvider(seed);
+    Future<DirectoryState> open(ProviderContainer c, DirectoryQuery seed, {DirectoryPage? page}) async {
+      final p = directoryControllersProvider(page ?? DirectoryPage(seed));
       c.listen(p, (_, _) {});
       for (var i = 0; i < 50; i++) {
         await pumpEventQueue();
@@ -160,19 +160,33 @@ void main() {
           HubFormatFilter.mlx);
     });
 
-    test("clearing filters keeps a repo's versions; showing all models drops only that", () async {
+    test('two pages opened on one query are two lists; the root list is the one Browse opens', () async {
       final c = onDevice(CountingCatalog(fixtureEntries), phone12);
       const seed = DirectoryQuery.versionsOf(llamaBase);
-      await open(c, seed);
-      final controller = c.read(directoryControllersProvider(seed).notifier)
+      final first = DirectoryPage(seed);
+      final second = DirectoryPage(seed);
+      await open(c, seed, page: first);
+      c.read(directoryControllersProvider(first).notifier).update((q) => q.copyWith(clearFormat: true, size: SizeBucket.tiny));
+      final s = await open(c, seed, page: second);
+      expect((s.query.format, s.query.size), (HubFormatFilter.gguf, null), reason: 'a list of its own');
+      expect(c.read(directoryControllersProvider(first)).query.size, SizeBucket.tiny, reason: 'and the first keeps its own');
+      expect(directoryControllersProvider(DirectoryPage.root), directoryControllerProvider);
+      expect(DirectoryPage.root.seed, const DirectoryQuery());
+    });
+
+    test("clearing filters keeps a repo's versions; showing all models drops only that", () async {
+      final c = onDevice(CountingCatalog(fixtureEntries), phone12);
+      final page = DirectoryPage(const DirectoryQuery.versionsOf(llamaBase));
+      await open(c, page.seed, page: page);
+      final controller = c.read(directoryControllersProvider(page).notifier)
         ..update((q) => q.copyWith(size: SizeBucket.tiny, license: 'apache-2.0'));
       controller.clearFilters();
-      var q = c.read(directoryControllersProvider(seed)).query;
+      var q = c.read(directoryControllersProvider(page)).query;
       expect((q.size, q.license, q.quantizedFrom), (null, null, llamaBase));
       controller
         ..update((q) => q.copyWith(size: SizeBucket.tiny))
         ..clearVersionsOf();
-      q = c.read(directoryControllersProvider(seed)).query;
+      q = c.read(directoryControllersProvider(page)).query;
       expect((q.size, q.quantizedFrom), (SizeBucket.tiny, null));
     });
 

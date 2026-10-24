@@ -45,7 +45,13 @@ SniffedFormat sniffWeightFormat(Uint8List head) {
 
 @immutable
 final class SafetyDecision {
-  const SafetyDecision({required this.allowed, this.reason, this.warnings = const [], this.byExtension = false});
+  const SafetyDecision({
+    required this.allowed,
+    this.reason,
+    this.warnings = const [],
+    this.byExtension = false,
+    this.hubFlagged = false,
+  });
 
   final bool allowed;
   final String? reason;
@@ -55,12 +61,18 @@ final class SafetyDecision {
   /// bytes read proved to be safetensors or GGUF; nothing else was found
   /// wrong with the file.
   final bool byExtension;
+
+  /// Refused on the Hub scanners' verdict (`unsafe`, `suspicious`).
+  final bool hubFlagged;
 }
 
 /// Download gate: an extension allowlist first, Hub scanner verdicts second
 /// (R08 §15.8: "block pickles outright; additionally block any file with
 /// securityFileStatus.status in {unsafe, suspicious}"). The scanners are a
-/// secondary signal, never a reason to allow a pickle.
+/// secondary signal, never a reason to allow a pickle; but a pickle-family
+/// extension alone is the weakest finding, so a file the scanners flag is
+/// refused for that verdict, and [SafetyDecision.byExtension] means nothing
+/// else is wrong with it.
 abstract final class FileSafety {
   /// R08 §15.8 allowlist (+ byte-split `.gguf.partNofM`).
   static const Set<String> allowedExtensions = {
@@ -90,28 +102,28 @@ abstract final class FileSafety {
     if (sniffed == SniffedFormat.ggufBigEndian) {
       return SafetyDecision(allowed: false, reason: '${file.path} is a big-endian GGUF; phones cannot load it');
     }
+    String? extensionRefusal;
     if (pickleExtensions.contains(ext)) {
       final proven = sniffed == SniffedFormat.safetensors || sniffed == SniffedFormat.gguf;
       if (!proven) {
-        return SafetyDecision(
-            allowed: false,
-            byExtension: true,
-            reason: sniffed == SniffedFormat.legacyGgml
-                ? '${file.path} is a legacy GGML file; current llama.cpp cannot load it'
-                : '${file.path} uses a pickle-based format ($ext); Sherpa never downloads those');
+        extensionRefusal = sniffed == SniffedFormat.legacyGgml
+            ? '${file.path} is a legacy GGML file; current llama.cpp cannot load it'
+            : '${file.path} uses a pickle-based format ($ext); Sherpa never downloads those';
+      } else {
+        warnings.add('${file.path} has a $ext name but contains ${sniffed!.name}');
       }
-      warnings.add('${file.path} has a $ext name but contains ${sniffed!.name}');
     } else if (!allowedExtensions.contains(ext)) {
       return SafetyDecision(allowed: false, reason: '${file.path}: "$ext" files are not on the download allowlist');
     }
     final s = file.security;
     if (s != null && s.blocks) {
-      return SafetyDecision(allowed: false, reason: 'The Hub flags ${file.path} as ${s.status.name}');
+      return SafetyDecision(allowed: false, hubFlagged: true, reason: 'The Hub flags ${file.path} as ${s.status.name}');
     }
     final repoLevel = repoSecurity?.filesWithIssues[file.path];
     if (repoLevel != null && repoLevel.blocks) {
-      return SafetyDecision(allowed: false, reason: 'The Hub flags ${file.path} as ${repoLevel.name}');
+      return SafetyDecision(allowed: false, hubFlagged: true, reason: 'The Hub flags ${file.path} as ${repoLevel.name}');
     }
+    if (extensionRefusal != null) return SafetyDecision(allowed: false, byExtension: true, reason: extensionRefusal);
     if (repoLevel == HubScanStatus.caution || s?.status == HubScanStatus.caution) {
       warnings.add('The Hub marks ${file.path} "caution"');
     }

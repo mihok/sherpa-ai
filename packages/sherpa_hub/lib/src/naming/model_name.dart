@@ -362,6 +362,12 @@ final class _Stem {
   bool get hasIdentity => family != null || size != null;
 }
 
+/// Formats whose weights are safetensors files, which a name or Hub hint
+/// can tell from plain Transformers weights.
+const Set<ModelFormat> _safetensorsFormats = {
+  ModelFormat.mlx, ModelFormat.gptq, ModelFormat.awq, ModelFormat.exl2, ModelFormat.exl3,
+};
+
 final class _NameParser {
   _NameParser(this.repoId, this.fileName, this.revision, this.repoHints) {
     final slash = repoId.indexOf('/');
@@ -526,8 +532,12 @@ final class _NameParser {
     if (path == null) {
       format = _formatFromHints(hints, repo, branch);
     } else if (format == ModelFormat.safetensors) {
+      // Only the formats that are safetensors inside. A LiteRT hint (the
+      // `litert-community` owner, a "LiteRT" name) is about the repo's
+      // .litertlm/.task/.tflite files: safetensors next to them, or in a
+      // Transformers fine-tune published there, stay safetensors.
       final refined = _formatFromHints(hints, repo, branch);
-      if (refined != ModelFormat.safetensors && refined != ModelFormat.gguf) format = refined;
+      if (_safetensorsFormats.contains(refined)) format = refined;
     }
 
     // ---- merge identity: file (or folder) first, then repo -----------------

@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa/app.dart';
+import 'package:sherpa/design/tokens.dart';
 import 'package:sherpa/features/models/hf_account_screen.dart';
 import 'package:sherpa/features/models/model_detail_screen.dart';
 import 'package:sherpa/features/models/model_library_screen.dart';
@@ -306,6 +307,82 @@ void main() {
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       expect(find.text('Find MLX versions'), findsOneWidget, reason: 'back on the page that asked');
+    });
+
+    testWidgets("a repo's versions opened twice are two lists: filters set on the first stay there", (tester) async {
+      const mlxVersion = 'mlx-community/Llama-3.2-1B-Instruct-4bit';
+      final rig = await ModelsRig.create(tester, entries: [
+        ...fixtureEntries,
+        entry(mlxVersion, tags: const ['mlx', 'base_model:quantized:$llamaBase']),
+      ], details: {
+        llamaBase: fixtureDetails(llamaBase, llamaBaseFiles),
+        mlxVersion: fixtureDetails(mlxVersion, [
+          HubRepoFile(path: 'model.safetensors', size: 700000000, lfsSha256: 'a' * 64, lfsSize: 700000000),
+          const HubRepoFile(path: 'config.json', size: 900, oid: 'c0f1'),
+          const HubRepoFile(path: 'tokenizer_config.json', size: 900, oid: 'c0f3'),
+        ], libraryName: 'mlx', pipelineTag: 'text-generation', tags: const ['mlx', 'base_model:quantized:$llamaBase']),
+      });
+      await rig.pump(tester, location: Routes.modelDetail(llamaBase));
+      await tester.tap(find.text('Find GGUF versions'));
+      await tester.pumpAndSettle();
+      // Every format of its versions: the GGUF chip off.
+      await tester.tap(find.widgetWithText(ChoiceChip, 'GGUF'));
+      await tester.pumpAndSettle();
+      expect(cardFor(mlxVersion), findsOneWidget);
+
+      // The MLX version can't run on Android; its page finds GGUF versions of the same base.
+      await tester.tap(cardFor(mlxVersion));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Find GGUF versions'));
+      await tester.pumpAndSettle();
+      expect(find.text('Quantized from $llamaBase'), findsOneWidget);
+      expect(tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'GGUF')).selected, isTrue,
+          reason: 'the button said GGUF versions');
+      expect(cardFor(mlxVersion), findsNothing, reason: 'an MLX repo is not a GGUF version');
+
+      // Back down the chain, the first list is as it was left.
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'GGUF')).selected, isFalse);
+      expect(cardFor(mlxVersion), findsOneWidget);
+    });
+
+    group("an MLX folder holding two sets of weights (OBLITERATUS/Qwen3.8-27B-OBLITERATED's)", () {
+      const repo = 'OBLITERATUS/Qwen3.8-27B-OBLITERATED';
+      const problem = 'This folder holds more than one set of weights (in 2 and 3 parts).';
+      HubRepoFile lfs(String path, int size) => HubRepoFile(path: path, size: size, lfsSha256: 'a' * 64, lfsSize: size);
+      CatalogModelDetails details() => fixtureDetails(repo, [
+            const HubRepoFile(path: 'config.json', size: 3000, oid: 'c0f1'),
+            for (var i = 1; i <= 2; i++) lfs('model-0000$i-of-00002.safetensors', 2 * gib),
+            for (var i = 1; i <= 3; i++) lfs('model-0000$i-of-00003.safetensors', gib),
+          ], libraryName: 'mlx', pipelineTag: 'text-generation', tags: const ['mlx']);
+      String rowLabel(WidgetTester tester) => tester.getSemantics(find.bySemanticsLabel(RegExp(r'^mlx\. '))).label;
+
+      testWidgets('on Android: its file problems are neither shown nor spoken, only that MLX runs on iPhone', (tester) async {
+        final handle = tester.ensureSemantics();
+        final rig = await ModelsRig.create(tester, details: {repo: details()});
+        await rig.pump(tester, location: Routes.modelDetail(repo));
+        expect(find.text("Can't run here"), findsOneWidget);
+        expect(find.text('Unavailable'), findsNothing);
+        expect(find.text(problem), findsNothing);
+        expect(find.text('MLX models run on iPhone and iPad only.'), findsOneWidget);
+        expect(rowLabel(tester), contains("Can't run here. MLX models run on iPhone and iPad only."));
+        expect(rowLabel(tester), isNot(contains('more than one set')));
+        handle.dispose();
+      });
+
+      testWidgets('on an iPhone, which runs MLX: the problem is shown and spoken as one', (tester) async {
+        final handle = tester.ensureSemantics();
+        final rig = await ModelsRig.create(tester, device: iphone8, details: {repo: details()});
+        await rig.pump(tester, location: Routes.modelDetail(repo));
+        expect(find.text('Unavailable'), findsOneWidget);
+        expect(tester.widget<Text>(find.text(problem).first).style?.color,
+            SherpaTokens.of(tester.element(find.byType(ModelDetailScreen))).semantic.danger);
+        expect(rowLabel(tester), contains('Unavailable. $problem'));
+        handle.dispose();
+      });
     });
 
     testWidgets('a repo nobody has made a GGUF of: the versions list says so and offers every model', (tester) async {

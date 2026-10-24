@@ -103,10 +103,16 @@ final class CatalogModelDetails {
   /// quantized copy of; for an MLX or LiteRT conversion that names its base
   /// another way (`base_model:finetune:`), that base; else this repo. A
   /// Transformers fine-tune keeps its own id: its versions are its own.
+  ///
+  /// What the repo holds decides, not its owner or name: a conversion has
+  /// MLX or LiteRT weights and no Transformers model (safetensors next to
+  /// a `config.json`) of its own. A fine-tune published under
+  /// `litert-community` is still a fine-tune.
   String get versionsBase {
-    final conversion =
-        variants.isNotEmpty && variants.every((v) => v.format == ModelFormat.mlx || v.format == ModelFormat.litert);
-    return info?.quantizedFrom ?? (conversion ? info?.baseModel : null) ?? id;
+    final converted = variants.any((v) => v.format == ModelFormat.mlx || v.format == ModelFormat.litert);
+    final transformers = variants.any(
+        (v) => v.format == ModelFormat.safetensors && v.support.any((f) => f.name.toLowerCase() == 'config.json'));
+    return info?.quantizedFrom ?? (converted && !transformers ? info?.baseModel : null) ?? id;
   }
 }
 

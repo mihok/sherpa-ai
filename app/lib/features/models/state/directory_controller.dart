@@ -393,15 +393,35 @@ final class DirectoryState {
       );
 }
 
-/// One browser per query it opens on ([DirectoryController.seed]), so a
-/// list of a repo's versions opened over another list leaves that one as
-/// it was.
-final directoryControllersProvider = NotifierProvider.autoDispose.family<DirectoryController, DirectoryState, DirectoryQuery>(
+/// One Browse page's list: the query it opens on ([seed]) and the page that
+/// shows it. Two pages opened on one query (a repo's versions, pushed over
+/// themselves from one of its versions' pages) are two lists, so filters
+/// set on one leave the other as it was.
+///
+/// Equal only to itself: a page makes one when it opens and keeps it for
+/// its life, and the list goes with the page.
+final class DirectoryPage {
+  /// A list of its own, opened on [seed].
+  DirectoryPage(this.seed);
+
+  const DirectoryPage._root() : seed = const DirectoryQuery();
+
+  /// Browse's own route on its default list (GGUF, trending), which
+  /// [directoryControllerProvider] names.
+  static const DirectoryPage root = DirectoryPage._root();
+
+  /// The query the list opens on.
+  final DirectoryQuery seed;
+}
+
+/// One browser per page ([DirectoryPage]), so a list opened over another
+/// list, even on the same query, leaves that one as it was.
+final directoryControllersProvider = NotifierProvider.autoDispose.family<DirectoryController, DirectoryState, DirectoryPage>(
   DirectoryController.new,
 );
 
-/// The browser as Browse opens it: GGUF, trending.
-final directoryControllerProvider = directoryControllersProvider(const DirectoryQuery());
+/// The browser as Browse's route opens it: GGUF, trending.
+final directoryControllerProvider = directoryControllersProvider(DirectoryPage.root);
 
 /// Search, filters and paging for the model browser.
 ///
@@ -419,7 +439,7 @@ final directoryControllerProvider = directoryControllersProvider(const Directory
 /// A format this device can't run (MLX on Android, LiteRT-LM on iOS)
 /// becomes GGUF as soon as the platform is known.
 final class DirectoryController extends Notifier<DirectoryState> {
-  DirectoryController(this.seed);
+  DirectoryController(DirectoryPage page) : seed = page.seed;
 
   static const Duration debounce = Duration(milliseconds: 350);
 

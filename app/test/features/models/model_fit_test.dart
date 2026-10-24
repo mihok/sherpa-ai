@@ -24,9 +24,9 @@ void main() {
     expect(q4.downloadBytes, 2489757856 + 851251104);
     expect(q4.fit!.breakdown.mmprojBytes, 851251104, reason: 'the projector counts toward memory too');
     final pickle = a.rows.firstWhere((r) => r.variant.weights.first.path == 'pytorch_model.bin');
-    expect(pickle.kind, FitBadgeKind.blocked, reason: 'listed, greyed, never downloadable');
-    expect(pickle.reason.toLowerCase(), contains('pickle'));
-    expect(a.rows.last, same(pickle), reason: 'blocked rows sort last');
+    expect(pickle.kind, FitBadgeKind.unsupported, reason: 'listed, greyed, never downloadable: nothing runs pickles');
+    expect(pickle.reason, startsWith("Sherpa can't run PyTorch weights (.bin, .pt)."));
+    expect(a.rows.last, same(pickle), reason: 'unavailable rows sort last');
     expect(a.otherFiles.map((o) => o.$1.path), isNot(contains('mmproj-gemma-3-4b-it-f16.gguf')));
   });
 
@@ -175,10 +175,54 @@ void main() {
       final a = assessVariants(d, phone12);
       expect(a.rows.where((r) => r.canDownload), isEmpty);
       expect(a.rows.where((r) => r.variant.weights.first.path.endsWith('.tflite')).map((r) => r.reason).toSet(),
-          {"Sherpa can't run TensorFlow Lite .tflite files (LiteRT-LM needs a .litertlm file)."});
+          {"Sherpa can't run TensorFlow Lite .tflite files."});
+      expect(a.summary, contains('Sherpa on Android runs GGUF and LiteRT-LM models.'),
+          reason: 'what runs here is said for this device, by the summary');
       expect(a.notForThisDevice, isTrue);
       final onIos = assessVariants(d, iphone).rows.firstWhere((r) => r.variant.weights.first.path == '64.tflite');
       expect(onIos.reason, isNot(contains('Android only')), reason: 'they do not run on Android either');
+      expect(onIos.reason, isNot(contains('LiteRT-LM')), reason: 'no advice about a format an iPhone never runs');
+    });
+
+    test("on Android an MLX folder's file problems are moot: the row says only that MLX runs on iPhone", () {
+      // OBLITERATUS/Qwen3.8-27B-OBLITERATED (library_name mlx): two shard
+      // sets in one folder, next to GGUF files.
+      const repo = 'OBLITERATUS/Qwen3.8-27B-OBLITERATED';
+      final files = [
+        const HubRepoFile(path: 'config.json', size: 3000, oid: 'b'),
+        for (var i = 1; i <= 2; i++) f('model-0000$i-of-00002.safetensors', 2 << 30),
+        for (var i = 1; i <= 3; i++) f('model-0000$i-of-00003.safetensors', 1 << 30),
+        f('Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf', 16 << 30),
+      ];
+      CatalogModelDetails details({HubRepoSecurity? security}) => fixtureDetails(repo, files,
+          libraryName: 'mlx', pipelineTag: 'text-generation', tags: const ['mlx'], security: security);
+      VariantRow mlxRow(ModelAssessment a) => a.rows.singleWhere((r) => r.variant.runtime == SherpaRuntime.mlx);
+
+      final android = mlxRow(assessVariants(details(), phone12));
+      expect(android.kind, FitBadgeKind.unsupported);
+      expect(android.blockedReasons, isEmpty, reason: 'nothing to fix on a phone that never loads it');
+      expect(android.unsupportedReasons, ['MLX models run on iPhone and iPad only.']);
+      expect(android.reason, 'MLX models run on iPhone and iPad only.', reason: 'what the badge and screen readers say');
+
+      final ios = mlxRow(assessVariants(details(), iphone));
+      expect(ios.kind, FitBadgeKind.blocked, reason: 'on an iPhone the problem is the story');
+      expect(ios.blockedReasons, ['This folder holds more than one set of weights (in 2 and 3 parts).']);
+
+      // The Hub's verdict on a file holds on any device.
+      const sec = HubRepoSecurity(scansDone: true, filesWithIssues: {'model-00001-of-00002.safetensors': HubScanStatus.unsafe});
+      final flagged = mlxRow(assessVariants(details(security: sec), phone12));
+      expect(flagged.kind, FitBadgeKind.blocked);
+      expect(flagged.blockedReasons, ['The Hub flags model-00001-of-00002.safetensors as unsafe']);
+      expect(flagged.unsupportedReasons, ['MLX models run on iPhone and iPad only.']);
+
+      // Nor are a pickle's (a format nothing runs): its name and its missing part.
+      final pickles = assessVariants(
+          fixtureDetails('acme/Thing-1B', [f('pytorch_model-00001-of-00002.bin', 1000), f('Thing-1B-Q4_K_M.gguf', 400 << 20)]),
+          phone12);
+      final pickle = pickles.rows.singleWhere((r) => r.variant.format == ModelFormat.pickle);
+      expect(pickle.kind, FitBadgeKind.unsupported);
+      expect(pickle.blockedReasons, isEmpty);
+      expect(pickle.reason, "Sherpa can't run PyTorch weights (.bin, .pt). Sherpa on Android runs GGUF and LiteRT-LM models.");
     });
 
     test('an MLX speech model tagged mlx is not offered on an iPhone as a model MLX loads', () {
