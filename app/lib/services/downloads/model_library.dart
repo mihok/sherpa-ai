@@ -363,7 +363,12 @@ final class ModelLibrary {
 
   Future<void> load() {
     if (_loaded) return Future<void>.value();
-    return _loading ??= _load();
+    // A failed load is not cached: the next call (the download manager's
+    // retried start-up) reads the store again.
+    return _loading ??= _load().catchError((Object e, StackTrace s) {
+      _loading = null;
+      Error.throwWithStackTrace(e, s);
+    });
   }
 
   bool get isLoaded => _loaded;

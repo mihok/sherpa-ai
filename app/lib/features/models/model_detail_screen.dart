@@ -19,7 +19,9 @@ import '../../routing/routes.dart';
 import '../../services/device/device_profile_source.dart';
 import '../../services/downloads/downloads.dart';
 import '../../state/ui_preferences.dart';
+import '../diagnostics/app_error_ring.dart';
 import 'state/directory_controller.dart' show DirectoryError, DirectoryOffline, DirectoryRateLimited, failureOf;
+import 'state/download_errors.dart';
 import 'state/model_fit.dart';
 import 'state/models_providers.dart';
 import 'state/variant_download.dart';
@@ -35,9 +37,16 @@ import 'widgets/pills.dart';
 /// verdict from one GGUF header peek + this device's memory. Download is
 /// never offered for Won't fit or unsafe files; Tight asks first.
 class ModelDetailScreen extends ConsumerStatefulWidget {
-  const ModelDetailScreen({super.key, required this.repoId});
+  const ModelDetailScreen({super.key, required this.repoId, this.onDownloadStarted});
 
   final String repoId;
+
+  /// Set when the page is opened from onboarding (outside the app's
+  /// routes): called with the outcome once a download is queued, or with
+  /// [AlreadyPresent] for a variant that is downloading or installed, so
+  /// onboarding can follow it and open the first chat on it. Without it,
+  /// the page links to Downloads and the library as usual.
+  final ValueChanged<EnqueueOutcome>? onDownloadStarted;
 
   @override
   ConsumerState<ModelDetailScreen> createState() => _ModelDetailScreenState();
@@ -67,7 +76,11 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
       appBar: AppBar(title: Heading(level: 1, child: Text(title))),
       body: switch (details) {
         AsyncData(:final value) => _body(context, value),
-        AsyncError(:final error) => _DetailFailure(error: error, onRetry: () => ref.invalidate(modelDetailsProvider(widget.repoId))),
+        AsyncError(:final error) => _DetailFailure(
+            error: error,
+            onRetry: () => ref.invalidate(modelDetailsProvider(widget.repoId)),
+            onBrowse: widget.onDownloadStarted == null ? null : () => Navigator.of(context).maybePop(),
+          ),
         _ => const _DetailSkeleton(),
       },
     );
@@ -132,7 +145,15 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
             ),
           ),
         ),
-        if (selected != null) _DownloadBar(details: d, row: selected, shape: shape, starting: _starting, onDownload: () => _download(d, selected, shape)),
+        if (selected != null)
+          _DownloadBar(
+            details: d,
+            row: selected,
+            shape: shape,
+            starting: _starting,
+            onDownload: () => _download(d, selected, shape),
+            onFollow: widget.onDownloadStarted,
+          ),
       ],
     );
   }
@@ -158,9 +179,37 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
     }
     setState(() => _starting = true);
     try {
-      final manager = ref.read(downloadManagerProvider);
-      final o = await manager.enqueue(plan as DownloadPlan, meta: downloadMetaFor(d, row, shape));
+      final DownloadManager manager;
+      try {
+        manager = ref.read(downloadManagerProvider);
+      } on Object catch (e) {
+        // The manager could not be built (recorded by the provider
+        // observer); rebuild it on the next try.
+        recordDownloadError(ref.read(appErrorRingProvider), e, source: 'models', step: 'download_manager');
+        ref
+          ..invalidate(networkMonitorProvider)
+          ..invalidate(downloadManagerProvider);
+        haptics.error();
+        await _showRefusal([downloadStartMessage(e)]);
+        return;
+      }
+      final EnqueueOutcome o;
+      try {
+        o = await manager.enqueue(plan as DownloadPlan, meta: downloadMetaFor(d, row, shape));
+      } on Object catch (e) {
+        recordDownloadError(ref.read(appErrorRingProvider), e, source: 'models', step: 'enqueue');
+        if (!mounted) return;
+        haptics.error();
+        await _showRefusal([downloadStartMessage(e)]);
+        return;
+      }
       if (!mounted) return;
+      final follow = widget.onDownloadStarted;
+      if (follow != null && o is! EnqueueRefused) {
+        haptics.light();
+        follow(o);
+        return;
+      }
       switch (o) {
         case Enqueued(:final warnings):
           haptics.light();
@@ -175,7 +224,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
           );
         case EnqueueRefused(:final reasons):
           haptics.error();
-          await _showRefusal(reasons);
+          await _showRefusal(reasons.isEmpty ? const [refusedWithoutReason] : reasons);
         case AlreadyPresent(:final libraryModelId):
           context.go(libraryModelId != null ? Routes.models : Routes.downloads);
       }
@@ -705,7 +754,14 @@ class _OtherFiles extends StatelessWidget {
 }
 
 class _DownloadBar extends ConsumerWidget {
-  const _DownloadBar({required this.details, required this.row, required this.shape, required this.starting, required this.onDownload});
+  const _DownloadBar({
+    required this.details,
+    required this.row,
+    required this.shape,
+    required this.starting,
+    required this.onDownload,
+    this.onFollow,
+  });
 
   final CatalogModelDetails details;
   final VariantRow row;
@@ -713,27 +769,56 @@ class _DownloadBar extends ConsumerWidget {
   final bool starting;
   final VoidCallback onDownload;
 
+  /// Onboarding: follow this variant's job or installed model there.
+  final ValueChanged<EnqueueOutcome>? onFollow;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
     ref.watch(downloadJobsProvider);
     ref.watch(libraryModelsProvider);
-    final manager = ref.watch(downloadManagerProvider);
+    final DownloadManager manager;
+    try {
+      manager = ref.watch(downloadManagerProvider);
+    } on Object catch (e) {
+      // Never an error box where the Download button belongs: say what
+      // failed and offer to try again (the provider observer recorded it).
+      return _BarFrame(
+        children: [
+          Text(downloadStartMessage(e), style: theme.textTheme.bodySmall?.copyWith(color: t.semantic.danger)),
+          SizedBox(height: t.space.sm),
+          FilledButton.tonalIcon(
+            onPressed: () => ref
+              ..invalidate(networkMonitorProvider)
+              ..invalidate(downloadManagerProvider),
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Try again'),
+          ),
+        ],
+      );
+    }
     final installed = manager.library.find(repo: details.id, revision: details.commit, variantId: row.variant.id);
     final job = manager.jobFor(repo: details.id, commit: details.commit, variantId: row.variant.id);
+    final follow = onFollow;
 
     final Widget button;
     String? note;
     if (installed != null) {
-      button = FilledButton.tonalIcon(
-        onPressed: () => context.go(Routes.models),
-        icon: const Icon(Icons.check_rounded),
-        label: const Text('Installed · Open library'),
-      );
+      button = follow != null
+          ? FilledButton.icon(
+              onPressed: () => follow(AlreadyPresent(libraryModelId: installed.id)),
+              icon: const Icon(Icons.check_rounded),
+              label: const Text('Installed · Use this model'),
+            )
+          : FilledButton.tonalIcon(
+              onPressed: () => context.go(Routes.models),
+              icon: const Icon(Icons.check_rounded),
+              label: const Text('Installed · Open library'),
+            );
     } else if (job != null && job.phase != JobPhase.done) {
       button = FilledButton.tonalIcon(
-        onPressed: () => context.go(Routes.downloads),
+        onPressed: follow != null ? () => follow(AlreadyPresent(jobId: job.id)) : () => context.go(Routes.downloads),
         icon: const Icon(Icons.downloading_rounded),
         label: Text(job.phase == JobPhase.failed ? 'Download failed · View' : 'Downloading ${(job.progress * 100).round()}% · View'),
       );
@@ -749,9 +834,29 @@ class _DownloadBar extends ConsumerWidget {
         label: Text('Download ${row.label} · ${formatBytes(row.downloadBytes)}'),
       );
     }
-    // Full-width bar, but the button keeps to the reading column on tablets.
+    return _BarFrame(
+      children: [
+        if (note != null) ...[
+          Text(note, style: theme.textTheme.bodySmall?.copyWith(color: SherpaTokens.of(context).semantic.danger)),
+          SizedBox(height: t.space.sm),
+        ],
+        ConstrainedBox(constraints: BoxConstraints(minHeight: t.space.minTouchTarget), child: button),
+      ],
+    );
+  }
+}
+
+/// Full-width bar, but the content keeps to the reading column on tablets.
+class _BarFrame extends StatelessWidget {
+  const _BarFrame({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = SherpaTokens.of(context);
     return Material(
-      color: theme.colorScheme.surfaceContainer,
+      color: Theme.of(context).colorScheme.surfaceContainer,
       child: SafeArea(
         top: false,
         child: Center(
@@ -763,13 +868,7 @@ class _DownloadBar extends ConsumerWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (note != null) ...[
-                    Text(note, style: theme.textTheme.bodySmall?.copyWith(color: SherpaTokens.of(context).semantic.danger)),
-                    SizedBox(height: t.space.sm),
-                  ],
-                  ConstrainedBox(constraints: BoxConstraints(minHeight: t.space.minTouchTarget), child: button),
-                ],
+                children: children,
               ),
             ),
           ),
@@ -820,10 +919,14 @@ class _RowsSkeleton extends StatelessWidget {
 }
 
 class _DetailFailure extends StatelessWidget {
-  const _DetailFailure({required this.error, required this.onRetry});
+  const _DetailFailure({required this.error, required this.onRetry, this.onBrowse});
 
   final Object error;
   final VoidCallback onRetry;
+
+  /// Back to the list this page was opened from (onboarding); default:
+  /// the Browse route.
+  final VoidCallback? onBrowse;
 
   @override
   Widget build(BuildContext context) {
@@ -832,7 +935,10 @@ class _DetailFailure extends StatelessWidget {
         icon: Icons.search_off_rounded,
         title: 'Model not found',
         message: 'It was removed, renamed or made private.',
-        primaryAction: FilledButton.tonal(onPressed: () => context.go(Routes.modelBrowse), child: const Text('Browse models')),
+        primaryAction: FilledButton.tonal(
+          onPressed: onBrowse ?? () => context.go(Routes.modelBrowse),
+          child: const Text('Browse models'),
+        ),
       );
     }
     return switch (failureOf(error)) {

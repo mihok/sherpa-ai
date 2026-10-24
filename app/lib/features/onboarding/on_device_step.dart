@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 
+import '../../design/motion.dart';
 import '../../design/tokens.dart';
 import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
@@ -12,6 +13,10 @@ import '../../services/downloads/downloads.dart';
 import '../../services/inference/on_device_ids.dart';
 import '../../services/inference/platform_models.dart' show EngineAvailabilityState;
 import '../../state/services.dart';
+import '../diagnostics/app_error_ring.dart';
+import '../models/model_detail_screen.dart';
+import '../models/model_directory_screen.dart';
+import '../models/state/download_errors.dart';
 import '../models/state/local_model_choice.dart';
 import '../models/state/local_model_fit.dart';
 import '../models/state/models_providers.dart';
@@ -27,7 +32,10 @@ import 'starter_model.dart';
 /// device (the Hub directory's recommended variant of a starter repo,
 /// [starterModelProvider]) is downloaded and opened in the first chat; the
 /// phone's own system model (Apple Intelligence, Gemini Nano) is offered
-/// too when it is available.
+/// too when it is available. "Choose a model from Hugging Face" opens the
+/// Hub browser on top of onboarding (the app's routes stay closed until
+/// onboarding ends); a download started there is followed here the same
+/// way, and the first chat opens on it.
 class OnDeviceStep extends ConsumerStatefulWidget {
   const OnDeviceStep({super.key, required this.onStart, required this.onUseServer});
 
@@ -56,23 +64,79 @@ class _OnDeviceStepState extends ConsumerState<OnDeviceStep> {
       _error = null;
     });
     try {
-      final o = await enqueueVariant(ref.read(downloadManagerProvider), pick.details, pick.row, pick.shape);
-      if (!mounted) return;
-      switch (o) {
-        case Enqueued(:final jobId):
-          setState(() => _jobId = jobId);
-        case AlreadyPresent(:final libraryModelId?):
-          await _openLibraryModel(libraryModelId);
-        case AlreadyPresent(:final jobId):
-          setState(() => _jobId = jobId);
-        case EnqueueRefused(:final reasons):
-          setState(() => _error = reasons.isEmpty ? "The download couldn't start." : reasons.first);
+      final DownloadManager manager;
+      try {
+        manager = ref.read(downloadManagerProvider);
+      } on Object catch (e) {
+        // The download service could not be built. Say what failed, keep it
+        // for diagnostics, and rebuild it on the next tap (provider retry
+        // is off app-wide, so a failed provider would otherwise stay failed).
+        _fail(e, 'download_manager');
+        ref
+          ..invalidate(networkMonitorProvider)
+          ..invalidate(downloadManagerProvider);
+        return;
       }
-    } on Object {
-      if (mounted) setState(() => _error = "The download couldn't start. Try again.");
+      final EnqueueOutcome o;
+      try {
+        o = await enqueueVariant(manager, pick.details, pick.row, pick.shape);
+      } on Object catch (e) {
+        _fail(e, 'enqueue');
+        return;
+      }
+      if (!mounted) return;
+      await _follow(o);
     } finally {
       if (mounted) setState(() => _enqueueing = false);
     }
+  }
+
+  void _fail(Object error, String code) {
+    recordDownloadError(ref.read(appErrorRingProvider), error, source: 'onboarding', step: code);
+    if (mounted) setState(() => _error = downloadStartMessage(error));
+  }
+
+  /// Shows the job's progress here, or opens the chat on an installed model.
+  Future<void> _follow(EnqueueOutcome o) async {
+    switch (o) {
+      case Enqueued(:final jobId):
+        setState(() {
+          _jobId = jobId;
+          _error = null;
+        });
+      case AlreadyPresent(:final libraryModelId?):
+        await _openLibraryModel(libraryModelId);
+      case AlreadyPresent(:final jobId):
+        setState(() {
+          _jobId = jobId;
+          _error = null;
+        });
+      case EnqueueRefused(:final reasons):
+        setState(() => _error = reasons.isEmpty ? refusedWithoutReason : reasons.first);
+    }
+  }
+
+  /// The Hub browser and a repo's page, pushed over onboarding. A download
+  /// started there comes back here.
+  Future<void> _browse() async {
+    final navigator = Navigator.of(context);
+    final o = await navigator.push<EnqueueOutcome>(MotionPageRoute(
+      builder: (browseContext) => ModelDirectoryScreen(
+        onOpenModel: (id) => unawaited(_openModel(browseContext, id)),
+      ),
+    ));
+    if (o == null || !mounted) return;
+    await _follow(o);
+  }
+
+  Future<void> _openModel(BuildContext browseContext, String repoId) async {
+    final picked = await Navigator.of(browseContext).push<EnqueueOutcome>(MotionPageRoute(
+      builder: (detailContext) => ModelDetailScreen(
+        repoId: repoId,
+        onDownloadStarted: (o) => Navigator.of(detailContext).pop(o),
+      ),
+    ));
+    if (picked != null && browseContext.mounted) Navigator.of(browseContext).pop(picked);
   }
 
   Future<void> _openLibraryModel(String id) async {
@@ -120,7 +184,8 @@ class _OnDeviceStepState extends ConsumerState<OnDeviceStep> {
     return OnboardingStepLayout(
       title: 'Run a model on this phone',
       lead: 'Sherpa downloads a small open model that fits this phone. It works offline, and nothing you type '
-          'leaves the device. Bigger models are a tap away later, in Models & downloads.',
+          'leaves the device. You can also choose another model from Hugging Face, now or later in '
+          'Models & downloads.',
       actions: [
         if (job != null)
           _JobProgress(job: job, onAllowCellular: () => unawaited(ref.read(downloadManagerProvider).allowCellular(job!.id)),
@@ -131,6 +196,22 @@ class _OnDeviceStepState extends ConsumerState<OnDeviceStep> {
             icon: _enqueueing || _opening ? const ButtonSpinner() : const Icon(Icons.download_rounded),
             label: Text(pick == null ? 'Download and start' : 'Download ${formatBytes(pick.row.downloadBytes)} and start'),
           ),
+        if (job == null) ...[
+          SizedBox(height: t.space.xs),
+          // The way forward when the starter can't be picked or downloaded.
+          if (starter.hasError || _error != null)
+            FilledButton.tonalIcon(
+              onPressed: busy ? null : () => unawaited(_browse()),
+              icon: const Icon(Icons.travel_explore_rounded),
+              label: const Text('Choose a model from Hugging Face'),
+            )
+          else
+            TextButton.icon(
+              onPressed: busy ? null : () => unawaited(_browse()),
+              icon: const Icon(Icons.travel_explore_rounded),
+              label: const Text('Choose another model from Hugging Face'),
+            ),
+        ],
         SizedBox(height: t.space.xs),
         TextButton(onPressed: widget.onUseServer, child: const Text('Use a cloud model or my own server instead')),
       ],

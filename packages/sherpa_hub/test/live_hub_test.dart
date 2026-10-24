@@ -63,6 +63,26 @@ void main() {
     expect(plan, isA<DownloadPlan>());
   }, skip: skip, timeout: const Timeout(Duration(minutes: 2)));
 
+  test('a typed query and a pasted repo id find GGUF repos (the browser default: trending, filter=gguf)', () async {
+    final catalog = HfHubCatalog(hub);
+    final typed = await catalog.search(const ModelSearchQuery(text: 'qwen3 0.6b', format: HubFormatFilter.gguf));
+    expect(typed.items.map((e) => e.id.toLowerCase()), contains(contains('qwen3-0.6b')));
+    final byId = await catalog.search(const ModelSearchQuery(text: 'Qwen/Qwen3-0.6B-GGUF', format: HubFormatFilter.gguf));
+    expect(byId.items.map((e) => e.id), contains('Qwen/Qwen3-0.6B-GGUF'));
+  }, skip: skip);
+
+  test("a starter model's resolve leaves the Hub origin for a signed CDN URL (no token goes there)", () async {
+    const repo = 'unsloth/Qwen3-0.6B-GGUF';
+    final info = await hub.modelInfo(repo);
+    final file = info.files.firstWhere((f) => f.path.endsWith('Q4_K_M.gguf'));
+    final r = await hub.resolveDownload(repo, info.sha!, file.path);
+    expect(r.url.host, isNot('huggingface.co'));
+    expect(r.sendAuthorization, isFalse);
+    expect(r.size, file.size);
+    expect(r.sha256, file.lfsSha256);
+    expect(r.expiresAt!.isAfter(DateTime.now().toUtc()), isTrue);
+  }, skip: skip);
+
   test('gated content without a token is 401 GatedRepo', () async {
     await expectLater(hub.resolveDownload('meta-llama/Llama-3.2-1B-Instruct', 'main', 'config.json'),
         throwsA(isA<HubGatedRepoException>()));

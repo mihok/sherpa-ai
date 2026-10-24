@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show MissingPluginException, PlatformExce
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' as rp show ProviderException;
 import 'package:sherpa_core/sherpa_core.dart';
+import 'package:sherpa_hub/sherpa_hub.dart' show HubException;
 import 'package:sherpa_inference/sherpa_inference.dart' show EngineException;
 import 'package:sherpa_mcp/sherpa_mcp.dart' show McpHttpStatusException, McpRpcException, McpTransportException;
 
@@ -59,13 +60,21 @@ final class AppErrorRing {
   /// How many older records fell out of the ring.
   int get dropped => _dropped;
 
-  /// Keeps the type name and code of [error]; never its message.
-  void record(Object error, {String source = 'app'}) {
+  /// Keeps the type name and code of [error]; never its message. [code]
+  /// overrides the code derived from the error's type (a caller that knows
+  /// which step failed says so: `network_monitor`, `enqueue`, …); it is
+  /// dropped unless it looks like a code.
+  void record(Object error, {String source = 'app', String? code}) {
     // A provider that read a failed provider rethrows its error wrapped.
     while (error is rp.ProviderException) {
       error = error.exception;
     }
-    _records.add(AppErrorRecord(at: _now(), source: _safeSource(source), type: typeNameOf(error), code: codeOf(error)));
+    _records.add(AppErrorRecord(
+      at: _now(),
+      source: _safeSource(source),
+      type: typeNameOf(error),
+      code: code == null ? codeOf(error) : _ident(code),
+    ));
     while (_records.length > capacity) {
       _records.removeAt(0);
       _dropped++;
@@ -102,6 +111,7 @@ final class AppErrorRing {
         McpHttpStatusException(:final statusCode) => 'http_$statusCode',
         McpTransportException(:final statusCode) => statusCode == null ? 'transport' : 'http_$statusCode',
         EngineException(:final codeName) => _ident(codeName),
+        HubException(:final code) => code,
         SocketException(:final osError) => osError == null ? 'socket' : 'os_${osError.errorCode}',
         OSError(:final errorCode) => 'os_$errorCode',
         HttpException() => 'http',
@@ -138,6 +148,9 @@ final class AppErrorObserver extends ProviderObserver {
     // a provider that only rethrows a dependency's failure (wrapped) was
     // recorded when that dependency failed.
     if (error is CancelledException || error is UnimplementedError || error is rp.ProviderException) return;
-    (_ring ?? AppErrorRing.instance).record(error, source: 'provider');
+    // Without a typed code, the provider's name says which one failed
+    // (`downloadManagerProvider`), which a type like StateError cannot.
+    (_ring ?? AppErrorRing.instance)
+        .record(error, source: 'provider', code: AppErrorRing.codeOf(error) ?? context.provider.name);
   }
 }

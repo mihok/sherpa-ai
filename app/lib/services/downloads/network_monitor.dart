@@ -42,20 +42,34 @@ abstract interface class NetworkMonitor {
 }
 
 /// [NetworkMonitor] over a connectivity stream (the app's
-/// `connectivityStreamProvider`, which tests already fake).
+/// `connectivityStreamProvider`, which tests already fake). The stream's
+/// first event is the current state, so the monitor knows from its first
+/// moment whether the phone is on Wi-Fi or mobile data.
+///
+/// A source that fails (plugin error, or a stream that refuses another
+/// listener) leaves the monitor at [NetworkKind.unknown], which never
+/// blocks a download, and is reported to [onError]: a broken connectivity
+/// signal must never take the download manager down with it.
 final class ConnectivityNetworkMonitor implements NetworkMonitor {
-  ConnectivityNetworkMonitor(Stream<List<ConnectivityResult>> source, {NetworkKind initial = NetworkKind.unknown})
-      : _current = initial {
-    _sub = source.listen((r) {
-      final next = networkKindOf(r);
-      if (next == _current) return;
-      _current = next;
-      _changes.add(next);
-    }, onError: (Object _) {});
+  ConnectivityNetworkMonitor(
+    Stream<List<ConnectivityResult>> source, {
+    NetworkKind initial = NetworkKind.unknown,
+    void Function(Object error)? onError,
+  }) : _current = initial {
+    try {
+      _sub = source.listen((r) {
+        final next = networkKindOf(r);
+        if (next == _current) return;
+        _current = next;
+        _changes.add(next);
+      }, onError: (Object e) => onError?.call(e));
+    } on Object catch (e) {
+      onError?.call(e);
+    }
   }
 
   NetworkKind _current;
-  late final StreamSubscription<List<ConnectivityResult>> _sub;
+  StreamSubscription<List<ConnectivityResult>>? _sub;
   final StreamController<NetworkKind> _changes = StreamController.broadcast();
 
   @override
@@ -65,7 +79,7 @@ final class ConnectivityNetworkMonitor implements NetworkMonitor {
   Stream<NetworkKind> get changes => _changes.stream;
 
   Future<void> dispose() async {
-    await _sub.cancel();
+    await _sub?.cancel();
     await _changes.close();
   }
 }

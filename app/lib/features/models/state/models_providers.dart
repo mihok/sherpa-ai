@@ -11,6 +11,7 @@ import '../../../services/device/device_profile_source.dart';
 import '../../../services/downloads/downloads.dart';
 import '../../../state/connectivity.dart';
 import '../../../state/providers.dart';
+import '../../diagnostics/app_error_ring.dart';
 import 'hub_account.dart';
 import 'model_fit.dart';
 
@@ -85,11 +86,22 @@ final modelCatalogProvider = Provider<ModelCatalog>((ref) => HfHubCatalog(ref.wa
 /// GGUF header peeks for device fit.
 final modelShapeSourceProvider = Provider<ModelShapeSource>((ref) => HubModelShapeSource(ref.watch(hfHubClientProvider)));
 
-final networkMonitorProvider = Provider<NetworkMonitor>((ref) {
-  final m = ConnectivityNetworkMonitor(ref.watch(connectivityStreamProvider));
-  ref.onDispose(m.dispose);
-  return m;
-});
+/// Wi-Fi / mobile data / offline for the download manager. It listens to
+/// the same connectivity feed as the offline banner (which subscribes
+/// first, on the first frame); a feed that fails leaves it at "unknown"
+/// (never blocks) and is recorded, instead of failing the manager.
+final networkMonitorProvider = Provider<NetworkMonitor>(
+  (ref) {
+    final ring = ref.read(appErrorRingProvider);
+    final m = ConnectivityNetworkMonitor(
+      ref.watch(connectivityStreamProvider),
+      onError: (e) => ring.record(e, source: 'downloads', code: 'network_monitor'),
+    );
+    ref.onDispose(m.dispose);
+    return m;
+  },
+  name: 'networkMonitorProvider',
+);
 
 final modelLibraryProvider = Provider<ModelLibrary>((ref) {
   final lib = ModelLibrary(
@@ -103,6 +115,7 @@ final modelLibraryProvider = Provider<ModelLibrary>((ref) {
 });
 
 final downloadManagerProvider = Provider<DownloadManager>((ref) {
+  final ring = ref.read(appErrorRingProvider);
   final m = DownloadManager(
     store: ref.watch(modelRecordStoreProvider),
     layout: ref.watch(modelStorageLayoutProvider),
@@ -114,11 +127,13 @@ final downloadManagerProvider = Provider<DownloadManager>((ref) {
     network: ref.watch(networkMonitorProvider),
     clock: ref.watch(clockProvider),
     ids: ref.watch(idGeneratorProvider),
+    onError: (e, code) => ring.record(e, source: 'downloads', code: code),
   );
-  unawaited(m.init());
+  // Reported through onError; enqueue retries init and explains a failure.
+  unawaited(m.init().catchError((Object _) {}));
   ref.onDispose(m.dispose);
   return m;
-});
+}, name: 'downloadManagerProvider');
 
 /// Download jobs, live.
 final downloadJobsProvider = StreamProvider<List<DownloadJobView>>((ref) async* {

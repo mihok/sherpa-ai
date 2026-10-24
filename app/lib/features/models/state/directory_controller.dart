@@ -93,7 +93,7 @@ final class DirectoryQuery {
       (size == null ? 0 : 1) + (license == null ? 0 : 1) + (task == null ? 0 : 1) + (toolUse ? 1 : 0);
 
   ModelSearchQuery toSearch({int limit = 30}) => ModelSearchQuery(
-        text: text.trim().isEmpty ? null : text.trim(),
+        text: searchTextOf(text),
         format: format,
         pipelineTag: task?.pipelineTag,
         authors: authors.toList()..sort(),
@@ -101,6 +101,9 @@ final class DirectoryQuery {
         tags: [if (license != null) 'license:$license'],
         limit: limit,
       );
+
+  /// A repo id (`owner/name`) when [text] is one, or a Hub link to one.
+  String? get repoId => repoIdOf(text);
 
   /// Filters the server can't apply.
   bool matchesClientFilters(CatalogEntry e) {
@@ -152,6 +155,36 @@ final class DirectoryQuery {
 
   @override
   int get hashCode => Object.hash(text, format, size, license, task, toolUse, sort, Object.hashAllUnordered(authors));
+}
+
+final RegExp _hubLink = RegExp(r'^(?:https?://)?(?:www\.)?(?:huggingface\.co|hf\.co)/', caseSensitive: false);
+final RegExp _repoIdShape = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$');
+
+/// `owner/name:Q4_K_M`, the form the Hub's "Use this model" snippets give
+/// (`ollama run hf.co/owner/name:Q4_K_M`, `llama-server -hf owner/name:Q4_K_M`).
+final RegExp _quantTagged = RegExp(r'^([A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*):[A-Za-z0-9._-]+$');
+
+/// What `search=` gets for [text]: trimmed, and a pasted Hub link reduced
+/// to its `owner/name` (the API matches `author/name` substrings, so the
+/// full URL matched nothing), without a `:quant` tag.
+String? searchTextOf(String text) {
+  var t = text.trim();
+  if (_hubLink.hasMatch(t)) {
+    t = t.replaceFirst(_hubLink, '').split(RegExp('[?#]')).first;
+    final parts = t.split('/').where((p) => p.isNotEmpty).toList();
+    // `models/…` and `/tree/main/…` are not part of the id.
+    if (parts.isNotEmpty && parts.first == 'models') parts.removeAt(0);
+    t = parts.take(2).join('/');
+  }
+  if (_quantTagged.firstMatch(t) case final m?) t = m.group(1)!;
+  return t.isEmpty ? null : t;
+}
+
+/// The repo id [text] names, if it is exactly one (`owner/name` or a Hub
+/// link to it).
+String? repoIdOf(String text) {
+  final t = searchTextOf(text);
+  return t != null && _repoIdShape.hasMatch(t) && !t.contains('..') ? t : null;
 }
 
 /// Parameters in billions: `safetensors.total` when the Hub has it, else
@@ -224,6 +257,11 @@ final class DirectoryState {
   /// Results the default content filter hid (said out loud, never silent).
   int get hiddenUncensored => showUncensored ? 0 : raw.where((e) => e.isUncensored).length;
 
+  /// Results the size and tool-use filters hid (not counting the ones the
+  /// content filter hid already).
+  int get hiddenByFilters =>
+      raw.where((e) => (showUncensored || !e.isUncensored) && !query.matchesClientFilters(e)).length;
+
   bool get hasMore => nextCursor != null;
 
   DirectoryState copyWith({
@@ -258,8 +296,20 @@ final directoryControllerProvider = NotifierProvider.autoDispose<DirectoryContro
 /// deduped by `_id` (cursors can repeat items when sort values move,
 /// R08 §2.3), typing debounced so a word costs one request, and stale
 /// responses dropped by generation.
+///
+/// The size and tool-use filters run here, over the pages loaded so far,
+/// so a page can hold no visible result while the server has more. Loading
+/// keeps fetching pages (at most [maxAutoPages] more per action) until at
+/// least [minVisible] new results show, instead of stopping at an empty
+/// list that cannot scroll to load more.
 final class DirectoryController extends Notifier<DirectoryState> {
   static const Duration debounce = Duration(milliseconds: 350);
+
+  /// Results one load or "Load more" tries to show.
+  static const int minVisible = 10;
+
+  /// Extra pages one load or "Load more" may fetch to get there.
+  static const int maxAutoPages = 4;
 
   Timer? _debounce;
   int _generation = 0;
@@ -302,7 +352,9 @@ final class DirectoryController extends Notifier<DirectoryState> {
 
   Future<void> _load() async {
     final gen = ++_generation;
-    state = state.copyWith(loading: true, clearFailure: true, raw: const [], clearCursor: true);
+    // loadingMore: false — a fill for the previous query may still be in
+    // flight; it is dropped by generation and must not block this one.
+    state = state.copyWith(loading: true, loadingMore: false, clearFailure: true, raw: const [], clearCursor: true);
     try {
       final page = await ref.read(modelCatalogProvider).search(state.query.toSearch());
       if (gen != _generation || !ref.mounted) return;
@@ -310,26 +362,41 @@ final class DirectoryController extends Notifier<DirectoryState> {
     } on Object catch (e) {
       if (gen != _generation || !ref.mounted) return;
       state = state.copyWith(loading: false, failure: failureOf(e));
+      return;
     }
+    await _fill(gen, target: minVisible);
   }
 
+  /// Loads the next page(s): until [minVisible] more results show, or
+  /// [maxAutoPages] pages, or the last page.
   Future<void> loadMore() async {
-    final cursor = state.nextCursor;
-    if (cursor == null || state.loadingMore || state.loading) return;
-    final gen = _generation;
-    state = state.copyWith(loadingMore: true);
-    try {
-      final page = await ref.read(modelCatalogProvider).search(state.query.toSearch(), cursor: cursor);
-      if (gen != _generation || !ref.mounted) return;
-      state = state.copyWith(
-        raw: _dedupe(state.raw, page.items),
-        nextCursor: page.nextCursor,
-        clearCursor: page.nextCursor == null,
-        loadingMore: false,
-      );
-    } on Object catch (e) {
-      if (gen != _generation || !ref.mounted) return;
-      state = state.copyWith(loadingMore: false, failure: failureOf(e));
+    if (state.nextCursor == null || state.loadingMore || state.loading) return;
+    await _fill(_generation, target: state.items.length + minVisible, atLeastOne: true);
+  }
+
+  Future<void> _fill(int gen, {required int target, bool atLeastOne = false}) async {
+    if (state.loadingMore) return;
+    var pages = 0;
+    while (pages < maxAutoPages && (state.items.length < target || (atLeastOne && pages == 0))) {
+      final cursor = state.nextCursor;
+      if (cursor == null) return;
+      state = state.copyWith(loadingMore: true);
+      try {
+        final page = await ref.read(modelCatalogProvider).search(state.query.toSearch(), cursor: cursor);
+        if (gen != _generation || !ref.mounted) return;
+        state = state.copyWith(
+          raw: _dedupe(state.raw, page.items),
+          nextCursor: page.nextCursor,
+          clearCursor: page.nextCursor == null,
+          loadingMore: false,
+          clearFailure: true,
+        );
+      } on Object catch (e) {
+        if (gen != _generation || !ref.mounted) return;
+        state = state.copyWith(loadingMore: false, failure: failureOf(e));
+        return;
+      }
+      pages++;
     }
   }
 

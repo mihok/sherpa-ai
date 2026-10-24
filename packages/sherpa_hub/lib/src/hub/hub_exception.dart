@@ -22,6 +22,29 @@ sealed class HubException implements Exception {
   /// Whether retrying the same request later can succeed.
   bool get retryable => false;
 
+  /// Short machine code for diagnostics (`hub_gated_401`, `hub_network`,
+  /// `hub_rate_limited_429`, …): the subtype and status, never the message.
+  String get code {
+    final kind = switch (this) {
+      HubGatedRepoException() => 'gated',
+      HubEntryNotFoundException() => 'entry_not_found',
+      HubRevisionNotFoundException() => 'revision_not_found',
+      HubRepoNotFoundException() => 'repo_not_found',
+      HubUnauthorizedException() => 'unauthorized',
+      HubRateLimitedException() => 'rate_limited',
+      HubUrlExpiredException() => 'url_expired',
+      HubDisabledRepoException() => 'disabled',
+      HubForbiddenException() => 'forbidden',
+      HubNotFoundException() => 'not_found',
+      HubBadRequestException() => 'bad_request',
+      HubServerException() => 'server',
+      HubNetworkException() => 'network',
+      HubProtocolException() => 'protocol',
+      HubHttpException() => 'http',
+    };
+    return statusCode == null ? 'hub_$kind' : 'hub_${kind}_$statusCode';
+  }
+
   @override
   String toString() => '$runtimeType(${statusCode ?? '-'}${errorCode == null ? '' : ' $errorCode'}): '
       '${Redactor.text(message)}${url == null ? '' : ' [$url]'}';

@@ -13,6 +13,7 @@ import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
 import '../../services/downloads/downloads.dart';
 import '../../state/ui_preferences.dart';
+import 'state/download_errors.dart';
 import 'state/models_providers.dart';
 import 'widgets/download_announcement.dart';
 import 'widgets/format.dart';
@@ -27,8 +28,25 @@ class DownloadsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final t = SherpaTokens.of(context);
     final jobs = ref.watch(downloadJobsProvider);
-    final wifiOnly = ref.watch(wifiOnlyProvider);
-    final manager = ref.read(downloadManagerProvider);
+    final DownloadManager manager;
+    final bool wifiOnly;
+    try {
+      manager = ref.watch(downloadManagerProvider);
+      wifiOnly = ref.watch(wifiOnlyProvider);
+    } on Object catch (e) {
+      // Never an error box: what failed, and a way to try again (the
+      // provider observer recorded it for diagnostics).
+      return Scaffold(
+        appBar: AppBar(title: Heading(level: 1, child: const Text('Downloads'))),
+        body: ErrorState(
+          title: "Downloads aren't available",
+          message: downloadStartMessage(e),
+          onRetry: () => ref
+            ..invalidate(networkMonitorProvider)
+            ..invalidate(downloadManagerProvider),
+        ),
+      );
+    }
     final list = jobs.value ?? const <DownloadJobView>[];
     final active = [for (final j in list) if (j.phase.isActive || j.phase.isWaiting) j];
     final paused = [for (final j in list) if (j.phase == JobPhase.paused) j];

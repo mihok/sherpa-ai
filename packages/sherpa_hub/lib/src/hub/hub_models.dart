@@ -105,9 +105,14 @@ final class ModelSearchQuery {
   /// must name everything a card shows (R08 §2.4 recommended browse query).
   final List<String> expand;
 
+  /// What a browser card needs. Not `siblings`: cards never use the file
+  /// list (the detail page reads it with sizes), and it only made every
+  /// page heavier. `gguf` stays: its chat template is where most repos say
+  /// they render tools (24 of 30 on a live trending page, against 3 tagged
+  /// `tool-use`/`function-calling`).
   static const List<String> defaultExpand = [
     'author', 'downloads', 'likes', 'lastModified', 'createdAt', 'trendingScore', 'gated', 'private', 'tags',
-    'pipeline_tag', 'library_name', 'safetensors', 'gguf', 'siblings',
+    'pipeline_tag', 'library_name', 'safetensors', 'gguf',
   ];
 
   ModelSearchQuery copyWith({List<String>? authors, int? limit}) => ModelSearchQuery(

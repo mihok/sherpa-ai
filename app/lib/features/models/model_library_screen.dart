@@ -20,6 +20,7 @@ import '../../services/inference/platform_models.dart' show EngineAvailability;
 import '../../state/providers.dart';
 import '../../state/ui_preferences.dart';
 import '../home/relative_time.dart';
+import 'state/download_errors.dart';
 import 'state/local_inference_providers.dart';
 import 'state/local_model_choice.dart';
 import 'state/models_providers.dart';
@@ -143,6 +144,16 @@ class _ModelLibraryScreenState extends ConsumerState<ModelLibraryScreen> {
               SectionHeader('On this phone', count: list.isEmpty ? null : _models(list.length)),
               if (models.isLoading && list.isEmpty)
                 const Padding(padding: EdgeInsets.only(top: 48), child: LoadingState(label: 'Loading your models…'))
+              else if (models.hasError && list.isEmpty)
+                // Not "no models": the library could not be read.
+                ErrorState(
+                  title: "Couldn't load your models",
+                  message: downloadStartMessage(models.error!),
+                  onRetry: () => ref
+                    ..invalidate(networkMonitorProvider)
+                    ..invalidate(downloadManagerProvider)
+                    ..invalidate(libraryModelsProvider),
+                )
               else if (list.isEmpty)
                 const _EmptyLibrary()
               else

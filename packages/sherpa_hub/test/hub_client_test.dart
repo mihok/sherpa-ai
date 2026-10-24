@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http_pkg;
 import 'package:http/io_client.dart';
+import 'package:http/testing.dart';
 import 'package:sherpa_core/sherpa_core.dart';
 import 'package:sherpa_hub/sherpa_hub.dart';
 import 'package:sherpa_net/sherpa_net.dart';
@@ -97,7 +100,8 @@ void main() {
       expect(q['sort'], ['downloads']);
       expect(q['pipeline_tag'], ['text-generation']);
       expect(q['limit'], ['2']);
-      expect(q['expand'], containsAll(['downloads', 'gguf', 'siblings', 'gated']));
+      expect(q['expand'], containsAll(['downloads', 'gguf', 'gated']));
+      expect(q['expand'], isNot(contains('siblings')), reason: 'cards never use the file list; it only weighs the page');
       expect(q.containsKey('direction'), isFalse);
       expect(p1.items.map((m) => m.id), ['bartowski/Llama-3.2-1B-Instruct-GGUF', 'ggml-org/vllm-d3-mini-GGUF']);
       final first = p1.items.first;
@@ -302,6 +306,54 @@ void main() {
       final dead = HfHubClient(
           httpClient: http, baseUri: Uri.parse('http://127.0.0.1:1'), sleep: (_) async {}, retryPolicy: const HubRetryPolicy(maxRetries: 1));
       await expectLater(dead.searchModels(const ModelSearchQuery()), throwsA(isA<HubNetworkException>()));
+    });
+  });
+
+  group('transport', () {
+    test('a response body that stalls becomes HubNetworkException instead of loading forever', () async {
+      final stalled = StreamController<List<int>>();
+      addTearDown(stalled.close);
+      final c = HfHubClient(
+        httpClient: MockClient.streaming((req, _) async => http_pkg.StreamedResponse(stalled.stream, 200)),
+        sleep: (_) async {},
+        retryPolicy: const HubRetryPolicy(bodyTimeout: Duration(milliseconds: 50)),
+      );
+      stalled.add(utf8.encode('[{"id":"a/b"'));
+      await expectLater(c.searchModels(const ModelSearchQuery()).timeout(const Duration(seconds: 5)),
+          throwsA(isA<HubNetworkException>().having((e) => e.code, 'code', 'hub_network')));
+    });
+
+    test("today's Xet CDN (us.aws.cdn.hf.co) is not the Hub origin: no token goes there", () async {
+      const cdn = 'https://us.aws.cdn.hf.co/xet-bridge-us/68b0/2c1e?X-Xet-Cas-Uid=public'
+          '&Expires=1793000000&Policy=p&Signature=s&Key-Pair-Id=K';
+      final seen = <http_pkg.BaseRequest>[];
+      final c = HfHubClient(
+        tokenProvider: () async => 'hf_secret',
+        httpClient: MockClient((req) async {
+          seen.add(req);
+          if (req.url.host == 'huggingface.co') {
+            return http_pkg.Response('', 302, headers: {
+              'location': cdn,
+              'x-linked-size': '1107409472',
+              'x-linked-etag': '"${'a' * 64}"',
+              'x-xet-hash': '2c1e',
+              'x-repo-commit': 'b' * 40,
+            });
+          }
+          return http_pkg.Response.bytes(List<int>.filled(16, 0), 206, headers: {'content-range': 'bytes 0-15/1107409472'});
+        }),
+      );
+      final r = await c.resolveDownload('unsloth/Qwen3-1.7B-GGUF', 'b' * 40, 'Qwen3-1.7B-Q4_K_M.gguf');
+      expect(r.url.host, 'us.aws.cdn.hf.co');
+      expect(r.sendAuthorization, isFalse);
+      expect(r.size, 1107409472);
+      expect(r.sha256, 'a' * 64);
+      expect(seen.single.headers['authorization'], 'Bearer hf_secret', reason: 'the resolve on huggingface.co');
+      await expectLater(c.readGgufHeader('unsloth/Qwen3-1.7B-GGUF', 'b' * 40, 'Qwen3-1.7B-Q4_K_M.gguf', maxBytes: 16),
+          throwsA(anything));
+      final cdnRequests = seen.where((q) => q.url.host == 'us.aws.cdn.hf.co').toList();
+      expect(cdnRequests, isNotEmpty);
+      expect(cdnRequests.map((q) => q.headers.keys.map((k) => k.toLowerCase())), everyElement(isNot(contains('authorization'))));
     });
   });
 

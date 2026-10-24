@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:background_downloader/background_downloader.dart';
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart' show ValueListenable, visibleForTesting;
 import 'package:path/path.dart' as p;
 
 import 'transfer_backend.dart';
@@ -22,14 +22,26 @@ import 'transfer_backend.dart';
 ///
 /// The plugin has no checksum support (R09 §6); the manager verifies.
 ///
+/// Android runs each segment as a WorkManager job, which the system stops
+/// after about 9 minutes. Segments therefore allow pausing
+/// ([buildSegmentTask]): the plugin then pauses at the time limit and
+/// resumes with a Range from the bytes it already has, instead of failing
+/// a slow segment over and over.
+///
 /// Known limits:
 /// - Chaining segments needs the Dart isolate; while iOS suspends the app
 ///   only the current segment continues in the background session.
 /// - Progress inside a segment is reported optimistically (offset +
 ///   received); a stop mid-segment drops back to the last full segment.
 final class BackgroundTransferBackend implements TransferBackend {
-  BackgroundTransferBackend({FileDownloader? downloader, this.segmentBytes = 256 << 20, this.group = 'sherpa-models'})
-      : _downloader = downloader;
+  BackgroundTransferBackend({
+    FileDownloader? downloader,
+    this.segmentBytes = 256 << 20,
+    this.group = 'sherpa-models',
+    this.wifiHoldGrace = const Duration(seconds: 10),
+    Future<(BaseDirectory, String, String)> Function(String path)? splitPath,
+  })  : _downloader = downloader,
+        _split = splitPath ?? ((path) => Task.split(filePath: path));
 
   FileDownloader? _downloader;
 
@@ -41,6 +53,11 @@ final class BackgroundTransferBackend implements TransferBackend {
   /// staging file's size.
   final int segmentBytes;
   final String group;
+
+  /// How long a segment the plugin holds for Wi-Fi may stay unstarted
+  /// before it comes back as [TransferWaitingForWifi] (see [watchWifiHold]).
+  final Duration wifiHoldGrace;
+  final Future<(BaseDirectory, String, String)> Function(String path) _split;
 
   @override
   int get transientBytes => segmentBytes;
@@ -132,24 +149,24 @@ final class _SegmentedTransfer implements TransferHandle {
   Future<TransferOutcome?> _segment(int start, int end) async {
     final seg = File(_segPath);
     if (seg.existsSync()) await seg.delete();
-    final (base, dir, name) = await Task.split(filePath: seg.path);
-    final task = DownloadTask(
-      taskId: '${_r.id}@$start',
-      url: _r.url.toString(),
-      headers: {..._r.headers, 'Range': 'bytes=$start-$end'},
-      baseDirectory: base,
-      directory: dir,
-      filename: name,
-      group: _backend.group,
-      updates: Updates.statusAndProgress,
-      requiresWiFi: _r.requiresWiFi,
-      // Retries re-use the same (maybe expired) URL; the manager re-resolves.
-      retries: 0,
-      displayName: _r.displayName ?? '',
-    );
+    final (base, dir, name) = await _backend._split(seg.path);
+    final task = buildSegmentTask(_r, start, end, baseDirectory: base, directory: dir, filename: name, group: _backend.group);
     _task = task;
     if (_stopped) return const TransferStopped();
-    final transfer = await _fd.transfers.start(task);
+    // `startAll`, not `start`: `start` drops the native enqueue result, so a
+    // task Android refused (URL validation, WorkManager) would wait forever
+    // at "Downloading: 0 B". `startAll` marks it failed instead.
+    final transfer = (await _fd.transfers.startAll([task])).single;
+    if (transfer.status == TaskStatus.failed) {
+      _task = null;
+      if (seg.existsSync()) await seg.delete();
+      return TransferFailed("This phone's download service refused the download "
+          '(${transfer.exception?.description ?? 'not scheduled'}). Tap Retry; if it keeps failing, restart Sherpa.');
+    }
+    // A stop() during `startAll` reached the plugin before the task did
+    // (it encodes tasks in an isolate first), so it cancelled nothing; the
+    // segment would run to its end. Cancel it now that it exists.
+    if (_stopped) unawaited(_fd.cancel(task));
     final length = end - start + 1;
     void onProgress() {
       final v = transfer.progress;
@@ -161,19 +178,27 @@ final class _SegmentedTransfer implements TransferHandle {
       ));
     }
 
-    void onHold() {
-      if (transfer.isWaitingForWiFi && !_stopped) unawaited(_fd.cancel(task));
-    }
-
+    // The plugin sets the hold reason inside `startAll`, before it returns,
+    // so the watch has to look at the value it already has.
+    var heldForWifi = false;
     final ValueListenable<double?> pn = transfer.progressNotifier;
     pn.addListener(onProgress);
-    transfer.holdReasonNotifier.addListener(onHold);
+    final unwatch = watchWifiHold(
+      hold: transfer.holdReasonNotifier,
+      status: transfer.statusNotifier,
+      grace: _backend.wifiHoldGrace,
+      onHeld: () {
+        if (_stopped) return;
+        heldForWifi = true;
+        unawaited(_fd.cancel(task));
+      },
+    );
     final TaskStatusUpdate result;
     try {
       result = await transfer.result;
     } finally {
       pn.removeListener(onProgress);
-      transfer.holdReasonNotifier.removeListener(onHold);
+      unwatch();
       _task = null;
     }
     switch (result.status) {
@@ -181,7 +206,9 @@ final class _SegmentedTransfer implements TransferHandle {
         return _append(seg, start, length, fullFile: result.responseStatusCode == 200);
       case TaskStatus.canceled:
         if (seg.existsSync()) await seg.delete();
-        return transfer.isWaitingForWiFi && !_stopped ? const TransferWaitingForWifi() : const TransferStopped();
+        // The plugin clears the hold reason when the task ends, so the
+        // flag says why it was cancelled.
+        return heldForWifi && !_stopped ? const TransferWaitingForWifi() : const TransferStopped();
       case TaskStatus.notFound:
         return const TransferHttpError(404);
       case TaskStatus.failed:
@@ -220,4 +247,88 @@ final class _SegmentedTransfer implements TransferHandle {
     await seg.delete();
     return null;
   }
+}
+
+/// The plugin task for bytes [start]..[end] of [r], written to
+/// [directory]/[filename] under [baseDirectory].
+///
+/// - `allowPause`: Android stops a WorkManager job after about 9 minutes; a
+///   pausable task is resumed by the plugin with `Range` from the bytes it
+///   has (the CDN's ETag is strong and the same for every range), while a
+///   non-pausable one fails with "Task timed out". Without it, a segment
+///   that needs more than 9 minutes (256 MiB below ~0.5 MB/s) could never
+///   finish.
+/// - `retries: 0`: retries would re-use the same (maybe expired) signed URL;
+///   the manager re-resolves instead.
+@visibleForTesting
+DownloadTask buildSegmentTask(
+  TransferRequest r,
+  int start,
+  int end, {
+  required BaseDirectory baseDirectory,
+  required String directory,
+  required String filename,
+  required String group,
+}) =>
+    DownloadTask(
+      taskId: '${r.id}@$start',
+      url: r.url.toString(),
+      headers: {...r.headers, 'Range': 'bytes=$start-$end'},
+      baseDirectory: baseDirectory,
+      directory: directory,
+      filename: filename,
+      group: group,
+      updates: Updates.statusAndProgress,
+      requiresWiFi: r.requiresWiFi,
+      retries: 0,
+      allowPause: true,
+      displayName: r.displayName ?? '',
+    );
+
+/// Calls [onHeld] once when [hold] says the transfer waits for Wi-Fi and
+/// [status] has not reached running for [grace]. Returns a function that
+/// stops watching.
+///
+/// It looks at the current values too: background_downloader sets the hold
+/// reason inside `Transfers.start`/`startAll`, before they return, and a
+/// `ValueNotifier` does not replay it to a listener added afterwards. A
+/// missed hold left a Wi-Fi-only task queued by the OS on mobile data with
+/// nothing on screen but "Downloading: 0 B".
+///
+/// The grace absorbs the plugin's own guess, made from its Dart-side view
+/// of connectivity (a VPN-only link counts as "not Wi-Fi"): when the OS
+/// starts the task anyway, the status turns running and the hold clears.
+@visibleForTesting
+void Function() watchWifiHold({
+  required ValueListenable<TransferHoldReason> hold,
+  required ValueListenable<TaskStatus> status,
+  required Duration grace,
+  required void Function() onHeld,
+}) {
+  Timer? timer;
+  var fired = false;
+  bool held() => hold.value == TransferHoldReason.waitingForWiFi && status.value != TaskStatus.running;
+  void check() {
+    if (fired) return;
+    if (!held()) {
+      timer?.cancel();
+      timer = null;
+      return;
+    }
+    timer ??= Timer(grace, () {
+      timer = null;
+      if (fired || !held()) return;
+      fired = true;
+      onHeld();
+    });
+  }
+
+  hold.addListener(check);
+  status.addListener(check);
+  check();
+  return () {
+    timer?.cancel();
+    hold.removeListener(check);
+    status.removeListener(check);
+  };
 }

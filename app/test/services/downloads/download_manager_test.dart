@@ -189,6 +189,55 @@ void main() {
     expect(rig.backend.requests.first.requiresWiFi, isFalse);
   });
 
+  test('the OS holds a Wi-Fi-only transfer our monitor could not classify: it says so, and mobile data restarts it',
+      () async {
+    // VPN-only (or another link connectivity_plus can't name) on mobile data:
+    // our monitor says "unknown", so the transfer starts and the OS holds it.
+    await setUpRig(net: NetworkKind.unknown);
+    rig.backend.osOnCellular = true;
+    final id = await enqueue();
+    final held = await rig.waitFor(id, (v) => v.phase == JobPhase.waitingForWifi && rig.backend.active == 0);
+    expect(held.wifiOnly, isTrue, reason: 'the "Use mobile data" button shows for waitingForWifi');
+    final count = rig.backend.requests.length;
+
+    // "Use mobile data for this download" must not wait for a network change.
+    await rig.manager.allowCellular(id);
+    await rig.waitFor(id, (v) => v.phase == JobPhase.done);
+    expect(rig.backend.requests.skip(count).first.requiresWiFi, isFalse);
+  });
+
+  test('a failed start-up is not cached: the download explains it, and the next try works', () async {
+    final store = _FlakyStore(failLists: 1);
+    rig = await ManagerRig.create(hub: tinyRepo(), store: store);
+    final first = await rig.manager.enqueue(rig.plan(), meta: meta);
+    expect(first, isA<EnqueueRefused>());
+    expect((first as EnqueueRefused).reasons.single, contains("couldn't open its downloads list"));
+    expect(rig.reported.map((r) => r.$2), ['init']);
+
+    final second = await rig.manager.enqueue(rig.plan(), meta: meta);
+    expect(second, isA<Enqueued>());
+    await rig.waitFor((second as Enqueued).jobId, (v) => v.phase == JobPhase.done);
+  });
+
+  test('every failed file is reported for diagnostics with a code, never just shown', () async {
+    await setUpRig();
+    rig.backend.corrupt.add(rig.hub.files['Tiny-1B-Q4_K_M.gguf']!.xetHash);
+    final id = await enqueue();
+    await rig.waitFor(id, (v) => v.phase == JobPhase.failed);
+    expect(rig.reported.map((r) => r.$2), contains('verify_failed'));
+
+    final hub = tinyRepo()..gated = true;
+    await rig.dispose();
+    await setUpRig(hub: hub);
+    final gated = await enqueue();
+    await rig.waitFor(gated, (v) => v.phase == JobPhase.failed);
+    expect(rig.reported, isNotEmpty);
+    for (final (error, code) in rig.reported) {
+      expect(error, isA<HubGatedRepoException>());
+      expect(code, startsWith('hub_gated'));
+    }
+  });
+
   test('one large file at a time', () async {
     final hub = FakeHub('acme/Two-GGUF', [
       RemoteFile('A-Q4_K_M.gguf', syntheticGguf(totalBytes: 2 << 20, seed: 1)),
@@ -394,4 +443,31 @@ void main() {
     expect(Directory(rig.layout.libraryPath(v.job.folder)).existsSync(), isFalse, reason: 'empty folders go too');
     expect(await rig.store.get(DocumentCollections.modelLibrary, model.id), isNull);
   });
+}
+
+/// A record store whose first [failLists] `list` calls throw, like a
+/// database that is briefly unavailable at launch.
+final class _FlakyStore implements ModelRecordStore {
+  _FlakyStore({this.failLists = 1});
+
+  final InMemoryRecordStore _inner = InMemoryRecordStore();
+  int failLists;
+
+  @override
+  Future<Map<String, Object?>?> get(String collection, String id) => _inner.get(collection, id);
+
+  @override
+  Future<void> put(String collection, String id, Map<String, Object?> doc) => _inner.put(collection, id, doc);
+
+  @override
+  Future<void> delete(String collection, String id) => _inner.delete(collection, id);
+
+  @override
+  Future<List<Map<String, Object?>>> list(String collection) async {
+    if (failLists > 0) {
+      failLists--;
+      throw StateError('database is locked');
+    }
+    return _inner.list(collection);
+  }
 }

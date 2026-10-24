@@ -25,7 +25,12 @@ import 'widgets/model_card.dart';
 /// hidden results always said out loud), and every card's size and fit
 /// labelled as an estimate until the detail page reads real file sizes.
 class ModelDirectoryScreen extends ConsumerStatefulWidget {
-  const ModelDirectoryScreen({super.key});
+  const ModelDirectoryScreen({super.key, this.onOpenModel});
+
+  /// Set when the browser is opened from onboarding (outside the app's
+  /// routes): opens a repo there instead of on the Browse route, and hides
+  /// the Downloads shortcut (onboarding shows the download itself).
+  final ValueChanged<String>? onOpenModel;
 
   @override
   ConsumerState<ModelDirectoryScreen> createState() => _ModelDirectoryScreenState();
@@ -65,15 +70,16 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
       appBar: AppBar(
         title: Heading(level: 1, child: const Text('Browse models')),
         actions: [
-          IconButton(
-            tooltip: running == 0 ? 'Downloads' : 'Downloads, $running in progress',
-            onPressed: () => context.go(Routes.downloads),
-            icon: Badge(
-              isLabelVisible: running > 0,
-              label: Text('$running'),
-              child: const Icon(Icons.download_outlined),
+          if (widget.onOpenModel == null)
+            IconButton(
+              tooltip: running == 0 ? 'Downloads' : 'Downloads, $running in progress',
+              onPressed: () => context.go(Routes.downloads),
+              icon: Badge(
+                isLabelVisible: running > 0,
+                label: Text('$running'),
+                child: const Icon(Icons.download_outlined),
+              ),
             ),
-          ),
         ],
       ),
       body: Align(
@@ -92,6 +98,8 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
                 const SliverToBoxAdapter(child: _FilterRow()),
                 if (s.hiddenUncensored > 0 || s.showUncensored)
                   SliverToBoxAdapter(child: _ContentFilterNote(hidden: s.hiddenUncensored, showing: s.showUncensored)),
+                if (s.query.repoId case final id? when !s.items.any((e) => e.id.toLowerCase() == id.toLowerCase()))
+                  SliverToBoxAdapter(child: _OpenRepoTile(repoId: id, onOpen: () => _open(context, id))),
                 ..._results(context, s, controller),
               ],
             ),
@@ -99,6 +107,15 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
         ),
       ),
     );
+  }
+
+  void _open(BuildContext context, String repoId) {
+    final open = widget.onOpenModel;
+    if (open != null) {
+      open(repoId);
+    } else {
+      context.go(Routes.modelDetail(repoId));
+    }
   }
 
   List<Widget> _results(BuildContext context, DirectoryState s, DirectoryController c) {
@@ -128,19 +145,28 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
     final items = s.items;
     if (items.isEmpty) {
       final filtered = s.query.activeFilterCount > 0 || s.query.authors.isNotEmpty;
+      final searching = s.loadingMore;
       return [
         SliverFillRemaining(
           hasScrollBody: false,
           child: EmptyState(
             icon: Icons.travel_explore_outlined,
-            title: 'No models match',
-            message: s.hiddenUncensored > 0
-                ? '${s.hiddenUncensored} result${s.hiddenUncensored == 1 ? ' is' : 's are'} hidden by the content filter.'
+            title: searching ? 'Searching more results…' : 'No models match',
+            message: _emptyMessage(s, filtered: filtered),
+            // The filters ran over the pages loaded so far; the Hub has more.
+            primaryAction: s.hasMore
+                ? FilledButton.tonalIcon(
+                    onPressed: searching ? null : () => unawaited(c.loadMore()),
+                    icon: searching
+                        ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.manage_search_rounded),
+                    label: const Text('Search further'),
+                  )
                 : filtered
-                    ? 'Try fewer filters, another quantizer, or a broader search.'
-                    : 'Try another search, such as "qwen", "gemma" or "llama".',
-            primaryAction: filtered
-                ? FilledButton.tonal(onPressed: c.clearFilters, child: const Text('Clear filters'))
+                    ? FilledButton.tonal(onPressed: c.clearFilters, child: const Text('Clear filters'))
+                    : null,
+            secondaryAction: s.hasMore && filtered
+                ? TextButton(onPressed: c.clearFilters, child: const Text('Clear filters'))
                 : null,
           ),
         ),
@@ -161,7 +187,7 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
                 key: ValueKey(e.id),
                 entry: e,
                 estimate: device == null ? null : estimateCardFit(e, device),
-                onTap: () => context.go(Routes.modelDetail(e.id)),
+                onTap: () => _open(context, e.id),
               );
             },
             childCount: items.length * 2 + 1,
@@ -172,6 +198,50 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
         ),
       ),
     ];
+  }
+}
+
+/// Why nothing shows: names the filter that hid the results (the size and
+/// tool-use filters, the content filter, or both), never the wrong one.
+String _emptyMessage(DirectoryState s, {required bool filtered}) {
+  final q = s.query;
+  final byFilters = s.hiddenByFilters;
+  final byContent = s.hiddenUncensored;
+  final names = [
+    if (q.size != null) 'the ${q.size!.label} size filter',
+    if (q.toolUse) 'the Tool use filter',
+  ];
+  final parts = <String>[
+    if (byFilters > 0 && names.isNotEmpty)
+      '$byFilters result${byFilters == 1 ? '' : 's'} so far ${byFilters == 1 ? "doesn't" : "don't"} match ${names.join(' or ')}',
+    if (byContent > 0) '$byContent ${byContent == 1 ? 'is' : 'are'} hidden by the content filter',
+  ];
+  final more = s.hasMore ? ' Hugging Face has more results to search.' : '';
+  if (parts.isNotEmpty) return '${parts.join(', and ')}.$more';
+  if (filtered) return 'Try fewer filters, another quantizer, or a broader search.$more';
+  return 'Try another search, such as "qwen", "gemma" or "llama", or paste a Hugging Face link.$more';
+}
+
+/// "Open Qwen/Qwen3-0.6B-GGUF" when the search is a repo id or a pasted
+/// link: straight to the repo, whatever its tags.
+class _OpenRepoTile extends StatelessWidget {
+  const _OpenRepoTile({required this.repoId, required this.onOpen});
+
+  final String repoId;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = SherpaTokens.of(context);
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: t.space.sm),
+      child: ListTile(
+        leading: const Icon(Icons.open_in_new_rounded),
+        title: Text('Open $repoId'),
+        subtitle: const Text('Go straight to this repository'),
+        onTap: onOpen,
+      ),
+    );
   }
 }
 

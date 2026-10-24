@@ -244,6 +244,10 @@ final class ModelsRig {
   /// What the file picker returns.
   LocalModelFile? pickedFile;
 
+  /// Replaces the prebuilt download manager's override (e.g. one that fails
+  /// to build first).
+  Override? managerOverride;
+
   List<Override> get overrides => [
         ...app.overrides,
         modelRecordStoreProvider.overrideWithValue(store),
@@ -255,7 +259,7 @@ final class ModelsRig {
         transferBackendProvider.overrideWithValue(backend),
         hubHttpClientProvider.overrideWithValue(hubMock(hub)),
         modelLibraryProvider.overrideWithValue(library),
-        downloadManagerProvider.overrideWithValue(manager),
+        managerOverride ?? downloadManagerProvider.overrideWithValue(manager),
         useLocalModelInChatProvider.overrideWithValue((context, choice) async => usedInChat.add(choice)),
         modelFilePickerProvider.overrideWithValue(() async => pickedFile),
         if (staticJobs != null) downloadJobsProvider.overrideWith((ref) => Stream.value(staticJobs!)),

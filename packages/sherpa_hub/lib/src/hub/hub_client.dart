@@ -27,6 +27,7 @@ final class HubRetryPolicy {
     this.maxRetries = 3,
     this.maxAutoWait = const Duration(seconds: 15),
     this.requestTimeout = const Duration(seconds: 30),
+    this.bodyTimeout = const Duration(seconds: 60),
   });
 
   /// Retries for 408/429/5xx and connection errors (huggingface_hub retries
@@ -36,7 +37,14 @@ final class HubRetryPolicy {
   /// Longer rate-limit waits are surfaced as [HubRateLimitedException] for
   /// the UI ("signed-in users get higher limits") instead of blocking.
   final Duration maxAutoWait;
+
+  /// Until the response headers arrive.
   final Duration requestTimeout;
+
+  /// Reading a buffered (JSON) response body after its headers: a body
+  /// that stalls on a weak mobile link becomes a [HubNetworkException]
+  /// instead of a list that loads forever.
+  final Duration bodyTimeout;
 }
 
 /// Result of [HfHubClient.readGgufHeader].
@@ -438,7 +446,16 @@ final class HfHubClient {
     bool unauthorizedIsMissingRepo = true,
   }) async {
     final streamed = await _send(method, url, headers: headers, body: body);
-    final resp = await http.Response.fromStream(streamed);
+    final http.Response resp;
+    try {
+      resp = await http.Response.fromStream(streamed).timeout(retryPolicy.bodyTimeout);
+    } on TimeoutException catch (e) {
+      throw HubNetworkException('the response stalled for ${retryPolicy.bodyTimeout.inSeconds} s', cause: e, url: url);
+    } on http.ClientException catch (e) {
+      throw HubNetworkException(Redactor.text(e.message), cause: e, url: url);
+    } on IOException catch (e) {
+      throw HubNetworkException(Redactor.text('$e'), cause: e, url: url);
+    }
     if (resp.statusCode >= 200 && resp.statusCode < 300) return resp;
     throw _error(resp.statusCode, resp.headers, resp.body, url,
         repo: repo, unauthorizedIsMissingRepo: unauthorizedIsMissingRepo);

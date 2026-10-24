@@ -280,6 +280,9 @@ final class ManagerRig {
   late final ModelLibrary library = ModelLibrary(store: store, layout: layout, ids: ids);
   late final DownloadManager manager = newManager();
 
+  /// What the manager reported for diagnostics: (error, code).
+  final List<(Object, String)> reported = [];
+
   /// The only backend allowed to attach the token (huggingface.co only).
   late final InProcessTransferBackend hubBackend =
       InProcessTransferBackend(client: hub.client, token: () async => token, hubOrigin: HfHubClient.defaultBase);
@@ -296,6 +299,7 @@ final class ManagerRig {
         ids: ids,
         sleep: (_) async {},
         largeFileBytes: 1 << 20,
+        onError: (e, code) => reported.add((e, code)),
       );
 
   DownloadPlan plan({String? quant, bool? includeMmproj}) {

@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sherpa_hub/sherpa_hub.dart';
 
 import '../../services/device/device_profile_source.dart';
+import '../diagnostics/app_error_ring.dart';
+import '../models/state/download_errors.dart';
 import '../models/state/model_fit.dart';
 import '../models/state/models_providers.dart';
 
@@ -35,9 +37,12 @@ final class StarterPick {
 
 /// No starter model can be offered; [reason] is user-facing.
 final class StarterUnavailable implements Exception {
-  const StarterUnavailable(this.reason);
+  const StarterUnavailable(this.reason, {this.cause});
 
   final String reason;
+
+  /// The last error behind it (a Hub or network failure), for diagnostics.
+  final Object? cause;
 
   @override
   String toString() => 'StarterUnavailable: $reason';
@@ -77,21 +82,28 @@ Future<StarterPick> pickStarterModel({
     throw StarterUnavailable(switch (failure) {
       HubNetworkException() => "Couldn't reach Hugging Face to pick a model. Check your connection and try again.",
       HubRateLimitedException() => 'Hugging Face is limiting requests right now. Try again in a minute.',
-      _ => "Couldn't pick a model for this phone right now. Try again, or browse the models yourself.",
-    });
+      _ => "Couldn't pick a model for this phone right now. Try again, or choose a model from Hugging Face below.",
+    }, cause: failure);
   }
   throw const StarterUnavailable(
     "None of the starter models fits this phone's free memory with headroom. Close other apps and try again, "
-    'or browse for a smaller model.',
+    'or choose a smaller model from Hugging Face below.',
   );
 }
 
 /// [pickStarterModel] for this device (refresh by invalidating it).
 final starterModelProvider = FutureProvider.autoDispose<StarterPick>((ref) async {
   final device = await ref.watch(deviceProfileSourceProvider).current();
-  return pickStarterModel(
-    catalog: ref.watch(modelCatalogProvider),
-    shapes: ref.watch(modelShapeSourceProvider),
-    device: device,
-  );
-});
+  try {
+    return await pickStarterModel(
+      catalog: ref.watch(modelCatalogProvider),
+      shapes: ref.watch(modelShapeSourceProvider),
+      device: device,
+    );
+  } on StarterUnavailable catch (e) {
+    // The provider observer records StarterUnavailable; keep what caused it.
+    final cause = e.cause;
+    if (cause != null) recordDownloadError(ref.read(appErrorRingProvider), cause, source: 'onboarding', step: 'starter_pick');
+    rethrow;
+  }
+}, name: 'starterModelProvider');

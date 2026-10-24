@@ -5,3 +5,5 @@ tags:
   # skipped unless SHERPA_ENGINE_LIB and SHERPA_TEST_MODEL are set.
   engine:
     timeout: 10x
+  # Real huggingface.co (test/live/); every test skips unless SHERPA_LIVE_HUB=1.
+  live:

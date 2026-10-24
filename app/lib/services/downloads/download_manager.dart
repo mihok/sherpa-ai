@@ -72,7 +72,9 @@ final class DownloadManager {
     this.transientRetries = 3,
     this.maxRateLimitWait = const Duration(seconds: 60),
     this.persistInterval = const Duration(seconds: 2),
+    void Function(Object error, String code)? onError,
   })  : _store = store,
+        _onError = onError,
         _backend = backend,
         _hubBackend = hubBackend,
         _resolver = resolver,
@@ -107,6 +109,11 @@ final class DownloadManager {
   final IdGenerator _ids;
   final Future<void> Function(Duration) _sleep;
   final Backoff _backoff;
+
+  /// Where failures are reported for diagnostics (the app's error ring):
+  /// the error (or a [DownloadFailure]) and a short code naming the step.
+  /// The user-facing message stays on the job.
+  final void Function(Object error, String code)? _onError;
 
   /// Files at least this big count as "large" for the one-at-a-time rule.
   final int largeFileBytes;
@@ -189,7 +196,13 @@ final class DownloadManager {
     // callers in another zone (UI isolates under test, background handlers)
     // must not depend on the zone the first call ran in.
     if (_ready) return Future<void>.value();
-    return _init ??= _doInit(rehashLibrary);
+    return _init ??= _doInit(rehashLibrary).catchError((Object e, StackTrace s) {
+      // Not cached: a transient failure (storage, the database) must not
+      // refuse every later download until the app restarts.
+      _init = null;
+      _report(e, 'init');
+      Error.throwWithStackTrace(e, s);
+    });
   }
 
   /// Whether [init] has finished.
@@ -301,7 +314,11 @@ final class DownloadManager {
 
   /// Accepts a plan, or refuses it with reasons the UI can show as is.
   Future<EnqueueOutcome> enqueue(DownloadPlan plan, {required DownloadMeta meta}) async {
-    await init();
+    try {
+      await init();
+    } on Object catch (e) {
+      return EnqueueRefused([initFailureMessage(e)]);
+    }
     // Defense in depth: the planner already refuses pickles, but the
     // manager never writes a file whose name fails the allowlist.
     final reasons = <String>[];
@@ -454,6 +471,9 @@ final class DownloadManager {
   Future<void> allowCellular(String jobId) async {
     final job = _jobs[jobId];
     if (job == null) return;
+    // The OS held it for Wi-Fi; mobile data is now allowed, so try again
+    // without waiting for the next network change.
+    _osHeld.remove(jobId);
     _jobs[jobId] = job.copyWith(allowCellular: true, updatedAt: _clock.now());
     await _save(jobId);
     _emit(force: true);
@@ -518,7 +538,7 @@ final class DownloadManager {
       await _runFile(jobId, recordId, a);
     } on Object catch (e) {
       // Programming errors (an illegal transition) must not wedge the queue.
-      await _fail(jobId, recordId, 'Unexpected error: ${e.runtimeType}. Tap Retry.');
+      await _fail(jobId, recordId, 'Unexpected error: ${e.runtimeType}. Tap Retry.', code: 'unexpected', cause: e);
     } finally {
       _active.remove(recordId);
       a.finished.complete();
@@ -597,19 +617,19 @@ final class DownloadManager {
             continue;
           }
           return _fail(jobId, id, 'Hugging Face is rate limiting downloads. Try again in a few minutes; '
-              'signing in to Hugging Face raises the limit.');
+              'signing in to Hugging Face raises the limit.', code: e.code, cause: e);
         } on HubException catch (e) {
           if (e.retryable && transient++ < transientRetries) {
             await _sleep(_backoff.delay(transient));
             continue;
           }
-          return _fail(jobId, id, _hubMessage(e, r.repo));
+          return _fail(jobId, id, _hubMessage(e, r.repo), code: e.code, cause: e);
         }
         if (a.stop != null) return _applyStop(jobId, id, a);
         final problem = _identityProblem(r, resolved);
         if (problem != null) {
           await _deleteQuietly(part.path);
-          return _fail(jobId, id, problem);
+          return _fail(jobId, id, problem, code: 'identity_mismatch');
         }
         final (next, decision) = r.applyResolve(resolved, at: _clock.now());
         r = next;
@@ -649,14 +669,16 @@ final class DownloadManager {
             }
             if (onDisk > r.expectedBytes) {
               await _deleteQuietly(part.path);
-              if (restarts++ >= 2) return _fail(jobId, id, 'The server sent more bytes than the file has.');
+              if (restarts++ >= 2) {
+                return _fail(jobId, id, 'The server sent more bytes than the file has.', code: 'overlong');
+              }
               _put(jobId, r.withProgress(0, at: _clock.now()).transition(DownloadState.resolving, at: _clock.now()));
               continue;
             }
             if (onDisk < r.expectedBytes) {
               // Connection closed early: resume from what arrived.
               if (!progressed && ++resolvesWithoutProgress > maxResolvesWithoutProgress) {
-                return _fail(jobId, id, 'The download keeps stopping early. Tap Retry.');
+                return _fail(jobId, id, 'The download keeps stopping early. Tap Retry.', code: 'short_reads');
               }
               _put(jobId, r.transition(DownloadState.resolving, at: _clock.now()));
               continue;
@@ -670,20 +692,21 @@ final class DownloadManager {
           case TransferHttpError(:final statusCode) when statusCode == 416:
             if (onDisk < r.expectedBytes) {
               await _deleteQuietly(part.path);
-              if (restarts++ >= 2) return _fail(jobId, id, 'The server refused the byte range.');
+              if (restarts++ >= 2) return _fail(jobId, id, 'The server refused the byte range.', code: 'http_416');
               _put(jobId, r.withProgress(0, at: _clock.now()).transition(DownloadState.resolving, at: _clock.now()));
               continue;
             }
           case TransferHttpError(:final statusCode) when resolved.sendAuthorization && (statusCode == 401 || statusCode == 403):
             // Hub origin, not a signed URL: this is access, not expiry.
             return _fail(jobId, id, _hubMessage(
-                HubGatedRepoException('refused', repo: r.repo, statusCode: statusCode), r.repo));
+                HubGatedRepoException('refused', repo: r.repo, statusCode: statusCode), r.repo),
+                code: 'hub_origin_$statusCode');
           case final TransferHttpError e when e.isExpired:
             // R08 §5.2: "403 Auth failed: credentials expired" → re-resolve
             // and continue with Range from the bytes on disk.
             if (!progressed && ++resolvesWithoutProgress > maxResolvesWithoutProgress) {
               return _fail(jobId, id, 'The download link keeps expiring. Check the date and time on this device, '
-                  'then tap Retry.');
+                  'then tap Retry.', code: 'url_expiry_loop');
             }
             _put(jobId, r.transition(DownloadState.resolving, at: _clock.now()));
             continue;
@@ -694,7 +717,7 @@ final class DownloadManager {
               continue;
             }
             return _fail(jobId, id, 'The download server answered HTTP $statusCode'
-                '${message == null || message.isEmpty ? '' : ' (${message.trim()})'}. Tap Retry.');
+                '${message == null || message.isEmpty ? '' : ' (${message.trim()})'}. Tap Retry.', code: 'http_$statusCode');
           case TransferNetworkError():
             final net = _network?.current ?? NetworkKind.unknown;
             if (!net.isOnline) {
@@ -706,9 +729,10 @@ final class DownloadManager {
               _put(jobId, _rec(jobId, id)!.transition(DownloadState.resolving, at: _clock.now()));
               continue;
             }
-            return _fail(jobId, id, 'The connection keeps dropping. Your progress is saved; tap Resume to continue.');
+            return _fail(jobId, id, 'The connection keeps dropping. Your progress is saved; tap Resume to continue.',
+                code: 'connection_dropping');
           case TransferFailed(:final message):
-            return _fail(jobId, id, message);
+            return _fail(jobId, id, message, code: 'transfer_failed');
         }
       } else {
         // Already complete on disk (relaunch after the last byte arrived).
@@ -725,7 +749,7 @@ final class DownloadManager {
       if (a.stop == _Stop.cancel) return;
       if (verdict != null) {
         await _deleteQuietly(part.path);
-        return _fail(jobId, id, verdict);
+        return _fail(jobId, id, verdict, code: 'verify_failed');
       }
       final dest = layout.libraryPath(r.localPath);
       try {
@@ -734,7 +758,8 @@ final class DownloadManager {
         // sees a half-moved model.
         await part.rename(dest);
       } on FileSystemException catch (e) {
-        return _fail(jobId, id, 'Could not move the verified file into the library: ${e.osError?.message ?? e.message}.');
+        return _fail(jobId, id, 'Could not move the verified file into the library: ${e.osError?.message ?? e.message}.',
+            code: 'install_move', cause: e);
       }
       _put(jobId, _rec(jobId, id)!.transition(DownloadState.done, at: _clock.now()));
       await _save(jobId);
@@ -857,7 +882,8 @@ final class DownloadManager {
     await _save(jobId);
   }
 
-  Future<void> _fail(String jobId, String id, String message) async {
+  Future<void> _fail(String jobId, String id, String message, {required String code, Object? cause}) async {
+    _report(cause ?? DownloadFailure(code), code);
     final r = _rec(jobId, id);
     if (r == null) return;
     if (r.state.canTransitionTo(DownloadState.failed)) {
@@ -866,6 +892,26 @@ final class DownloadManager {
     await _save(jobId);
     _emit(force: true);
   }
+
+  void _report(Object error, String code) {
+    try {
+      _onError?.call(error, code);
+    } on Object {
+      // Diagnostics must never break a download.
+    }
+  }
+
+  /// What the user reads when the manager cannot open its library or
+  /// download records (the first step of every download).
+  static String initFailureMessage(Object e) => switch (e) {
+        FileSystemException(:final osError) when osError?.errorCode == 28 =>
+          'This phone is out of storage, so Sherpa could not prepare its model folder. Free up space, then try again.',
+        FileSystemException(:final osError) =>
+          "Sherpa couldn't prepare its model folder (${osError?.message ?? 'file system error'}). "
+              'Free up some space or restart Sherpa, then try again.',
+        _ => "Sherpa couldn't open its downloads list (${e.runtimeType}). Try again; if it keeps happening, "
+            'restart Sherpa and export diagnostics from Settings › About.',
+      };
 
   void _note(String jobId, String notice) {
     final j = _jobs[jobId];
@@ -907,10 +953,12 @@ final class DownloadManager {
         try {
           info = await readLocalGgufHeader(loadAbs);
         } on GgufFormatException catch (e) {
+          _report(e, 'install_gguf');
           _jobs[jobId] = job.copyWith(error: "Downloaded, but llama.cpp can't load it: ${e.message}.", updatedAt: _clock.now());
           await _save(jobId);
           return;
         } on FileSystemException catch (e) {
+          _report(e, 'install_read');
           _jobs[jobId] = job.copyWith(error: 'Downloaded, but the model file could not be read: ${e.message}.');
           await _save(jobId);
           return;
@@ -1088,7 +1136,10 @@ final class DownloadManager {
       };
     } else if (!net.isOnline) {
       phase = JobPhase.waitingForNetwork;
-    } else if (wifi && net == NetworkKind.cellular) {
+    } else if (wifi && (net == NetworkKind.cellular || _osHeld.contains(job.id))) {
+      // Our monitor saw mobile data, or the OS held the transfer for Wi-Fi
+      // (a VPN or other link the monitor can't classify): either way the
+      // user can allow mobile data for this job.
       phase = JobPhase.waitingForWifi;
     } else if (failed != null) {
       phase = JobPhase.failed;
@@ -1135,6 +1186,17 @@ final class DownloadManager {
 }
 
 enum _Stop { pause, cancel, hold }
+
+/// A download step that failed, as the diagnostics ring records it (type and
+/// [code] only; the user-facing message stays on the job).
+final class DownloadFailure implements Exception {
+  const DownloadFailure(this.code);
+
+  final String code;
+
+  @override
+  String toString() => 'DownloadFailure($code)';
+}
 
 /// Bookkeeping for one running file.
 final class _Active {
