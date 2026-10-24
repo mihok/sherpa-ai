@@ -131,8 +131,11 @@ final class ParsedModelName {
 /// size from the repo, `unsloth/Qwen3.8-27B-GGUF` + `mmproj-F16.gguf` takes
 /// everything but the quant from the repo. [revision] carries the branch for
 /// repos that keep variants in branches (`4_25`, `gptq-4bit-32g-actorder_True`).
-ParsedModelName parseModelName(String repoId, {String? fileName, String? revision}) =>
-    _NameParser(repoId, fileName, revision).run();
+/// [repoHints] are format hints the Hub gives the whole repo rather than
+/// its names (`mlx`, `HubModelInfo.formatHints`); they count only when the
+/// names say no format.
+ParsedModelName parseModelName(String repoId, {String? fileName, String? revision, Set<String> repoHints = const {}}) =>
+    _NameParser(repoId, fileName, revision, repoHints).run();
 
 /// Decodes a llama.cpp quant tag (`Q4_K_M`, `UD-Q4_K_XL`, `i1-IQ1_S`,
 /// `fp16`, `Q4_0_4_4`) as written at the end of a GGUF file name. Returns
@@ -360,7 +363,7 @@ final class _Stem {
 }
 
 final class _NameParser {
-  _NameParser(this.repoId, this.fileName, this.revision) {
+  _NameParser(this.repoId, this.fileName, this.revision, this.repoHints) {
     final slash = repoId.indexOf('/');
     owner = slash < 0 ? '' : repoId.substring(0, slash);
     repoName = slash < 0 ? repoId : repoId.substring(slash + 1);
@@ -369,6 +372,7 @@ final class _NameParser {
   final String repoId;
   final String? fileName;
   final String? revision;
+  final Set<String> repoHints;
   late final String owner;
   late final String repoName;
 
@@ -518,6 +522,7 @@ final class _NameParser {
     final hints = {...repo.formatHints, ...?file?.formatHints, ...?branch?.formatHints};
     if (owner.toLowerCase() == 'mlx-community') hints.add('mlx');
     if (owner.toLowerCase() == 'litert-community') hints.add('litert');
+    if (hints.isEmpty) hints.addAll(repoHints);
     if (path == null) {
       format = _formatFromHints(hints, repo, branch);
     } else if (format == ModelFormat.safetensors) {

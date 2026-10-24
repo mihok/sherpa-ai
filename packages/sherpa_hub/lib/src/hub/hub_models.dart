@@ -81,12 +81,19 @@ final class ModelSearchQuery {
     this.tags = const [],
     this.gated,
     this.expand = defaultExpand,
+    this.quantizedFrom,
   });
 
   /// Case-insensitive substring over `author/name`.
   final String? text;
   final HubFormatFilter? format;
   final String? pipelineTag;
+
+  /// Only quantized versions of this repo (`filter=base_model:quantized:<id>`,
+  /// the tag the Hub gives repos that name it as their quantization base):
+  /// the GGUF copies of a Transformers model, say. The id is matched
+  /// exactly, case included.
+  final String? quantizedFrom;
 
   /// Exact namespaces. The API takes one `author`; several are fanned out
   /// into one request each and merged (see `HfHubClient.searchModels`).
@@ -126,7 +133,15 @@ final class ModelSearchQuery {
         tags: tags,
         gated: gated,
         expand: expand,
+        quantizedFrom: quantizedFrom,
       );
+
+  /// Every `filter=` tag of the request, ANDed by the server.
+  List<String> get filterTags => [
+        if (format != null) format!.tag,
+        if (quantizedFrom != null) 'base_model:quantized:$quantizedFrom',
+        ...tags,
+      ];
 }
 
 /// One page plus the opaque cursor for the next (null = last page).
@@ -261,7 +276,29 @@ final class HubModelSummary {
         HubSort.lastModified => lastModified?.millisecondsSinceEpoch ?? 0,
         HubSort.createdAt => createdAt?.millisecondsSinceEpoch ?? 0,
       };
+
+  /// What the Hub says about the repo's format that its name may not
+  /// (`parseModelName`'s `repoHints`; see [hubFormatHints]).
+  Set<String> get formatHints => hubFormatHints(libraryName: libraryName, pipelineTag: pipelineTag, tags: tags);
 }
+
+/// The name parser's format hints from what the Hub says about a whole repo
+/// (`parseModelName`'s `repoHints`, `groupVariants`' `formatHints`): `mlx`
+/// for an MLX conversion of a language model, which is often tagged `mlx`
+/// (or has that `library_name`) without "mlx" in its name. An MLX speech,
+/// image or embedding model gets none: Sherpa's MLX runtime loads language
+/// models only, so its weights stay plain safetensors to Sherpa.
+Set<String> hubFormatHints({String? libraryName, String? pipelineTag, List<String> tags = const []}) {
+  final mlx = libraryName == 'mlx' || tags.contains('mlx');
+  // No pipeline tag: trust only an `mlx` library (mflux image models are
+  // tagged `mlx` too).
+  final language = pipelineTag == null ? libraryName == 'mlx' : _languagePipelines.contains(pipelineTag);
+  return mlx && language ? const {'mlx'} : const {};
+}
+
+/// Pipelines whose MLX conversions mlx-swift-lm's language-model factory
+/// loads (a vision-language checkpoint loads as its text model).
+const Set<String> _languagePipelines = {'text-generation', 'image-text-to-text'};
 
 /// Hub scanner verdicts (R08 §11: `safe`, `unsafe`, `suspicious`,
 /// `unscanned`; repo-level levels `unsafe`, `caution`).
@@ -626,6 +663,37 @@ final class HubModelInfo {
 
   /// All revisions — not a download size.
   final int? usedStorage;
+
+  /// What the Hub says about the repo's format that its file names may
+  /// not ([hubFormatHints]), for `groupVariants` and `parseModelName`.
+  Set<String> get formatHints => hubFormatHints(libraryName: libraryName, pipelineTag: pipelineTag, tags: tags);
+
+  /// The repo this one is a quantized copy of (its `base_model:quantized:`
+  /// tag), when it is one.
+  String? get quantizedFrom {
+    for (final t in tags) {
+      if (t.startsWith(_quantizedTag) && t.length > _quantizedTag.length) return t.substring(_quantizedTag.length);
+    }
+    return null;
+  }
+
+  /// The repo this one names as its base, whatever the relation: the plain
+  /// `base_model:<id>` tag, else the first `base_model:<relation>:<id>`.
+  /// The Hub writes these ids exactly, case included.
+  String? get baseModel {
+    String? related;
+    for (final t in tags) {
+      if (!t.startsWith(_baseTag) || t.length == _baseTag.length) continue;
+      final rest = t.substring(_baseTag.length);
+      final colon = rest.indexOf(':');
+      if (colon < 0) return rest;
+      if (colon < rest.length - 1) related ??= rest.substring(colon + 1);
+    }
+    return related;
+  }
+
+  static const String _quantizedTag = 'base_model:quantized:';
+  static const String _baseTag = 'base_model:';
 }
 
 /// `GET /{repo}/resolve/{rev}/{path}` answered without following redirects.

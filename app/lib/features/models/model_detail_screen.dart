@@ -21,7 +21,9 @@ import '../../services/downloads/downloads.dart';
 import '../../state/ui_preferences.dart';
 import '../diagnostics/app_error_ring.dart';
 import 'hf_account_screen.dart';
-import 'state/directory_controller.dart' show DirectoryError, DirectoryOffline, DirectoryRateLimited, failureOf;
+import 'model_directory_screen.dart' show pushModelBrowser;
+import 'state/directory_controller.dart'
+    show DirectoryError, DirectoryOffline, DirectoryQuery, DirectoryRateLimited, failureOf, formatFilterLabel;
 import 'state/download_errors.dart';
 import 'state/model_fit.dart';
 import 'state/models_providers.dart';
@@ -139,7 +141,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
                         selected: identical(r, selected),
                         trained: shape?.architecture.trainContextLength,
                         shapeLoading: shapeAsync?.isLoading ?? false,
-                        onTap: r.kind == FitBadgeKind.blocked ? null : () => setState(() => _selected = r.variant.id),
+                        onTap: r.unavailable ? null : () => setState(() => _selected = r.variant.id),
                       ),
                   if (assessment != null && assessment.otherFiles.isNotEmpty) _OtherFiles(files: assessment.otherFiles),
                 ],
@@ -147,7 +149,12 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
             ),
           ),
         ),
-        if (selected != null)
+        if (assessment?.notForThisDevice ?? false)
+          _FindVersionsBar(
+            formats: versionFormats(device!.platform),
+            onFind: (format) => unawaited(_findVersions(d, format)),
+          )
+        else if (selected != null)
           _DownloadBar(
             details: d,
             row: selected,
@@ -167,13 +174,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
       haptics.warning();
       if (!await confirmRiskyDownload(context, row)) return;
     }
-    final plan = planDownload(
-      repo: d.id,
-      commit: d.commit,
-      files: [for (final f in d.files) f.file],
-      quant: row.variant.id,
-      repoSecurity: d.security,
-    );
+    final plan = planVariant(d, row);
     if (!mounted) return;
     if (plan is PlanRefused) {
       await _showRefusal(plan.reasons);
@@ -249,6 +250,22 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
     ref
       ..invalidate(modelDetailsProvider(widget.repoId))
       ..invalidate(modelShapeProvider);
+  }
+
+  /// Browse on the [format] versions of this model (the Hub's quantized
+  /// copies of it, or of the model this repo itself copies), over this page
+  /// so back returns here and to the list under it. Onboarding's routes
+  /// send every other route back to onboarding, so there the list is pushed
+  /// outside them, and a download started from it is followed like one
+  /// started here.
+  Future<void> _findVersions(CatalogModelDetails d, HubFormatFilter format) async {
+    final follow = widget.onDownloadStarted;
+    if (follow == null) {
+      await context.push<void>(Routes.modelBrowseVersionsOf(d.versionsBase, format: format.name));
+      return;
+    }
+    final o = await pushModelBrowser(context, query: DirectoryQuery.versionsOf(d.versionsBase, format: format));
+    if (o != null && mounted) follow(o);
   }
 
   void _snack(String message, {SnackBarAction? action}) {
@@ -490,6 +507,8 @@ class _FitSummary extends StatelessWidget {
       text = shapeError is HubGatedRepoException
           ? "Fit can't be checked until you have access: the header is behind the gate."
           : "Couldn't read the model's header to check fit. Sizes below are still real.";
+    } else if (assessment?.notForThisDevice ?? false) {
+      text = assessment!.summary;
     } else if (noPeek && (assessment?.rows.every((r) => r.fit == null) ?? true)) {
       text = 'Fit is checked for GGUF, MLX and LiteRT files only; sizes below are real.';
     } else {
@@ -560,7 +579,7 @@ class _VariantTile extends StatelessWidget {
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final blocked = row.kind == FitBadgeKind.blocked;
+    final blocked = row.unavailable;
     final fit = row.fit;
     final bpw = row.bitsPerWeight;
     final mm = row.mmproj;
@@ -659,8 +678,11 @@ class _VariantTile extends StatelessWidget {
           ],
           if (blocked) ...[
             SizedBox(height: t.space.xs),
+            // A problem with the files reads as one; a format meant for
+            // another device is a plain fact, with what runs here instead.
             for (final r in row.blockedReasons)
               Text(r, style: theme.textTheme.bodySmall?.copyWith(color: SherpaTokens.of(context).semantic.danger)),
+            for (final r in row.unsupportedReasons) Text(r, style: theme.textTheme.bodySmall?.copyWith(color: muted)),
           ],
           if (row.runtimeCacheBytes > 0 && !blocked) ...[
             SizedBox(height: t.space.xs),
@@ -711,6 +733,7 @@ class _VariantTile extends StatelessWidget {
         FitBadgeKind.wontFit => "Won't fit",
         FitBadgeKind.unknown => 'Fit unknown',
         FitBadgeKind.blocked => 'Unavailable',
+        FitBadgeKind.unsupported => "Can't run here",
       },
       row.reason,
       if (ctx != null) 'Up to $ctx tokens of context',
@@ -844,7 +867,7 @@ class _DownloadBar extends ConsumerWidget {
     } else {
       final can = row.canDownload && !starting;
       if (row.kind == FitBadgeKind.wontFit) note = "Won't fit on this device: ${row.reason}";
-      if (row.kind == FitBadgeKind.blocked) note = row.reason;
+      if (row.unavailable) note = row.reason;
       button = FilledButton.icon(
         onPressed: can ? onDownload : null,
         icon: starting
@@ -856,10 +879,44 @@ class _DownloadBar extends ConsumerWidget {
     return _BarFrame(
       children: [
         if (note != null) ...[
-          Text(note, style: theme.textTheme.bodySmall?.copyWith(color: SherpaTokens.of(context).semantic.danger)),
+          Text(note,
+              style: theme.textTheme.bodySmall?.copyWith(
+                  color: row.kind == FitBadgeKind.unsupported ? theme.colorScheme.onSurfaceVariant : t.semantic.danger)),
           SizedBox(height: t.space.sm),
         ],
         ConstrainedBox(constraints: BoxConstraints(minHeight: t.space.minTouchTarget), child: button),
+      ],
+    );
+  }
+}
+
+/// Nothing in the repo runs on this device: instead of a Download button
+/// that can never be pressed, the way to a version that does, one button
+/// per format the summary says to look for (GGUF; and MLX on iPhone).
+class _FindVersionsBar extends StatelessWidget {
+  const _FindVersionsBar({required this.formats, required this.onFind});
+
+  final List<HubFormatFilter> formats;
+  final ValueChanged<HubFormatFilter> onFind;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = SherpaTokens.of(context);
+    return _BarFrame(
+      children: [
+        for (final (i, f) in formats.indexed) ...[
+          if (i > 0) SizedBox(height: t.space.sm),
+          ConstrainedBox(
+            constraints: BoxConstraints(minHeight: t.space.minTouchTarget),
+            child: i == 0
+                ? FilledButton.icon(
+                    onPressed: () => onFind(f),
+                    icon: const Icon(Icons.travel_explore_rounded),
+                    label: Text('Find ${formatFilterLabel(f)} versions'),
+                  )
+                : OutlinedButton(onPressed: () => onFind(f), child: Text('Find ${formatFilterLabel(f)} versions')),
+          ),
+        ],
       ],
     );
   }

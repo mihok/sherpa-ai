@@ -92,6 +92,22 @@ final class CatalogModelDetails {
   final HubModelInfo? info;
 
   RepoVariant? get defaultVariant => defaultVariantOf(variants);
+
+  /// What the Hub says about the repo's format ([HubModelInfo.formatHints]),
+  /// for [groupVariants] and [planDownload] (an MLX conversion is often
+  /// tagged, not named, `mlx`).
+  Set<String> get formatHints => info?.formatHints ?? const {};
+
+  /// The repo whose quantized versions ([ModelSearchQuery.quantizedFrom])
+  /// are other versions of this model: the one this repo is itself a
+  /// quantized copy of; for an MLX or LiteRT conversion that names its base
+  /// another way (`base_model:finetune:`), that base; else this repo. A
+  /// Transformers fine-tune keeps its own id: its versions are its own.
+  String get versionsBase {
+    final conversion =
+        variants.isNotEmpty && variants.every((v) => v.format == ModelFormat.mlx || v.format == ModelFormat.litert);
+    return info?.quantizedFrom ?? (conversion ? info?.baseModel : null) ?? id;
+  }
 }
 
 /// Indirection so the getter above reads naturally.
@@ -129,7 +145,7 @@ final class HfHubCatalog implements ModelCatalog {
         for (final m in page.items)
           CatalogEntry(
             id: m.id,
-            name: parseModelName(m.id),
+            name: parseModelName(m.id, repoHints: m.formatHints),
             downloads: m.downloads,
             likes: m.likes,
             lastModified: m.lastModified,
@@ -151,14 +167,17 @@ final class HfHubCatalog implements ModelCatalog {
     if (commit == null) {
       throw StateError('the Hub returned no commit sha for $modelId');
     }
-    final variants = groupVariants(modelId, info.files, repoSecurity: info.security);
+    final hints = info.formatHints;
+    final variants = groupVariants(modelId, info.files, repoSecurity: info.security, formatHints: hints);
     final template = info.config?.chatTemplate ?? info.gguf?.chatTemplate;
     return CatalogModelDetails(
       id: info.id.isEmpty ? modelId : info.id,
       commit: commit,
-      name: parseModelName(modelId),
+      name: parseModelName(modelId, repoHints: hints),
       variants: variants,
-      files: [for (final f in info.files) CatalogFile(file: f, name: parseModelName(modelId, fileName: f.path))],
+      files: [
+        for (final f in info.files) CatalogFile(file: f, name: parseModelName(modelId, fileName: f.path, repoHints: hints)),
+      ],
       gating: info.gating,
       license: info.cardData?.license,
       cardData: info.cardData,

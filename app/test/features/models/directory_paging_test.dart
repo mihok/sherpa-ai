@@ -6,6 +6,7 @@ import 'package:sherpa/features/models/model_detail_screen.dart';
 import 'package:sherpa/features/models/state/directory_controller.dart';
 import 'package:sherpa/features/models/state/models_providers.dart';
 import 'package:sherpa/routing/routes.dart';
+import 'package:sherpa/services/device/device_profile_source.dart';
 import 'package:sherpa/services/downloads/downloads.dart';
 import 'package:sherpa_hub/sherpa_hub.dart';
 import 'package:sherpa_hub/testing.dart';
@@ -26,6 +27,7 @@ final class CountingCatalog implements ModelCatalog {
 
   final FixtureModelCatalog _inner;
   int searches = 0;
+  final List<ModelSearchQuery> queries = [];
 
   @override
   String get id => _inner.id;
@@ -33,6 +35,7 @@ final class CountingCatalog implements ModelCatalog {
   @override
   Future<HubPage<CatalogEntry>> search(ModelSearchQuery query, {String? cursor}) {
     searches++;
+    queries.add(query);
     return _inner.search(query, cursor: cursor);
   }
 
@@ -91,6 +94,94 @@ void main() {
       await c.read(directoryControllerProvider.notifier).loadMore();
       await _settle(c);
       expect(catalog.searches - before, 2 * (1 + DirectoryController.maxAutoPages) - 1);
+    });
+  });
+
+  group('formats this device runs', () {
+    ProviderContainer onDevice(ModelCatalog catalog, DeviceProfile device) {
+      final c = ProviderContainer(overrides: [
+        modelCatalogProvider.overrideWithValue(catalog),
+        modelRecordStoreProvider.overrideWithValue(InMemoryRecordStore()),
+        deviceProfileSourceProvider.overrideWithValue(FixedDeviceProfileSource(device)),
+      ], retry: noRetry);
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    Future<DirectoryState> open(ProviderContainer c, DirectoryQuery seed) async {
+      final p = directoryControllersProvider(seed);
+      c.listen(p, (_, _) {});
+      for (var i = 0; i < 50; i++) {
+        await pumpEventQueue();
+        final s = c.read(p);
+        if (!s.loading && !s.loadingMore && c.read(deviceProfileProvider).hasValue) break;
+      }
+      return c.read(p);
+    }
+
+    const mlx = DirectoryQuery(format: HubFormatFilter.mlx);
+    const liteRt = DirectoryQuery(format: HubFormatFilter.litert);
+    const iphone = DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib);
+
+    test("a list asked for in a format this phone can't run searches GGUF instead", () async {
+      // The platform known when the list opens…
+      final catalog = CountingCatalog(fixtureEntries);
+      final known = onDevice(catalog, phone12);
+      known.listen(deviceProfileProvider, (_, _) {});
+      await known.read(deviceProfileProvider.future);
+      final s = await open(known, mlx);
+      expect(s.query.format, HubFormatFilter.gguf);
+      expect(catalog.queries.map((q) => q.format).toSet(), {HubFormatFilter.gguf}, reason: 'MLX is never searched for');
+      expect(s.items.map((e) => e.id), contains(llama1b));
+
+      // …or only once it loads.
+      final later = await open(onDevice(CountingCatalog(fixtureEntries), phone12), mlx);
+      expect(later.query.format, HubFormatFilter.gguf);
+      expect(later.items.map((e) => e.id), isNot(contains('mlx-community/Qwen3-8B-4bit')));
+
+      expect((await open(onDevice(CountingCatalog(fixtureEntries), iphone), liteRt)).query.format, HubFormatFilter.gguf);
+    });
+
+    test('formats this device runs, and "any format", stay', () async {
+      expect((await open(onDevice(CountingCatalog(fixtureEntries), iphone), mlx)).query.format, HubFormatFilter.mlx);
+      expect((await open(onDevice(CountingCatalog(fixtureEntries), phone12), liteRt)).query.format, HubFormatFilter.litert);
+      expect(const DirectoryQuery(format: null).runnableOn(DevicePlatform.android).format, isNull);
+      expect(runnableFormats(DevicePlatform.other), [HubFormatFilter.gguf]);
+    });
+
+    test("a repo's versions: the quantized-from filter reaches the Hub query and survives other filters", () {
+      const q = DirectoryQuery.versionsOf('Qwen/Qwen3-0.6B');
+      expect(q.toSearch().quantizedFrom, 'Qwen/Qwen3-0.6B');
+      expect(q.toSearch().format, HubFormatFilter.gguf);
+      expect(q.copyWith(size: SizeBucket.tiny).quantizedFrom, 'Qwen/Qwen3-0.6B');
+      expect(q.copyWith(clearQuantizedFrom: true).toSearch().quantizedFrom, isNull);
+      expect(q == const DirectoryQuery(), isFalse);
+      expect(const DirectoryQuery.versionsOf('Qwen/Qwen3-0.6B', format: HubFormatFilter.mlx).toSearch().format,
+          HubFormatFilter.mlx);
+    });
+
+    test("clearing filters keeps a repo's versions; showing all models drops only that", () async {
+      final c = onDevice(CountingCatalog(fixtureEntries), phone12);
+      const seed = DirectoryQuery.versionsOf(llamaBase);
+      await open(c, seed);
+      final controller = c.read(directoryControllersProvider(seed).notifier)
+        ..update((q) => q.copyWith(size: SizeBucket.tiny, license: 'apache-2.0'));
+      controller.clearFilters();
+      var q = c.read(directoryControllersProvider(seed)).query;
+      expect((q.size, q.license, q.quantizedFrom), (null, null, llamaBase));
+      controller
+        ..update((q) => q.copyWith(size: SizeBucket.tiny))
+        ..clearVersionsOf();
+      q = c.read(directoryControllersProvider(seed)).query;
+      expect((q.size, q.quantizedFrom), (SizeBucket.tiny, null));
+    });
+
+    test('the route opens the list it names: versions in a format, else the default list', () {
+      expect(DirectoryQuery.ofRoute(const {}), const DirectoryQuery());
+      expect(DirectoryQuery.ofRoute(Uri.parse(Routes.modelBrowseVersionsOf(llamaBase)).queryParameters),
+          const DirectoryQuery.versionsOf(llamaBase));
+      expect(DirectoryQuery.ofRoute(Uri.parse(Routes.modelBrowseVersionsOf(llamaBase, format: 'mlx')).queryParameters),
+          const DirectoryQuery.versionsOf(llamaBase, format: HubFormatFilter.mlx));
     });
   });
 

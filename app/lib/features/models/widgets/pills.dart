@@ -215,6 +215,8 @@ class FitBadge extends StatelessWidget {
       FitBadgeKind.wontFit => (estimated ? 'Likely too big' : "Won't fit", Icons.block_rounded, PillTone.danger),
       FitBadgeKind.unknown => ('Fit unknown', Icons.help_outline_rounded, PillTone.neutral),
       FitBadgeKind.blocked => ('Unavailable', Icons.gpp_bad_outlined, PillTone.danger),
+      // Not a fault in the files: the format is for another device.
+      FitBadgeKind.unsupported => ("Can't run here", Icons.do_not_disturb_on_outlined, PillTone.neutral),
     };
     return InfoPill(label: label, icon: icon, tone: tone, explanation: explanation, semanticPrefix: 'Device fit');
   }

@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:sherpa_core/sherpa_core.dart' show ExecutionLocation;
 
-import '../../design/motion.dart';
 import '../../design/tokens.dart';
 import '../../design/widgets/a11y.dart';
 import '../../design/widgets/privacy_badge.dart';
@@ -14,8 +13,7 @@ import '../../services/inference/on_device_ids.dart';
 import '../../services/inference/platform_models.dart' show EngineAvailabilityState;
 import '../../state/services.dart';
 import '../diagnostics/app_error_ring.dart';
-import '../models/model_detail_screen.dart';
-import '../models/model_directory_screen.dart';
+import '../models/model_directory_screen.dart' show pushModelBrowser;
 import '../models/state/download_errors.dart';
 import '../models/state/local_model_choice.dart';
 import '../models/state/local_model_fit.dart';
@@ -119,24 +117,9 @@ class _OnDeviceStepState extends ConsumerState<OnDeviceStep> {
   /// The Hub browser and a repo's page, pushed over onboarding. A download
   /// started there comes back here.
   Future<void> _browse() async {
-    final navigator = Navigator.of(context);
-    final o = await navigator.push<EnqueueOutcome>(MotionPageRoute(
-      builder: (browseContext) => ModelDirectoryScreen(
-        onOpenModel: (id) => unawaited(_openModel(browseContext, id)),
-      ),
-    ));
+    final o = await pushModelBrowser(context);
     if (o == null || !mounted) return;
     await _follow(o);
-  }
-
-  Future<void> _openModel(BuildContext browseContext, String repoId) async {
-    final picked = await Navigator.of(browseContext).push<EnqueueOutcome>(MotionPageRoute(
-      builder: (detailContext) => ModelDetailScreen(
-        repoId: repoId,
-        onDownloadStarted: (o) => Navigator.of(detailContext).pop(o),
-      ),
-    ));
-    if (picked != null && browseContext.mounted) Navigator.of(browseContext).pop(picked);
   }
 
   Future<void> _openLibraryModel(String id) async {

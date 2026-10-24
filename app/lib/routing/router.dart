@@ -18,6 +18,7 @@ import '../features/models/hf_account_screen.dart';
 import '../features/models/model_detail_screen.dart';
 import '../features/models/model_directory_screen.dart';
 import '../features/models/model_library_screen.dart';
+import '../features/models/state/directory_controller.dart' show DirectoryQuery;
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/perf/perf_lab_screen.dart';
 import '../features/settings/about_screen.dart';
@@ -178,11 +179,17 @@ final routerProvider = Provider<GoRouter>((ref) {
                     routes: [
                       GoRoute(
                         path: 'browse',
-                        pageBuilder: (context, state) => SherpaPage<void>(
-                          key: state.pageKey,
-                          restorationId: 'model-browse',
-                          child: const ModelDirectoryScreen(),
-                        ),
+                        pageBuilder: (context, state) {
+                          final query = DirectoryQuery.ofRoute(state.uri.queryParameters);
+                          return SherpaPage<void>(
+                            key: state.pageKey,
+                            // A repo's versions are pushed over another list,
+                            // perhaps over themselves: each page its own id.
+                            restorationId:
+                                query.quantizedFrom == null ? 'model-browse' : 'model-browse-${state.pageKey.value}',
+                            child: ModelDirectoryScreen(initialQuery: query),
+                          );
+                        },
                         routes: [
                           GoRoute(
                             path: ':owner/:name',

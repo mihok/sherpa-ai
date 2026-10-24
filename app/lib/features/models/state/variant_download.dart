@@ -27,6 +27,18 @@ DownloadMeta downloadMetaFor(CatalogModelDetails d, VariantRow row, ModelShape? 
   );
 }
 
+/// The plan for [row] of [d], pinned to its commit, with the repo read the
+/// way its page read it: its Hub tags too ([CatalogModelDetails.formatHints];
+/// an MLX conversion is often tagged, not named, `mlx`).
+PlanOutcome planVariant(CatalogModelDetails d, VariantRow row) => planDownload(
+      repo: d.id,
+      commit: d.commit,
+      files: [for (final f in d.files) f.file],
+      quant: row.variant.id,
+      repoSecurity: d.security,
+      formatHints: d.formatHints,
+    );
+
 /// Plans [row] of [d] pinned to its commit and queues it on [manager]. A
 /// plan the planner refuses comes back as [EnqueueRefused] with its
 /// reasons, like a refusal of the manager's own (storage, which also
@@ -37,13 +49,7 @@ Future<EnqueueOutcome> enqueueVariant(
   VariantRow row,
   ModelShape? shape,
 ) async {
-  final plan = planDownload(
-    repo: d.id,
-    commit: d.commit,
-    files: [for (final f in d.files) f.file],
-    quant: row.variant.id,
-    repoSecurity: d.security,
-  );
+  final plan = planVariant(d, row);
   if (plan is PlanRefused) return EnqueueRefused(plan.reasons);
   return manager.enqueue(plan as DownloadPlan, meta: downloadMetaFor(d, row, shape));
 }

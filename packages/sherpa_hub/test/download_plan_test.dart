@@ -82,8 +82,190 @@ void main() {
           [_small('config.json', 900), _lfs('model-00001-of-00002.safetensors', 3e9.toInt()), _lfs('model-00002-of-00002.safetensors', 2e9.toInt())]);
       expect(gptq.single.usable, isFalse);
       expect(gptq.single.blockedReasons.join(), contains('CUDA'));
+      expect(gptq.single.unsupportedFormat, "Sherpa can't run GPTQ weights (made for CUDA GPUs).");
+      expect(gptq.single.fileProblems, isEmpty, reason: 'the CUDA-only flag only restates the format');
       final onnx = groupVariants('HuggingFaceTB/SmolLM2-135M-Instruct', [_lfs('onnx/model_q4f16.onnx', 1e8.toInt())]);
-      expect(onnx.single.blockedReasons, contains('Sherpa has no ONNX runtime'));
+      expect(onnx.single.blockedReasons, ["Sherpa can't run ONNX models."]);
+      final pickle = groupVariants('mistralai/Mistral-7B-Instruct-v0.1', [_lfs('pytorch_model.bin', 9)]).single;
+      expect(pickle.unsupportedFormat, "Sherpa can't run PyTorch weights (.bin, .pt).");
+      expect(pickle.fileProblems, isNotEmpty, reason: 'unsafe to load is a problem, not a format fact');
+      expect(pickle.fileProblems, everyElement(contains(RegExp('pickle', caseSensitive: false))));
+    });
+
+    // Qwen/Qwen3-0.6B's own listing: plain Transformers weights.
+    final transformers = [
+      _small('config.json', 726),
+      _small('generation_config.json', 239),
+      _lfs('model.safetensors', 1503300328),
+      _small('tokenizer_config.json', 9732),
+      _lfs('tokenizer.json', 11422654),
+      _small('merges.txt', 1671853),
+      _small('vocab.json', 2776833),
+    ];
+
+    test('Transformers weights: blocked with a reason that names the format, and nothing about MLX names', () {
+      final v = groupVariants('Qwen/Qwen3-0.6B', transformers).single;
+      expect(v.runtime, SherpaRuntime.none);
+      expect(v.usable, isFalse);
+      expect(v.unsupportedFormat, "Sherpa can't run Transformers weights (safetensors).");
+      expect(v.blockedReasons, [v.unsupportedFormat]);
+      expect(v.fileProblems, isEmpty);
+      expect(v.blockedReasons.join(), isNot(contains('MLX')));
+      // Real problems stay problems next to it.
+      final noConfig = groupVariants('Qwen/Qwen3-0.6B', [for (final f in transformers) if (f.path != 'config.json') f]).single;
+      expect(noConfig.fileProblems, ['config.json is missing']);
+      const sec = HubRepoSecurity(scansDone: true, filesWithIssues: {'model.safetensors': HubScanStatus.unsafe});
+      expect(groupVariants('Qwen/Qwen3-0.6B', transformers, repoSecurity: sec).single.fileProblems.join(), contains('unsafe'));
+      final refused = planDownload(repo: 'Qwen/Qwen3-0.6B', commit: _commit, files: transformers) as PlanRefused;
+      expect(refused.reasons.join(), isNot(contains('MLX')));
+    });
+
+    test('an MLX conversion named without "mlx" is MLX by its Hub library_name or tags', () {
+      // RecursiveSI/flint-int4: library_name mlx, tagged mlx; no "mlx" in the name.
+      const repo = 'RecursiveSI/flint-int4';
+      final files = [
+        _small('config.json', 1100),
+        _small('tokenizer_config.json', 9700),
+        _lfs('tokenizer.json', 11422654),
+        _lfs('model-00001-of-00002.safetensors', 2e9.toInt()),
+        _lfs('model-00002-of-00002.safetensors', 1e9.toInt()),
+      ];
+      expect(groupVariants(repo, files).single.runtime, SherpaRuntime.none, reason: 'the names alone say safetensors');
+      for (final hints in [
+        hubFormatHints(libraryName: 'mlx', pipelineTag: 'text-generation', tags: const ['mlx', 'safetensors']),
+        hubFormatHints(libraryName: 'mlx', tags: const ['mlx']),
+        hubFormatHints(pipelineTag: 'image-text-to-text', tags: const ['mlx']),
+      ]) {
+        final v = groupVariants(repo, files, formatHints: hints).single;
+        expect(v.format, ModelFormat.mlx, reason: '$hints');
+        expect(v.runtime, SherpaRuntime.mlx);
+        expect(v.usable, isTrue);
+        expect(v.unsupportedFormat, isNull);
+        expect(v.weights, hasLength(2));
+        final plan = planDownload(repo: repo, commit: _commit, files: files, quant: v.id, formatHints: hints);
+        expect(plan, isA<DownloadPlan>().having((p) => p.variant.format, 'format', ModelFormat.mlx));
+      }
+      final transformersHints = hubFormatHints(libraryName: 'transformers', pipelineTag: 'text-generation', tags: const [
+        'transformers',
+        'safetensors',
+      ]);
+      expect(groupVariants('Qwen/Qwen3-0.6B', transformers, formatHints: transformersHints).single.runtime,
+          SherpaRuntime.none, reason: 'only an mlx hint makes safetensors MLX');
+      final noConfig = groupVariants(repo, files.skip(1).toList(), formatHints: const {'mlx'}).single;
+      expect(noConfig.fileProblems, ['config.json is missing'], reason: 'MLX still needs its config');
+    });
+
+    test("an MLX speech, voice or image model's mlx tag does not make it a model Sherpa runs", () {
+      // theoracleguy/whisper-large-v3-turbo: library_name mlx, tagged mlx;
+      // mlx-swift-lm's language-model factory cannot load it.
+      const repo = 'theoracleguy/whisper-large-v3-turbo';
+      final files = [_small('config.json', 1300), _lfs('weights.safetensors', 1617000000)];
+      for (final (pipeline, library) in [
+        ('automatic-speech-recognition', 'mlx'),
+        ('text-to-speech', 'mlx'),
+        ('feature-extraction', 'mlx'),
+        ('text-to-image', 'mflux'),
+        (null, 'mflux'),
+      ]) {
+        final hints = hubFormatHints(libraryName: library, pipelineTag: pipeline, tags: ['mlx', ?pipeline]);
+        expect(hints, isEmpty, reason: '$library $pipeline');
+        final v = groupVariants(repo, files, formatHints: hints).single;
+        expect(v.runtime, SherpaRuntime.none, reason: '$library $pipeline');
+        expect(v.usable, isFalse);
+        expect(planDownload(repo: repo, commit: _commit, files: files, formatHints: hints), isA<PlanRefused>());
+      }
+    });
+
+    test('a tag-only MLX nvfp4 conversion is read as MLX all the way, with no CUDA-only flag', () {
+      // nativ-community/LFM2.5-24B-A2B-Preview-nvfp4: library_name mlx, tagged mlx, text-generation.
+      final files = [
+        _small('config.json', 2100),
+        _small('tokenizer_config.json', 9700),
+        _lfs('tokenizer.json', 4733000),
+        _lfs('model-00001-of-00002.safetensors', 5e9.toInt()),
+        _lfs('model-00002-of-00002.safetensors', 4e9.toInt()),
+      ];
+      final hints = hubFormatHints(libraryName: 'mlx', pipelineTag: 'text-generation', tags: const ['mlx']);
+      final tagged = groupVariants('nativ-community/LFM2.5-24B-A2B-Preview-nvfp4', files, formatHints: hints).single;
+      final named = groupVariants('mlx-community/LFM2.5-24B-A2B-Preview-nvfp4', files).single;
+      expect(tagged.format, ModelFormat.mlx);
+      expect(tagged.usable, isTrue, reason: '${tagged.blockedReasons}');
+      expect(tagged.blockedReasons.join(), isNot(contains('CUDA')));
+      expect(named.usable, isTrue);
+      expect(tagged.label, named.label, reason: 'the same files under an mlx-community name');
+      expect(parseModelName('nativ-community/LFM2.5-24B-A2B-Preview-nvfp4', repoHints: hints).format, ModelFormat.mlx,
+          reason: "the repo's own name reads MLX too");
+      expect(parseModelName('mradermacher/Qwen3.8-27B-OBLITERATED-GGUF', repoHints: const {'mlx'}).format, ModelFormat.gguf,
+          reason: 'a format the name says wins over the tag');
+    });
+
+    test('an MLX folder holding two shard sets side by side is not offered as one model', () {
+      // OBLITERATUS/Qwen3.8-27B-OBLITERATED (library_name mlx): -of-00018,
+      // -of-00028 and an -of-00001 extra in one folder, next to GGUF files.
+      final files = [
+        _small('config.json', 3000),
+        _small('tokenizer_config.json', 9700),
+        _lfs('tokenizer.json', 11422654),
+        for (var i = 1; i <= 18; i++) _lfs('model-${'$i'.padLeft(5, '0')}-of-00018.safetensors', 3e9.toInt()),
+        for (var i = 1; i <= 28; i++) _lfs('model-${'$i'.padLeft(5, '0')}-of-00028.safetensors', 2e9.toInt()),
+        _lfs('model-extra-00001-of-00001.safetensors', 1e8.toInt()),
+        _lfs('Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf', 16e9.toInt()),
+      ];
+      final hints = hubFormatHints(libraryName: 'mlx', pipelineTag: 'text-generation', tags: const ['mlx']);
+      final vs = groupVariants('OBLITERATUS/Qwen3.8-27B-OBLITERATED', files, formatHints: hints);
+      final mlx = vs.singleWhere((v) => v.format == ModelFormat.mlx);
+      expect(mlx.usable, isFalse);
+      expect(mlx.fileProblems, ['This folder holds more than one set of weights (in 1, 18 and 28 parts).']);
+      expect(vs.singleWhere((v) => v.label == 'Q4_K_M').usable, isTrue, reason: 'the GGUF next to it is fine');
+      final one = groupVariants('OBLITERATUS/Qwen3.8-27B-OBLITERATED',
+          [for (final f in files) if (!f.path.contains('-of-00028') && !f.path.contains('extra')) f],
+          formatHints: hints);
+      expect(one.singleWhere((v) => v.format == ModelFormat.mlx).usable, isTrue, reason: 'one set is one model');
+    });
+
+    test('old GGML and MLX .npz files say why nothing runs them, not that they are pickles', () {
+      final ggml = groupVariants('TheBloke/Llama-2-7B-GGML',
+          [_lfs('llama-2-7b.ggmlv3.q4_0.bin', 3825517184), _small('config.json', 29)]).single;
+      expect(ggml.format, ModelFormat.ggml);
+      expect(ggml.blockedReasons, ["Sherpa can't run old GGML files (llama.cpp now reads GGUF)."]);
+      expect(ggml.fileProblems, isEmpty);
+      final npz = groupVariants('mlx-community/mistral-7B-v0.1', [_lfs('weights.npz', 14483498434), _small('config.json', 300)])
+          .single;
+      expect(npz.blockedReasons, ["Sherpa can't run old MLX .npz weights."]);
+      // A real finding about the bytes is still a problem.
+      final sniffed = groupVariants('TheBloke/Llama-2-7B-GGML', [_lfs('llama-2-7b.ggmlv3.q4_0.bin', 9)],
+          sniffedHeads: {'llama-2-7b.ggmlv3.q4_0.bin': Uint8List.fromList([0x80, 0x02, 0x7d, 0x71])}).single;
+      expect(sniffed.fileProblems.join(), contains('Python pickle'));
+    });
+
+    test('TensorFlow Lite and MediaPipe files are not LiteRT-LM: only .litertlm runs', () {
+      final gpt2 = groupVariants('openai-community/gpt2', [
+        _lfs('64.tflite', 248000000),
+        _lfs('64-fp16.tflite', 124000000),
+        _lfs('64-8bits.tflite', 125000000),
+        _small('config.json', 665),
+      ]);
+      expect(gpt2, hasLength(3));
+      for (final v in gpt2) {
+        expect(v.runtime, SherpaRuntime.none, reason: v.id);
+        expect(v.usable, isFalse);
+        expect(v.unsupportedFormat, "Sherpa can't run TensorFlow Lite .tflite files (LiteRT-LM needs a .litertlm file).");
+        expect(v.fileProblems, isEmpty);
+      }
+      final litert = groupVariants('litert-community/Qwen2.5-1.5B-Instruct', [
+        _lfs('Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.task', 1598000000),
+        _lfs('Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm', 1597000000),
+      ]);
+      final byExt = {for (final v in litert) v.weights.single.path.split('.').last: v};
+      expect(byExt['litertlm']!.runtime, SherpaRuntime.litert);
+      expect(byExt['litertlm']!.usable, isTrue);
+      expect(byExt['task']!.runtime, SherpaRuntime.none);
+      expect(byExt['task']!.unsupportedFormat,
+          "Sherpa can't run MediaPipe .task bundles (LiteRT-LM needs a .litertlm file).");
+      expect(
+          planDownload(
+              repo: 'litert-community/Qwen2.5-1.5B-Instruct', commit: _commit, files: [byExt['task']!.weights.single]),
+          isA<PlanRefused>());
     });
   });
 

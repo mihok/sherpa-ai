@@ -11,9 +11,11 @@ import '../../design/widgets/a11y.dart';
 import '../../design/widgets/state_views.dart';
 import '../../routing/routes.dart';
 import '../../services/device/device_profile_source.dart';
+import '../../services/downloads/downloads.dart' show EnqueueOutcome;
 import '../../state/connectivity.dart';
 import '../../state/ui_preferences.dart';
 import 'hf_account_screen.dart';
+import 'model_detail_screen.dart';
 import 'state/directory_controller.dart';
 import 'state/model_fit.dart';
 import 'state/models_providers.dart';
@@ -26,7 +28,7 @@ import 'widgets/model_card.dart';
 /// hidden results always said out loud), and every card's size and fit
 /// labelled as an estimate until the detail page reads real file sizes.
 class ModelDirectoryScreen extends ConsumerStatefulWidget {
-  const ModelDirectoryScreen({super.key, this.onOpenModel});
+  const ModelDirectoryScreen({super.key, this.onOpenModel, this.initialQuery = const DirectoryQuery()});
 
   /// Set when the browser is opened from onboarding (outside the app's
   /// routes): opens a repo there instead of on the Browse route, hides the
@@ -34,18 +36,53 @@ class ModelDirectoryScreen extends ConsumerStatefulWidget {
   /// the Hugging Face account screen on top of the list.
   final ValueChanged<String>? onOpenModel;
 
+  /// What the list opens on: [DirectoryQuery.versionsOf] from a model page
+  /// whose files don't run on this device. Each one is a list of its own
+  /// ([directoryControllersProvider]).
+  final DirectoryQuery initialQuery;
+
   @override
   ConsumerState<ModelDirectoryScreen> createState() => _ModelDirectoryScreenState();
 }
 
+/// The Hub browser pushed over onboarding (outside the app's routes), on
+/// [query], with a repo's page pushed over it in turn. Resolves to what a
+/// download started there came to, or null when the user backs out.
+Future<EnqueueOutcome?> pushModelBrowser(BuildContext context, {DirectoryQuery query = const DirectoryQuery()}) =>
+    Navigator.of(context).push<EnqueueOutcome>(MotionPageRoute(
+      builder: (browseContext) => ModelDirectoryScreen(
+        initialQuery: query,
+        onOpenModel: (id) => unawaited(_pushModel(browseContext, id)),
+      ),
+    ));
+
+Future<void> _pushModel(BuildContext browseContext, String repoId) async {
+  final picked = await Navigator.of(browseContext).push<EnqueueOutcome>(MotionPageRoute(
+    builder: (detailContext) => ModelDetailScreen(
+      repoId: repoId,
+      onDownloadStarted: (o) => Navigator.of(detailContext).pop(o),
+    ),
+  ));
+  if (picked != null && browseContext.mounted) Navigator.of(browseContext).pop(picked);
+}
+
 class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
-  final TextEditingController _search = TextEditingController();
+  late final TextEditingController _search = TextEditingController(text: widget.initialQuery.text);
   final ScrollController _scroll = ScrollController();
+
+  NotifierProvider<DirectoryController, DirectoryState> get _provider => directoryControllersProvider(widget.initialQuery);
 
   @override
   void initState() {
     super.initState();
     _scroll.addListener(_maybeLoadMore);
+  }
+
+  @override
+  void didUpdateWidget(ModelDirectoryScreen old) {
+    super.didUpdateWidget(old);
+    // The route opened another list (a repo's versions) on this page.
+    if (old.initialQuery != widget.initialQuery) _search.text = ref.read(_provider).query.text;
   }
 
   @override
@@ -57,14 +94,14 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
 
   void _maybeLoadMore() {
     if (!_scroll.hasClients) return;
-    if (_scroll.position.extentAfter < 800) unawaited(ref.read(directoryControllerProvider.notifier).loadMore());
+    if (_scroll.position.extentAfter < 800) unawaited(ref.read(_provider.notifier).loadMore());
   }
 
   @override
   Widget build(BuildContext context) {
     final t = SherpaTokens.of(context);
-    final s = ref.watch(directoryControllerProvider);
-    final controller = ref.read(directoryControllerProvider.notifier);
+    final s = ref.watch(_provider);
+    final controller = ref.read(_provider.notifier);
     final jobs = ref.watch(downloadJobsProvider).value ?? const [];
     final running = jobs.where((j) => j.phase.isActive || j.phase.isWaiting).length;
 
@@ -96,8 +133,10 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
               semanticChildCount: s.items.isEmpty ? null : s.items.length,
               slivers: [
                 SliverToBoxAdapter(child: _SearchField(controller: _search, onChanged: controller.setText)),
-                const SliverToBoxAdapter(child: _QuantizerRow()),
-                const SliverToBoxAdapter(child: _FilterRow()),
+                if (s.query.quantizedFrom case final base?)
+                  SliverToBoxAdapter(child: _VersionsOfRow(repoId: base, onClear: controller.clearVersionsOf)),
+                SliverToBoxAdapter(child: _QuantizerRow(provider: _provider)),
+                SliverToBoxAdapter(child: _FilterRow(provider: _provider)),
                 if (s.hiddenUncensored > 0 || s.showUncensored)
                   SliverToBoxAdapter(child: _ContentFilterNote(hidden: s.hiddenUncensored, showing: s.showUncensored)),
                 if (s.query.repoId case final id? when !s.items.any((e) => e.id.toLowerCase() == id.toLowerCase()))
@@ -115,6 +154,10 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
     final open = widget.onOpenModel;
     if (open != null) {
       open(repoId);
+    } else if (widget.initialQuery.quantizedFrom != null) {
+      // A repo's versions open over the page that asked for them; a
+      // version's page goes on top in turn, so back retraces the way.
+      unawaited(context.push<void>(Routes.modelDetail(repoId)));
     } else {
       context.go(Routes.modelDetail(repoId));
     }
@@ -129,7 +172,7 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
       return;
     }
     await Navigator.of(context).push<void>(MotionPageRoute(builder: (_) => const HuggingFaceAccountScreen()));
-    if (mounted) unawaited(ref.read(directoryControllerProvider.notifier).refresh());
+    if (mounted) unawaited(ref.read(_provider.notifier).refresh());
   }
 
   List<Widget> _results(BuildContext context, DirectoryState s, DirectoryController c) {
@@ -159,6 +202,7 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
           hasScrollBody: false,
           child: _FailureView(
             failure: offline ? const DirectoryOffline() : failure!,
+            onRetry: c.refresh,
             onSignIn: () => unawaited(_signIn(context)),
           ),
         ),
@@ -167,13 +211,26 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
     final items = s.items;
     if (items.isEmpty) {
       final filtered = s.query.activeFilterCount > 0 || s.query.authors.isNotEmpty;
+      final versions = s.query.quantizedFrom != null;
       final searching = s.loadingMore;
+      // What widens the list, nearest first: fewer filters, then (for a
+      // repo's versions) every model. "Search further" leads while the Hub
+      // has more.
+      final ways = [
+        if (filtered) ('Clear filters', c.clearFilters),
+        if (versions) ('Show all models', c.clearVersionsOf),
+      ];
+      final others = s.hasMore ? ways : ways.skip(1);
       return [
         SliverFillRemaining(
           hasScrollBody: false,
           child: EmptyState(
             icon: Icons.travel_explore_outlined,
-            title: searching ? 'Searching more results…' : 'No models match',
+            title: searching
+                ? 'Searching more results…'
+                : versions
+                    ? 'No versions found'
+                    : 'No models match',
             message: _emptyMessage(s, filtered: filtered),
             // The filters ran over the pages loaded so far; the Hub has more.
             primaryAction: s.hasMore
@@ -184,12 +241,10 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
                         : const Icon(Icons.manage_search_rounded),
                     label: const Text('Search further'),
                   )
-                : filtered
-                    ? FilledButton.tonal(onPressed: c.clearFilters, child: const Text('Clear filters'))
-                    : null,
-            secondaryAction: s.hasMore && filtered
-                ? TextButton(onPressed: c.clearFilters, child: const Text('Clear filters'))
-                : null,
+                : ways.isEmpty
+                    ? null
+                    : FilledButton.tonal(onPressed: ways.first.$2, child: Text(ways.first.$1)),
+            secondaryAction: others.isEmpty ? null : TextButton(onPressed: others.first.$2, child: Text(others.first.$1)),
           ),
         ),
       ];
@@ -240,8 +295,45 @@ String _emptyMessage(DirectoryState s, {required bool filtered}) {
   ];
   final more = s.hasMore ? ' Hugging Face has more results to search.' : '';
   if (parts.isNotEmpty) return '${parts.join(', and ')}.$more';
+  if (q.quantizedFrom case final base?) {
+    final kind = q.format == null ? '' : '${formatFilterLabel(q.format!)} ';
+    final narrowed = filtered || q.text.trim().isNotEmpty ? ' that match this search and these filters' : '';
+    return 'Hugging Face lists no ${kind}versions of $base$narrowed yet.$more';
+  }
   if (filtered) return 'Try fewer filters, another quantizer, or a broader search.$more';
   return 'Try another search, such as "qwen", "gemma" or "llama", or paste a Hugging Face link.$more';
+}
+
+/// "Quantized from Qwen/Qwen3-0.6B": only repos the Hub tags as quantized
+/// from that one are listed until "Show all models" clears it. The heading
+/// says what the tag says; a fine-tune can carry it too.
+class _VersionsOfRow extends StatelessWidget {
+  const _VersionsOfRow({required this.repoId, required this.onClear});
+
+  final String repoId;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = SherpaTokens.of(context);
+    final theme = Theme.of(context);
+    return Padding(
+      padding: EdgeInsetsDirectional.fromSTEB(t.space.lg, 0, t.space.sm, 0),
+      child: Row(
+        children: [
+          Icon(Icons.account_tree_outlined, size: 18, color: theme.colorScheme.primary),
+          SizedBox(width: t.space.sm),
+          Expanded(
+            child: Tooltip(
+              message: 'Hugging Face repos tagged as quantized from $repoId. Some may be fine-tunes of it.',
+              child: Text('Quantized from $repoId', style: theme.textTheme.titleSmall),
+            ),
+          ),
+          TextButton(onPressed: onClear, child: const Text('Show all models')),
+        ],
+      ),
+    );
+  }
 }
 
 /// "Open Qwen/Qwen3-0.6B-GGUF" when the search is a repo id or a pasted
@@ -316,15 +408,17 @@ class _SearchField extends StatelessWidget {
 /// Pinned publishers. Tapping one narrows results to their uploads;
 /// several fan out into one request each (R08 §2.1: `author` is exact).
 class _QuantizerRow extends ConsumerWidget {
-  const _QuantizerRow();
+  const _QuantizerRow({required this.provider});
+
+  final NotifierProvider<DirectoryController, DirectoryState> provider;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
     final prefs = ref.watch(modelBrowserPrefsProvider);
-    final selected = ref.watch(directoryControllerProvider.select((s) => s.query.authors));
-    final c = ref.read(directoryControllerProvider.notifier);
+    final selected = ref.watch(provider.select((s) => s.query.authors));
+    final c = ref.read(provider.notifier);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -390,24 +484,34 @@ class _QuantizerRow extends ConsumerWidget {
 }
 
 class _FilterRow extends ConsumerWidget {
-  const _FilterRow();
+  const _FilterRow({required this.provider});
+
+  final NotifierProvider<DirectoryController, DirectoryState> provider;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final t = SherpaTokens.of(context);
-    final q = ref.watch(directoryControllerProvider.select((s) => s.query));
-    final c = ref.read(directoryControllerProvider.notifier);
+    final q = ref.watch(provider.select((s) => s.query));
+    final c = ref.read(provider.notifier);
+    // Only the formats this device runs: an Android phone is never offered
+    // MLX, nor an iPhone LiteRT-LM.
+    final formats = runnableFormats(ref.watch(deviceProfileProvider.select((d) => d.value?.platform)));
     void pick(DirectoryQuery Function(DirectoryQuery) f) {
       ref.read(hapticsProvider).selection();
       c.update(f);
     }
 
-    Widget format(HubFormatFilter f, String label, String tip) => Padding(
+    Widget format(HubFormatFilter f) => Padding(
           padding: EdgeInsetsDirectional.only(end: t.space.sm),
           child: Tooltip(
-            message: tip,
+            message: switch (f) {
+              HubFormatFilter.gguf => 'llama.cpp files: run on Android and iPhone',
+              HubFormatFilter.mlx => 'Apple MLX: iPhone and iPad only',
+              HubFormatFilter.litert => 'Google LiteRT-LM: Android only, some builds per chip',
+              HubFormatFilter.tflite || HubFormatFilter.onnx => formatFilterLabel(f),
+            },
             child: ChoiceChip(
-              label: Text(label),
+              label: Text(formatFilterLabel(f)),
               selected: q.format == f,
               onSelected: (on) => pick((x) => on ? x.copyWith(format: f) : x.copyWith(clearFormat: true)),
             ),
@@ -420,9 +524,7 @@ class _FilterRow extends ConsumerWidget {
         scrollDirection: Axis.horizontal,
         padding: EdgeInsets.symmetric(horizontal: t.space.lg, vertical: t.space.xs),
         children: [
-          format(HubFormatFilter.gguf, 'GGUF', 'llama.cpp files: run on Android and iPhone'),
-          format(HubFormatFilter.mlx, 'MLX', 'Apple MLX: iPhone and iPad only'),
-          format(HubFormatFilter.litert, 'LiteRT', 'Google LiteRT-LM: Android only, some builds per chip'),
+          for (final f in formats) format(f),
           SizedBox(width: t.space.xs),
           _MenuChip<SizeBucket>(
             label: q.size?.label ?? 'Size',
@@ -591,19 +693,19 @@ class _ListFooter extends StatelessWidget {
   }
 }
 
-class _FailureView extends ConsumerWidget {
-  const _FailureView({required this.failure, required this.onSignIn});
+class _FailureView extends StatelessWidget {
+  const _FailureView({required this.failure, required this.onRetry, required this.onSignIn});
 
   final DirectoryFailure failure;
+  final Future<void> Function() onRetry;
   final VoidCallback onSignIn;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final c = ref.read(directoryControllerProvider.notifier);
+  Widget build(BuildContext context) {
     return switch (failure) {
       DirectoryOffline() => OfflineState(
           message: "Browsing needs a connection. Models you've already downloaded work offline.",
-          onRetry: () => unawaited(c.refresh()),
+          onRetry: () => unawaited(onRetry()),
         ),
       DirectoryRateLimited(:final retryAfter) => StateView(
           icon: Icons.hourglass_top_rounded,
@@ -614,7 +716,7 @@ class _FailureView extends ConsumerWidget {
               '${retryAfter == null ? '' : '; try again in ${retryAfter.inSeconds < 90 ? '${retryAfter.inSeconds} s' : '${(retryAfter.inSeconds / 60).ceil()} min'}'}. '
               'Signing in to Hugging Face raises the limit.',
           primaryAction: FilledButton.tonalIcon(
-            onPressed: () => unawaited(c.refresh()),
+            onPressed: () => unawaited(onRetry()),
             icon: const Icon(Icons.refresh),
             label: const Text('Try again'),
           ),
@@ -623,7 +725,7 @@ class _FailureView extends ConsumerWidget {
       DirectoryError(:final message) => ErrorState(
           title: "Couldn't load models",
           message: message,
-          onRetry: () => unawaited(c.refresh()),
+          onRetry: () => unawaited(onRetry()),
         ),
     };
   }

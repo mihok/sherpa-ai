@@ -89,6 +89,55 @@ void main() {
     expect((session.providerId, session.modelId), (localProviderId, model.id));
   }, timeout: const Timeout(Duration(minutes: 2)));
 
+  testWidgets(
+      'onboarding: a page with nothing for this phone finds its GGUF versions over itself, and a download there is '
+      'followed', (tester) async {
+    final rig = await ModelsRig.create(tester, onboarded: false, details: <String, CatalogModelDetails>{});
+    rig.catalog.detailsById[llama1b] = fixtureDetails(llama1b, [for (final f in rig.hub.files.values) f.listing]);
+    rig.catalog.detailsById[llamaBase] = fixtureDetails(llamaBase, llamaBaseFiles);
+    await rig.pump(tester);
+    await _toOnDeviceStep(tester);
+    final browse = find.textContaining(RegExp(r'^Choose (a|another) model from Hugging Face$'));
+    await tester.ensureVisible(browse);
+    await tester.tap(browse);
+    await tester.pumpAndSettle();
+
+    Future<void> openBase() async {
+      await tester.tap(find.text('Open $llamaBase'));
+      await settleUntil(tester, () => find.text('Find GGUF versions').evaluate().isNotEmpty, what: "the base model's page");
+      await tester.tap(find.text('Find GGUF versions'));
+      await tester.pumpAndSettle();
+    }
+
+    await tester.enterText(find.byType(TextField).first, llamaBase);
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    await openBase();
+    expect(find.text('Quantized from $llamaBase'), findsOneWidget, reason: 'a list of its versions, over the page');
+    expect(find.byTooltip('Downloads'), findsNothing, reason: 'still the onboarding browser');
+
+    // Back twice: the first list is as it was.
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byWidgetPredicate((w) => w is ModelDetailScreen && w.repoId == llamaBase), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Quantized from $llamaBase'), findsNothing);
+    expect(find.text('Open $llamaBase'), findsOneWidget, reason: 'the search typed there is kept');
+    expect(rig.app.prefs.onboardingComplete, isFalse);
+
+    await openBase();
+    await tester.tap(find.textContaining('Llama 3.2').first);
+    await settleUntil(tester, () => find.textContaining(RegExp(r'^Download Q')).evaluate().isNotEmpty,
+        what: "the version's Download button");
+    await tester.tap(find.textContaining(RegExp(r'^Download Q')));
+
+    // Back on onboarding, following that download, then into the chat.
+    await settleUntil(tester, () => rig.app.prefs.onboardingComplete, what: 'onboarding done');
+    await settleUntil(tester, () => find.textContaining('chat:').evaluate().isNotEmpty, what: 'the chat');
+    expect(rig.library.models.single.repo, llama1b);
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
   testWidgets('when no starter model can be picked, browsing Hugging Face is the way forward', (tester) async {
     final rig = await ModelsRig.create(tester, onboarded: false, details: <String, CatalogModelDetails>{});
     await rig.pump(tester);

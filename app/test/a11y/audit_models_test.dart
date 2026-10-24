@@ -75,6 +75,24 @@ void main() {
     await rigAt(tester, view, Routes.modelDetail(llama1b),
         details: {llama1b: fixtureDetails(llama1b, llama1bFiles, gating: HubGating.manual)});
   }, pixelContrastSkip: _oneX, contrastNote: _note);
+  auditScreen('model detail, nothing runs on this phone', (tester, view) async {
+    await rigAt(tester, view, Routes.modelDetail(llamaBase), details: {llamaBase: fixtureDetails(llamaBase, llamaBaseFiles)});
+    expect(find.text('Find GGUF versions'), findsOneWidget);
+  }, pixelContrastSkip: _oneX, contrastNote: _note);
+  auditScreen('model detail, nothing runs on this iPhone: GGUF and MLX versions', (tester, view) async {
+    await rigAt(tester, view, Routes.modelDetail(llamaBase),
+        device: const DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib, freeStorageBytes: 80 * gib),
+        details: {llamaBase: fixtureDetails(llamaBase, llamaBaseFiles)});
+    expect(find.text('Find MLX versions'), findsOneWidget);
+  }, pixelContrastSkip: _oneX, contrastNote: _note);
+  auditScreen("browse, a repo's GGUF versions", (tester, view) async {
+    await rigAt(tester, view, Routes.modelBrowseVersionsOf(llamaBase));
+    expect(find.text('Quantized from $llamaBase'), findsOneWidget);
+  });
+  auditScreen('browse, no versions found', (tester, view) async {
+    await rigAt(tester, view, Routes.modelBrowseVersionsOf('acme/Brand-New-1B'));
+    expect(find.text('No versions found'), findsOneWidget);
+  });
   auditScreen('memory will be tight sheet', (tester, view) async {
     await rigAt(tester, view, Routes.modelDetail(llama1b), device: phone4);
     final row = find.widgetWithText(InkWell, 'Q4_K_M');

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sherpa/features/models/state/model_fit.dart';
+import 'package:sherpa/features/models/state/variant_download.dart';
 import 'package:sherpa/features/models/widgets/fit_explain.dart';
 import 'package:sherpa/features/models/widgets/format.dart';
 import 'package:sherpa_hub/sherpa_hub.dart';
@@ -36,9 +37,11 @@ void main() {
       const HubRepoFile(path: 'config.json', size: 900, oid: 'b'),
     ]);
     final android = assessVariants(d, phone12);
-    expect(android.rows.single.kind, FitBadgeKind.blocked);
-    expect(android.rows.single.reason, contains('iPhone and iPad only'));
+    expect(android.rows.single.kind, FitBadgeKind.unsupported, reason: 'not for this phone, but nothing is broken');
+    expect(android.rows.single.reason, 'MLX models run on iPhone and iPad only.');
     expect(android.rows.single.canDownload, isFalse);
+    expect(android.notForThisDevice, isTrue);
+    expect(android.summary, startsWith('Nothing in this repository runs on Android.'));
     const ios = DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib);
     final onIos = assessVariants(d, ios);
     expect(onIos.rows.single.kind, FitBadgeKind.fits, reason: 'sized from its files');
@@ -75,8 +78,150 @@ void main() {
     expect(row.runtimeCacheBytes, 584 << 20);
     expect(fitBreakdown(row.fit!, runtime: SherpaRuntime.litert), contains('CPU weight cache'));
     final onIos = assessVariants(d, const DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib)).rows.single;
-    expect(onIos.kind, FitBadgeKind.blocked, reason: 'LiteRT on iOS stays blocked');
+    expect(onIos.kind, FitBadgeKind.unsupported, reason: 'LiteRT on iOS stays unavailable');
     expect(onIos.reason, 'LiteRT-LM models run on Android only.');
+  });
+
+  test('an MLX conversion known by its Hub tags fits an iPhone and its download is planned the same way', () {
+    const repo = 'RecursiveSI/flint-int4';
+    final d = fixtureDetails(repo, [
+      f('model.safetensors', 2 << 30),
+      const HubRepoFile(path: 'config.json', size: 900, oid: 'b'),
+      const HubRepoFile(path: 'tokenizer_config.json', size: 9700, oid: 'c'),
+    ], libraryName: 'mlx', tags: const ['mlx', 'safetensors']);
+    final row = assessVariants(d, const DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib)).rows.single;
+    expect(row.variant.runtime, SherpaRuntime.mlx);
+    expect(row.kind, FitBadgeKind.fits);
+    final plan = planVariant(d, row);
+    expect(plan, isA<DownloadPlan>().having((p) => p.variant.format, 'format', ModelFormat.mlx),
+        reason: 'planned with the tags the page used, not refused as "No mlx variant"');
+    expect(assessVariants(d, phone12).rows.single.reason, 'MLX models run on iPhone and iPad only.');
+  });
+
+  group('a format this device does not run', () {
+    const iphone = DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib);
+
+    test('Transformers weights on Android: names the format and what Android runs, and points to GGUF', () {
+      final a = assessVariants(fixtureDetails(llamaBase, llamaBaseFiles), phone12);
+      final row = a.rows.single;
+      expect(row.kind, FitBadgeKind.unsupported);
+      expect(row.canDownload, isFalse);
+      expect(row.unavailable, isTrue);
+      expect(row.blockedReasons, isEmpty, reason: 'nothing is wrong with the files');
+      expect(row.unsupportedReasons, ["Sherpa can't run Transformers weights (safetensors)."],
+          reason: 'what runs here and what to look for are said once, in the summary');
+      expect([row.reason, a.summary].join(), isNot(contains('MLX')), reason: 'nothing about iPhone-only formats');
+      expect(a.notForThisDevice, isTrue);
+      expect(a.summary,
+          'Nothing in this repository runs on Android. Sherpa on Android runs GGUF and LiteRT-LM models. '
+          'Look for a GGUF version of this model.');
+    });
+
+    test('on an iPhone the same repo names GGUF and MLX, and offers versions in both', () {
+      final a = assessVariants(fixtureDetails(llamaBase, llamaBaseFiles), iphone);
+      expect(a.rows.single.unsupportedReasons, ["Sherpa can't run Transformers weights (safetensors)."]);
+      expect(a.summary,
+          'Nothing in this repository runs on iPhone or iPad. Sherpa on iPhone and iPad runs GGUF and MLX models. '
+          'Look for a GGUF or MLX version of this model.');
+      expect(versionFormats(DevicePlatform.ios), [HubFormatFilter.gguf, HubFormatFilter.mlx]);
+      expect(versionFormats(DevicePlatform.android), [HubFormatFilter.gguf]);
+    });
+
+    test('a repo of many unrunnable files says where to look once, not on every row', () {
+      // onnx-community/Qwen3-0.6B-ONNX: one row per ONNX file.
+      final d = fixtureDetails('onnx-community/Qwen3-0.6B-ONNX', [
+        for (final q in ['model', 'model_fp16', 'model_int8', 'model_q4', 'model_q4f16']) f('onnx/$q.onnx', 600 << 20),
+      ]);
+      final a = assessVariants(d, phone12);
+      expect(a.rows, hasLength(5));
+      expect(a.notForThisDevice, isTrue);
+      const lookFor = 'Look for a GGUF version of this model.';
+      final said = [a.summary, for (final r in a.rows) ...r.unsupportedReasons, for (final r in a.rows) r.reason];
+      expect(said.where((x) => x.contains(lookFor)), hasLength(1));
+      expect(said.where((x) => x.contains('Sherpa on Android runs')), hasLength(1));
+      expect(a.rows.first.reason, "Sherpa can't run ONNX models.");
+    });
+
+    test('a broken GGUF upload is not blamed on the platform', () {
+      final d = fixtureDetails('acme/Thing-1B-GGUF', [f('Thing-1B-Q4_K_M-00001-of-00002.gguf', 400 << 20), f('pytorch_model.bin', 1000)]);
+      final a = assessVariants(d, phone12);
+      expect(a.rows.every((r) => r.unavailable), isTrue);
+      expect(a.notForThisDevice, isFalse, reason: 'GGUF runs here; its missing part is the story');
+      expect(a.summary, 'Nothing in this repository can run in Sherpa.');
+      final gguf = a.rows.firstWhere((r) => r.variant.runtime == SherpaRuntime.llamaCpp);
+      expect(gguf.kind, FitBadgeKind.blocked);
+      expect(gguf.reason, 'Missing part(s) 2 of 2.');
+    });
+
+    test("old GGML files read as a format Sherpa can't run, not as pickles", () {
+      final d = fixtureDetails('TheBloke/Llama-2-7B-GGML', [f('llama-2-7b.ggmlv3.q4_0.bin', 3825517184), f('llama-2-7b.ggmlv3.q8_0.bin', 7160799872)]);
+      for (final device in [phone12, iphone]) {
+        final a = assessVariants(d, device);
+        for (final r in a.rows) {
+          expect(r.kind, FitBadgeKind.unsupported, reason: '${device.platform} ${r.label}');
+          expect(r.reason, "Sherpa can't run old GGML files (llama.cpp now reads GGUF).");
+          expect(r.blockedReasons, isEmpty);
+        }
+      }
+    });
+
+    test('TensorFlow Lite files are not offered on Android as LiteRT-LM', () {
+      final d = fixtureDetails('openai-community/gpt2', [
+        f('64.tflite', 248000000),
+        f('64-fp16.tflite', 124000000),
+        f('model.safetensors', 548000000),
+        const HubRepoFile(path: 'config.json', size: 665, oid: 'b'),
+      ]);
+      final a = assessVariants(d, phone12);
+      expect(a.rows.where((r) => r.canDownload), isEmpty);
+      expect(a.rows.where((r) => r.variant.weights.first.path.endsWith('.tflite')).map((r) => r.reason).toSet(),
+          {"Sherpa can't run TensorFlow Lite .tflite files (LiteRT-LM needs a .litertlm file)."});
+      expect(a.notForThisDevice, isTrue);
+      final onIos = assessVariants(d, iphone).rows.firstWhere((r) => r.variant.weights.first.path == '64.tflite');
+      expect(onIos.reason, isNot(contains('Android only')), reason: 'they do not run on Android either');
+    });
+
+    test('an MLX speech model tagged mlx is not offered on an iPhone as a model MLX loads', () {
+      final d = fixtureDetails('theoracleguy/whisper-large-v3-turbo', [
+        f('weights.safetensors', 1617000000),
+        const HubRepoFile(path: 'config.json', size: 1300, oid: 'b'),
+      ], libraryName: 'mlx', pipelineTag: 'automatic-speech-recognition', tags: const ['mlx', 'automatic-speech-recognition']);
+      final row = assessVariants(d, iphone).rows.single;
+      expect(row.kind, FitBadgeKind.unsupported);
+      expect(row.canDownload, isFalse);
+    });
+
+    test('a real problem stays a problem next to it; a repo with something that runs is not "not for this device"', () {
+      const sec = HubRepoSecurity(scansDone: true, filesWithIssues: {'model.safetensors': HubScanStatus.unsafe});
+      final unsafe = assessVariants(fixtureDetails(llamaBase, llamaBaseFiles, security: sec), phone12);
+      expect(unsafe.rows.single.kind, FitBadgeKind.blocked);
+      expect(unsafe.rows.single.blockedReasons.join(), contains('unsafe'));
+      expect(unsafe.rows.single.unsupportedReasons, isNotEmpty);
+      expect(unsafe.notForThisDevice, isTrue, reason: 'a GGUF version is still the way forward');
+
+      final gguf = assessVariants(fixtureDetails(llama1b, [...llama1bFiles, f('pytorch_model.bin', 1000)]), phone12,
+          shape: llama1bShape);
+      expect(gguf.rows.last.unsupportedReasons.last, 'Sherpa on Android runs GGUF and LiteRT-LM models.',
+          reason: 'the GGUF variants above are the answer, not another repo');
+      expect(gguf.notForThisDevice, isFalse);
+      expect(gguf.summary, startsWith('Q8_0 is the best quality'));
+    });
+  });
+
+  test('a tag-only MLX nvfp4 conversion runs on an iPhone like its mlx-community twin', () {
+    const iphone = DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib);
+    final files = [
+      f('model.safetensors', 600 << 20),
+      const HubRepoFile(path: 'config.json', size: 1300, oid: 'b'),
+    ];
+    final a = assessVariants(
+        fixtureDetails('npario/MiniCPM-V-4.7-1B-nvfp4', files,
+            libraryName: 'mlx', pipelineTag: 'text-generation', tags: const ['mlx', 'text-generation']),
+        iphone);
+    expect(a.rows.single.kind, FitBadgeKind.fits, reason: a.rows.single.reason);
+    expect(a.summary, isNot(contains('Nothing')));
+    expect(assessVariants(fixtureDetails('mlx-community/MiniCPM-V-4.7-1B-nvfp4', files), iphone).rows.single.kind,
+        FitBadgeKind.fits);
   });
 
   test('breakdown and formatting explain the numbers', () {

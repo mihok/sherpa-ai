@@ -153,7 +153,7 @@ final class HfHubClient {
     final params = <String, List<String>>{
       if (q.text != null && q.text!.trim().isNotEmpty) 'search': [q.text!.trim()],
       if (author != null) 'author': [author],
-      'filter': [if (q.format != null) q.format!.tag, ...q.tags],
+      'filter': q.filterTags,
       if (q.pipelineTag != null) 'pipeline_tag': [q.pipelineTag!],
       if (q.gated != null) 'gated': ['${q.gated}'],
       'sort': [q.sort.apiValue],

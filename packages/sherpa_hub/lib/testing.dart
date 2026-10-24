@@ -22,7 +22,8 @@ final class FixtureModelCatalog implements ModelCatalog {
       for (final e in entries)
         if ((text == null || e.id.toLowerCase().contains(text)) &&
             (authors.isEmpty || authors.contains(e.name.owner.toLowerCase())) &&
-            (query.format == null || e.tags.contains(query.format!.tag)))
+            (query.format == null || e.tags.contains(query.format!.tag)) &&
+            (query.quantizedFrom == null || e.tags.contains('base_model:quantized:${query.quantizedFrom}')))
           e,
     ];
     final start = cursor == null ? 0 : int.parse(cursor);

@@ -183,6 +183,7 @@ class _LocalModelRow extends StatelessWidget {
       FitBadgeKind.wontFit => "Won't fit",
       FitBadgeKind.unknown => 'Fit unknown',
       FitBadgeKind.blocked => 'Unavailable',
+      FitBadgeKind.unsupported => "Can't run here",
     };
     final spoken = [
       o.model.displayName,

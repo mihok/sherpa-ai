@@ -70,8 +70,14 @@ enum FitBadgeKind {
   /// The shape could not be read (gated, offline, not GGUF).
   unknown,
 
-  /// Unsafe or unloadable: never downloadable.
-  blocked;
+  /// Unsafe or broken (a file flagged, a part or the config missing):
+  /// never downloadable.
+  blocked,
+
+  /// No runtime on this device loads its format (Transformers weights on
+  /// any device, MLX on Android, LiteRT-LM on iOS): not downloadable here,
+  /// though nothing is wrong with the files.
+  unsupported;
 
   static FitBadgeKind of(FitVerdict v) => switch (v) {
         FitVerdict.fits => fits,
@@ -105,6 +111,7 @@ final class VariantRow {
     this.effectiveBpw,
     this.recommended = false,
     this.blockedReasons = const [],
+    this.unsupportedReasons = const [],
     this.warnings = const [],
     this.runtimeCacheBytes = 0,
   });
@@ -127,13 +134,24 @@ final class VariantRow {
   /// (names lie for small models: gemma-3-270m Q2_K is 7.07, R08 §0.20).
   final double? effectiveBpw;
   final bool recommended;
+
+  /// What is wrong with the files themselves (unsafe, incomplete).
   final List<String> blockedReasons;
+
+  /// Why no runtime on this device loads the variant, and what runs here
+  /// instead: a fact about its format, not a fault, so the UI words it
+  /// plainly rather than as an error.
+  final List<String> unsupportedReasons;
   final List<String> warnings;
 
   String get label => variant.label;
 
-  /// Download is never offered for Won't fit or unsafe/unloadable files.
-  bool get canDownload => kind != FitBadgeKind.blocked && kind != FitBadgeKind.wontFit;
+  /// Listed greyed out and never selectable: broken, or not for this device.
+  bool get unavailable => kind == FitBadgeKind.blocked || kind == FitBadgeKind.unsupported;
+
+  /// Download is never offered for Won't fit, unsafe or broken files, or a
+  /// format this device can't run.
+  bool get canDownload => !unavailable && kind != FitBadgeKind.wontFit;
 
   /// Tight, or unknown because the shape could not be read: the user
   /// confirms with the reason in front of them.
@@ -142,6 +160,7 @@ final class VariantRow {
   /// The sentence under the badge.
   String get reason {
     if (blockedReasons.isNotEmpty) return blockedReasons.first;
+    if (unsupportedReasons.isNotEmpty) return unsupportedReasons.join(' ');
     final f = fit;
     if (f == null) return fitNotCheckedReason;
     return fitReasonText(f);
@@ -158,12 +177,23 @@ final class VariantRow {
 /// listing, one header peek and the device profile. Pure: no IO.
 @immutable
 final class ModelAssessment {
-  const ModelAssessment({required this.rows, required this.summary, this.recommended, this.otherFiles = const []});
+  const ModelAssessment({
+    required this.rows,
+    required this.summary,
+    this.recommended,
+    this.otherFiles = const [],
+    this.notForThisDevice = false,
+  });
 
-  /// Usable variants first (best quality first), blocked ones last.
+  /// Usable variants first (best quality first), unavailable ones last.
   final List<VariantRow> rows;
   final VariantRow? recommended;
   final String summary;
+
+  /// No variant here is in a format this device runs: another version of
+  /// the model, a GGUF one, is the way forward. [summary] says so, with
+  /// what runs here.
+  final bool notForThisDevice;
 
   /// Sidecars and files that are not a model variant (imatrix, configs,
   /// pickles…), each with why it is not offered.
@@ -180,7 +210,9 @@ HubRepoFile? peekTarget(CatalogModelDetails d) {
 
 /// Builds the rows. [shape] null = header unknown (GGUF rows get
 /// [FitBadgeKind.unknown]); the device's platform gates MLX (iOS) and
-/// LiteRT (Android). MLX and LiteRT variants are sized from their files
+/// LiteRT (Android), and formats no Sherpa runtime loads are
+/// [FitBadgeKind.unsupported] everywhere, with what runs on this platform
+/// instead. MLX and LiteRT variants are sized from their files
 /// ([assessRuntimeFit]: MLX weights, plus KV when [mlxConfig] — the repo's
 /// `config.json` — is known; LiteRT the file plus its CPU weight cache).
 ModelAssessment assessVariants(
@@ -196,16 +228,24 @@ ModelAssessment assessVariants(
   final candidates = <QuantCandidate>[];
   final mmprojFor = <String, HubRepoFile?>{};
   final blockedFor = <String, List<String>>{};
+  final unsupportedFor = <String, List<String>>{};
+  final p = device.platform;
+  // No variant is in a format this device runs: the summary says what runs
+  // here and to look for another version, once. Otherwise the variants that
+  // do run here (even broken ones, whose problems are the story) are the
+  // answer.
+  final notForThisDevice = details.variants.isNotEmpty && !details.variants.any((v) => _formatRunsOn(v, p));
   for (final v in details.variants) {
     final blocked = [
-      ...v.blockedReasons,
+      ...v.fileProblems,
       if (!v.complete) 'Missing part(s) ${v.missingParts.join(', ')} of ${v.expectedParts}.',
-      ?_platformBlock(v, device.platform),
     ];
+    final unsupported = _unsupportedOn(v, p, alone: notForThisDevice);
     blockedFor[v.id] = blocked;
+    unsupportedFor[v.id] = unsupported;
     final mm = v.runtime == SherpaRuntime.llamaCpp ? pairSidecar(details.id, v, files, role: FileRole.mmproj) : null;
     mmprojFor[v.id] = mm;
-    if (blocked.isEmpty && v.runtime == SherpaRuntime.llamaCpp) {
+    if (blocked.isEmpty && unsupported.isEmpty && v.runtime == SherpaRuntime.llamaCpp) {
       candidates.add(QuantCandidate(
         id: v.id,
         weightBytes: v.weightBytes,
@@ -221,10 +261,12 @@ ModelAssessment assessVariants(
 
   for (final v in details.variants) {
     final blocked = blockedFor[v.id]!;
+    final unsupported = unsupportedFor[v.id]!;
+    final runs = blocked.isEmpty && unsupported.isEmpty;
     final mm = mmprojFor[v.id];
     final bytes = v.totalBytes + (mm?.size ?? mm?.lfsSize ?? 0);
     FitResult? fit;
-    if (blocked.isEmpty && arch != null && v.runtime == SherpaRuntime.llamaCpp) {
+    if (runs && arch != null && v.runtime == SherpaRuntime.llamaCpp) {
       fit = assessFit(
         device,
         ModelFootprintInput(
@@ -236,7 +278,7 @@ ModelAssessment assessVariants(
         ),
         options: options,
       );
-    } else if (blocked.isEmpty && (v.runtime == SherpaRuntime.mlx || v.runtime == SherpaRuntime.litert)) {
+    } else if (runs && (v.runtime == SherpaRuntime.mlx || v.runtime == SherpaRuntime.litert)) {
       fit = assessRuntimeFit(
         device,
         v.runtime == SherpaRuntime.mlx
@@ -247,9 +289,11 @@ ModelAssessment assessVariants(
     }
     final kind = blocked.isNotEmpty
         ? FitBadgeKind.blocked
-        : fit == null
-            ? FitBadgeKind.unknown
-            : FitBadgeKind.of(fit.verdict);
+        : unsupported.isNotEmpty
+            ? FitBadgeKind.unsupported
+            : fit == null
+                ? FitBadgeKind.unknown
+                : FitBadgeKind.of(fit.verdict);
     final ranked = rec?.ranked.where((r) => r.candidate.id == v.id).firstOrNull;
     final eff = ranked?.effectiveBpw ?? effectiveBitsPerWeight(v.weightBytes, params);
     rows.add(VariantRow(
@@ -261,12 +305,13 @@ ModelAssessment assessVariants(
       effectiveBpw: eff,
       recommended: rec?.best?.candidate.id == v.id,
       blockedReasons: List.unmodifiable(blocked),
+      unsupportedReasons: List.unmodifiable(unsupported),
       warnings: v.warnings,
       runtimeCacheBytes: v.runtime == SherpaRuntime.litert ? liteRtWeightCacheBytes(v.weightBytes) : 0,
     ));
   }
 
-  int quality(VariantRow r) => r.kind == FitBadgeKind.blocked ? 1 : 0;
+  int quality(VariantRow r) => r.unavailable ? 1 : 0;
   rows.sort((a, b) {
     final q = quality(a).compareTo(quality(b));
     if (q != 0) return q;
@@ -295,7 +340,9 @@ ModelAssessment assessVariants(
       rows.where((x) => x.variant.id == r?.candidate.id).firstOrNull?.label ?? r?.candidate.id ?? '';
   final String summary;
   final runtimeRows = [for (final r in rows) if (r.fit != null && r.variant.runtime != SherpaRuntime.llamaCpp) r];
-  if (candidates.isEmpty && runtimeRows.isNotEmpty) {
+  if (notForThisDevice) {
+    summary = 'Nothing in this repository runs on ${_platformName(p)}. ${_runsOn(p)} ${_lookFor(p)}';
+  } else if (candidates.isEmpty && runtimeRows.isNotEmpty) {
     final fitting = runtimeRows.where((r) => r.kind == FitBadgeKind.fits).firstOrNull;
     final tight = runtimeRows.where((r) => r.kind == FitBadgeKind.tight).firstOrNull;
     summary = fitting != null
@@ -304,7 +351,7 @@ ModelAssessment assessVariants(
             ? 'Nothing fits with headroom; ${tight.label} might load, but memory is tight.'
             : 'No variant of this model fits this device.';
   } else if (arch == null) {
-    summary = rows.any((r) => r.kind != FitBadgeKind.blocked)
+    summary = rows.any((r) => !r.unavailable)
         ? "Fit couldn't be checked; sizes are real, the memory estimate is missing."
         : 'Nothing in this repository can run in Sherpa.';
   } else if (rec?.best != null) {
@@ -316,16 +363,61 @@ ModelAssessment assessVariants(
   } else {
     summary = 'No variant of this model fits this device.';
   }
-  return ModelAssessment(rows: List.unmodifiable(rows), recommended: recommended, summary: summary, otherFiles: others);
+  return ModelAssessment(
+    rows: List.unmodifiable(rows),
+    recommended: recommended,
+    summary: summary,
+    otherFiles: others,
+    notForThisDevice: notForThisDevice,
+  );
 }
 
-String? _platformBlock(RepoVariant v, DevicePlatform p) => switch (v.runtime) {
-      SherpaRuntime.mlx when p != DevicePlatform.ios => 'MLX models run on iPhone and iPad only.',
-      SherpaRuntime.litert when p != DevicePlatform.android => 'LiteRT-LM models run on Android only.',
-      SherpaRuntime.mlx || SherpaRuntime.litert => null,
-      SherpaRuntime.llamaCpp => null,
-      SherpaRuntime.none => null,
+/// Whether a runtime on [p] loads [v]'s format (its files may still be
+/// broken).
+bool _formatRunsOn(RepoVariant v, DevicePlatform p) => switch (v.runtime) {
+      SherpaRuntime.llamaCpp => true,
+      SherpaRuntime.mlx => p == DevicePlatform.ios,
+      SherpaRuntime.litert => p == DevicePlatform.android,
+      SherpaRuntime.none => false,
     };
+
+/// Why no runtime on [p] loads [v]; empty when one does. A format no Sherpa
+/// runtime loads is named (the planner's [RepoVariant.unsupportedFormat]),
+/// then what Sherpa on [p] runs, unless the summary says that for the
+/// whole repo ([alone]: nothing in it runs here).
+List<String> _unsupportedOn(RepoVariant v, DevicePlatform p, {required bool alone}) {
+  if (_formatRunsOn(v, p)) return const [];
+  return switch (v.runtime) {
+    SherpaRuntime.mlx => const ['MLX models run on iPhone and iPad only.'],
+    SherpaRuntime.litert => const ['LiteRT-LM models run on Android only.'],
+    _ => [
+        v.unsupportedFormat ?? "Sherpa can't run these files.",
+        if (!alone) _runsOn(p),
+      ],
+  };
+}
+
+String _platformName(DevicePlatform p) => switch (p) {
+      DevicePlatform.android => 'Android',
+      DevicePlatform.ios => 'iPhone or iPad',
+      DevicePlatform.other => 'this device',
+    };
+
+String _runsOn(DevicePlatform p) => switch (p) {
+      DevicePlatform.android => 'Sherpa on Android runs GGUF and LiteRT-LM models.',
+      DevicePlatform.ios => 'Sherpa on iPhone and iPad runs GGUF and MLX models.',
+      DevicePlatform.other => 'Sherpa on this device runs GGUF models.',
+    };
+
+String _lookFor(DevicePlatform p) => switch (p) {
+      DevicePlatform.ios => 'Look for a GGUF or MLX version of this model.',
+      DevicePlatform.android || DevicePlatform.other => 'Look for a GGUF version of this model.',
+    };
+
+/// The formats a model page with nothing for [p] finds other versions in:
+/// the ones its summary says to look for.
+List<HubFormatFilter> versionFormats(DevicePlatform p) =>
+    [HubFormatFilter.gguf, if (p == DevicePlatform.ios) HubFormatFilter.mlx];
 
 /// A browse card's estimate, before any file size is known.
 @immutable

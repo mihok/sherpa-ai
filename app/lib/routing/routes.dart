@@ -52,6 +52,13 @@ abstract final class Routes {
     return '$modelBrowse/${Uri.encodeComponent(owner)}/${Uri.encodeComponent(name)}';
   }
 
+  /// Browse showing the versions of a Hub repo (its quantized derivatives)
+  /// in [format], a `HubFormatFilter` name.
+  static String modelBrowseVersionsOf(String repoId, {String format = 'gguf'}) => Uri(
+        path: modelBrowse,
+        queryParameters: {'versionsOf': repoId, if (format != 'gguf') 'format': format},
+      ).toString();
+
   static String chat(String sessionId) => '/chat/${Uri.encodeComponent(sessionId)}';
 
   /// What the model sees for a chat: budget, items, overlays, undo (M3).

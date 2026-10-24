@@ -119,6 +119,17 @@ void main() {
       expect(p2.nextCursor, isNull);
     });
 
+    test("quantized versions of a repo: filter=base_model:quantized:<id> next to the format's", () async {
+      final c = client();
+      await c.searchModels(const ModelSearchQuery(format: HubFormatFilter.gguf, quantizedFrom: 'Qwen/Qwen3-0.6B'));
+      final url = hub.hubRequests.single.uri;
+      expect(url.queryParametersAll['filter'], ['gguf', 'base_model:quantized:Qwen/Qwen3-0.6B']);
+      expect(url.query, contains('filter=base_model%3Aquantized%3AQwen%2FQwen3-0.6B'));
+      expect(url.queryParameters.containsKey('search'), isFalse);
+      const fanOut = ModelSearchQuery(quantizedFrom: 'Qwen/Qwen3-0.6B', authors: ['bartowski', 'unsloth']);
+      expect(fanOut.copyWith(limit: 5).quantizedFrom, 'Qwen/Qwen3-0.6B', reason: 'kept per author request');
+    });
+
     test('only createdAt sorts ascending; bad cursors are 400s', () async {
       final c = client();
       expect(() => c.searchModels(const ModelSearchQuery(sort: HubSort.likes, ascending: true)), throwsArgumentError);
@@ -471,5 +482,97 @@ void main() {
     expect(plan, isA<DownloadPlan>().having((p) => p.totalBytes, 'bytes', 807694464));
     final files = await catalog.files('unsloth/Qwen3.8-27B-GGUF', revision: FakeHub.commit);
     expect(files.where((f) => f.name.role.value == FileRole.mmproj), hasLength(3));
+  });
+
+  Map<String, Object?> sibling(String name, int size, {bool lfs = false}) => {
+        'rfilename': name,
+        'size': size,
+        if (lfs) 'lfs': {'sha256': 'a' * 64, 'size': size},
+      };
+
+  test("HfHubCatalog.details reads MLX from the repo's library_name and tags, not just its name", () async {
+    hub.modelInfo = {
+      'id': 'RecursiveSI/flint-int4',
+      'sha': FakeHub.commit,
+      'library_name': 'mlx',
+      'tags': ['mlx', 'safetensors', 'text-generation', 'base_model:quantized:RecursiveSI/flint'],
+      'siblings': [
+        sibling('config.json', 1100),
+        sibling('tokenizer_config.json', 9700),
+        sibling('tokenizer.json', 11422654, lfs: true),
+        sibling('model.safetensors', 2000000000, lfs: true),
+      ],
+    };
+    final d = await HfHubCatalog(client()).details('RecursiveSI/flint-int4');
+    expect(d.formatHints, {'mlx'});
+    expect(d.variants.single.format, ModelFormat.mlx);
+    expect(d.variants.single.usable, isTrue);
+    expect(d.name.format, ModelFormat.mlx, reason: 'the header chips say MLX, like the rows');
+    expect(d.files.firstWhere((f) => f.file.path == 'model.safetensors').name.format, ModelFormat.mlx);
+    expect(d.versionsBase, 'RecursiveSI/flint', reason: 'a quantized copy looks for versions of what it copies');
+    final plan = planDownload(
+        repo: d.id, commit: d.commit, files: [for (final f in d.files) f.file], quant: d.variants.single.id, formatHints: d.formatHints);
+    expect(plan, isA<DownloadPlan>());
+  });
+
+  test('HfHubCatalog.search: a card for an MLX conversion named without "mlx" says MLX', () async {
+    hub.page1 = [
+      {'id': 'RecursiveSI/flint-int4', 'library_name': 'mlx', 'pipeline_tag': 'text-generation', 'tags': ['mlx', 'text-generation']},
+      {'id': 'theoracleguy/whisper-large-v3-turbo', 'library_name': 'mlx', 'pipeline_tag': 'automatic-speech-recognition',
+        'tags': ['mlx', 'automatic-speech-recognition']},
+    ];
+    hub.page2 = <Object?>[];
+    final page = await HfHubCatalog(client()).search(const ModelSearchQuery(format: HubFormatFilter.mlx));
+    expect([for (final e in page.items) e.name.format], [ModelFormat.mlx, ModelFormat.safetensors]);
+  });
+
+  test("HfHubCatalog.details: an MLX speech model tagged mlx is not offered as a model Sherpa's MLX runtime loads",
+      () async {
+    hub.modelInfo = {
+      'id': 'theoracleguy/whisper-large-v3-turbo',
+      'sha': FakeHub.commit,
+      'library_name': 'mlx',
+      'pipeline_tag': 'automatic-speech-recognition',
+      'tags': ['mlx', 'whisper', 'automatic-speech-recognition', 'region:us'],
+      'siblings': [sibling('config.json', 1300), sibling('weights.safetensors', 1617000000, lfs: true)],
+    };
+    final d = await HfHubCatalog(client()).details('theoracleguy/whisper-large-v3-turbo');
+    expect(d.formatHints, isEmpty);
+    expect(d.variants.single.runtime, SherpaRuntime.none);
+    expect(d.variants.single.usable, isFalse);
+    final plan = planDownload(repo: d.id, commit: d.commit, files: [for (final f in d.files) f.file], formatHints: d.formatHints);
+    expect(plan, isA<PlanRefused>());
+  });
+
+  test("HfHubCatalog.details: a LiteRT conversion's versions are its base model's, whatever relation it names", () async {
+    hub.modelInfo = {
+      'id': 'litert-community/Qwen2.5-1.5B-Instruct',
+      'sha': FakeHub.commit,
+      'library_name': 'litert-lm',
+      'tags': [
+        'litert-lm',
+        'base_model:Qwen/Qwen2.5-1.5B-Instruct',
+        'base_model:finetune:Qwen/Qwen2.5-1.5B-Instruct',
+      ],
+      'siblings': [
+        sibling('Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm', 1597000000, lfs: true),
+        sibling('Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.task', 1598000000, lfs: true),
+      ],
+    };
+    final litert = await HfHubCatalog(client()).details('litert-community/Qwen2.5-1.5B-Instruct');
+    expect(litert.versionsBase, 'Qwen/Qwen2.5-1.5B-Instruct');
+
+    // A Transformers fine-tune is a model of its own: its versions are its own.
+    hub.modelInfo = {
+      'id': 'acme/Qwen2.5-1.5B-Pirate',
+      'sha': FakeHub.commit,
+      'library_name': 'transformers',
+      'tags': ['transformers', 'base_model:Qwen/Qwen2.5-1.5B-Instruct', 'base_model:finetune:Qwen/Qwen2.5-1.5B-Instruct'],
+      'siblings': [sibling('config.json', 700), sibling('model.safetensors', 3000000000, lfs: true)],
+    };
+    expect((await HfHubCatalog(client()).details('acme/Qwen2.5-1.5B-Pirate')).versionsBase, 'acme/Qwen2.5-1.5B-Pirate');
+    expect(const HubModelInfo(id: 'x/y', tags: ['base_model:finetune:a/b']).baseModel, 'a/b');
+    expect(const HubModelInfo(id: 'x/y', tags: ['base_model:finetune:a/b', 'base_model:c/d']).baseModel, 'c/d');
+    expect(const HubModelInfo(id: 'x/y', tags: ['base_model:']).baseModel, isNull);
   });
 }

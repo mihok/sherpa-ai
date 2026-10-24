@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http show ClientException;
 import 'package:sherpa_hub/sherpa_hub.dart';
 
+import '../../../services/device/device_profile_source.dart';
 import 'models_providers.dart';
 
 /// Parameter-count buckets. Applied on the client: the Hub's
@@ -60,6 +61,23 @@ const Map<String, String> licenseFilters = {
   'other': 'Other',
 };
 
+/// The format chips Browse offers on [platform]: the formats Sherpa runs
+/// there (GGUF everywhere, LiteRT-LM on Android, MLX on iPhone and iPad).
+List<HubFormatFilter> runnableFormats(DevicePlatform? platform) => [
+      HubFormatFilter.gguf,
+      if (platform == DevicePlatform.ios) HubFormatFilter.mlx,
+      if (platform == DevicePlatform.android) HubFormatFilter.litert,
+    ];
+
+/// What a format chip or button calls [f].
+String formatFilterLabel(HubFormatFilter f) => switch (f) {
+      HubFormatFilter.gguf => 'GGUF',
+      HubFormatFilter.mlx => 'MLX',
+      HubFormatFilter.litert => 'LiteRT',
+      HubFormatFilter.tflite => 'TFLite',
+      HubFormatFilter.onnx => 'ONNX',
+    };
+
 @immutable
 final class DirectoryQuery {
   const DirectoryQuery({
@@ -71,7 +89,23 @@ final class DirectoryQuery {
     this.toolUse = false,
     this.sort = DirectorySort.trending,
     this.authors = const {},
+    this.quantizedFrom,
   });
+
+  /// The versions of [repo] in [format] (its quantized derivatives on the
+  /// Hub), most downloaded first: what a model page offers when nothing in
+  /// the repo runs on this device.
+  const DirectoryQuery.versionsOf(String repo, {HubFormatFilter format = HubFormatFilter.gguf})
+      : this(quantizedFrom: repo, format: format, sort: DirectorySort.downloads);
+
+  /// What Browse opens on from its route's query parameters: a repo's
+  /// versions (`versionsOf`, `format`, as `Routes.modelBrowseVersionsOf`
+  /// writes them), else the default list.
+  factory DirectoryQuery.ofRoute(Map<String, String> params) => switch (params['versionsOf']) {
+        final repo? => DirectoryQuery.versionsOf(repo,
+            format: HubFormatFilter.values.asNameMap()[params['format']] ?? HubFormatFilter.gguf),
+        null => const DirectoryQuery(),
+      };
 
   final String text;
 
@@ -89,6 +123,10 @@ final class DirectoryQuery {
   /// Selected trusted quantizers; several fan out into one request each.
   final Set<String> authors;
 
+  /// Only quantized versions of this repo id
+  /// ([ModelSearchQuery.quantizedFrom]).
+  final String? quantizedFrom;
+
   int get activeFilterCount =>
       (size == null ? 0 : 1) + (license == null ? 0 : 1) + (task == null ? 0 : 1) + (toolUse ? 1 : 0);
 
@@ -100,7 +138,13 @@ final class DirectoryQuery {
         sort: sort.hub,
         tags: [if (license != null) 'license:$license'],
         limit: limit,
+        quantizedFrom: quantizedFrom,
       );
+
+  /// This query with a format [platform] can run: GGUF in place of MLX on
+  /// Android or LiteRT-LM on iOS. Any format (none chosen) stays.
+  DirectoryQuery runnableOn(DevicePlatform platform) =>
+      format == null || runnableFormats(platform).contains(format) ? this : copyWith(format: HubFormatFilter.gguf);
 
   /// A repo id (`owner/name`) when [text] is one, or a Hub link to one.
   String? get repoId => repoIdOf(text);
@@ -129,6 +173,7 @@ final class DirectoryQuery {
     bool? toolUse,
     DirectorySort? sort,
     Set<String>? authors,
+    bool clearQuantizedFrom = false,
   }) =>
       DirectoryQuery(
         text: text ?? this.text,
@@ -139,6 +184,7 @@ final class DirectoryQuery {
         toolUse: toolUse ?? this.toolUse,
         sort: sort ?? this.sort,
         authors: authors ?? this.authors,
+        quantizedFrom: clearQuantizedFrom ? null : quantizedFrom,
       );
 
   @override
@@ -151,10 +197,12 @@ final class DirectoryQuery {
       other.task == task &&
       other.toolUse == toolUse &&
       other.sort == sort &&
-      setEquals(other.authors, authors);
+      setEquals(other.authors, authors) &&
+      other.quantizedFrom == quantizedFrom;
 
   @override
-  int get hashCode => Object.hash(text, format, size, license, task, toolUse, sort, Object.hashAllUnordered(authors));
+  int get hashCode =>
+      Object.hash(text, format, size, license, task, toolUse, sort, Object.hashAllUnordered(authors), quantizedFrom);
 }
 
 final RegExp _hubLink = RegExp(r'^(?:https?://)?(?:www\.)?(?:huggingface\.co|hf\.co)/', caseSensitive: false);
@@ -345,9 +393,15 @@ final class DirectoryState {
       );
 }
 
-final directoryControllerProvider = NotifierProvider.autoDispose<DirectoryController, DirectoryState>(
+/// One browser per query it opens on ([DirectoryController.seed]), so a
+/// list of a repo's versions opened over another list leaves that one as
+/// it was.
+final directoryControllersProvider = NotifierProvider.autoDispose.family<DirectoryController, DirectoryState, DirectoryQuery>(
   DirectoryController.new,
 );
+
+/// The browser as Browse opens it: GGUF, trending.
+final directoryControllerProvider = directoryControllersProvider(const DirectoryQuery());
 
 /// Search, filters and paging for the model browser.
 ///
@@ -361,8 +415,16 @@ final directoryControllerProvider = NotifierProvider.autoDispose<DirectoryContro
 /// keeps fetching pages (at most [maxAutoPages] more per action) until at
 /// least [minVisible] new results show, instead of stopping at an empty
 /// list that cannot scroll to load more.
+///
+/// A format this device can't run (MLX on Android, LiteRT-LM on iOS)
+/// becomes GGUF as soon as the platform is known.
 final class DirectoryController extends Notifier<DirectoryState> {
+  DirectoryController(this.seed);
+
   static const Duration debounce = Duration(milliseconds: 350);
+
+  /// The query the list opens on.
+  final DirectoryQuery seed;
 
   /// Results one load or "Load more" tries to show.
   static const int minVisible = 10;
@@ -379,9 +441,13 @@ final class DirectoryController extends Notifier<DirectoryState> {
     ref.listen(modelBrowserPrefsProvider.select((p) => p.showUncensored), (_, show) {
       state = state.copyWith(showUncensored: show);
     });
+    ref.listen(deviceProfileProvider.select((d) => d.value?.platform), (_, platform) {
+      if (platform != null) update((q) => q.runnableOn(platform));
+    });
     final show = ref.read(modelBrowserPrefsProvider).showUncensored;
+    final platform = ref.read(deviceProfileProvider).value?.platform;
     Future.microtask(_load);
-    return DirectoryState(loading: true, showUncensored: show);
+    return DirectoryState(query: platform == null ? seed : seed.runnableOn(platform), loading: true, showUncensored: show);
   }
 
   void setText(String text) {
@@ -405,7 +471,11 @@ final class DirectoryController extends Notifier<DirectoryState> {
         return q.copyWith(authors: a);
       });
 
-  void clearFilters() => update((q) => DirectoryQuery(text: q.text, format: q.format, sort: q.sort, authors: q.authors));
+  void clearFilters() => update(
+      (q) => DirectoryQuery(text: q.text, format: q.format, sort: q.sort, authors: q.authors, quantizedFrom: q.quantizedFrom));
+
+  /// Back from a repo's versions to every model.
+  void clearVersionsOf() => update((q) => q.copyWith(clearQuantizedFrom: true));
 
   Future<void> refresh() => _load();
 

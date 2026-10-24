@@ -31,6 +31,7 @@ final class RepoVariant {
     this.expectedParts,
     this.missingParts = const [],
     this.blockedReasons = const [],
+    this.unsupportedFormat,
     this.warnings = const [],
   });
 
@@ -54,9 +55,19 @@ final class RepoVariant {
   /// Shard/part numbers that are missing from the listing.
   final List<int> missingParts;
   final List<String> blockedReasons;
+
+  /// Why no Sherpa runtime loads this variant's format on any device
+  /// ([unsupportedFormatReason]), or null when one does. It is one of
+  /// [blockedReasons]: a fact about the files rather than a fault in them,
+  /// which the app words for the device it runs on.
+  final String? unsupportedFormat;
   final List<String> warnings;
 
   bool get complete => missingParts.isEmpty;
+
+  /// [blockedReasons] other than [unsupportedFormat]: something wrong with
+  /// the files themselves (unsafe, a config missing, a removed quant).
+  List<String> get fileProblems => [for (final r in blockedReasons) if (r != unsupportedFormat) r];
 
   /// Offered for download (greyed out with [blockedReasons] otherwise).
   bool get usable => complete && blockedReasons.isEmpty;
@@ -83,17 +94,61 @@ const Set<String> _supportFiles = {
   'chat_template.json', 'preprocessor_config.json', 'processor_config.json', 'model.safetensors.index.json',
 };
 
+/// Why no Sherpa runtime loads [format], on any device, naming the format
+/// the way its model pages do. Null for the formats Sherpa runs (GGUF,
+/// MLX, LiteRT-LM); which of those run on a given device is the app's call.
+/// [fileName], the variant's first weight file, tells a LiteRT-LM bundle
+/// (`.litertlm`) from the TensorFlow Lite and MediaPipe files that the name
+/// parser also reads as LiteRT.
+String? unsupportedFormatReason(ModelFormat format, {required String fileName}) => switch (format) {
+      ModelFormat.safetensors => "Sherpa can't run Transformers weights (safetensors).",
+      ModelFormat.pickle => "Sherpa can't run PyTorch weights (.bin, .pt).",
+      ModelFormat.gptq => "Sherpa can't run GPTQ weights (made for CUDA GPUs).",
+      ModelFormat.awq => "Sherpa can't run AWQ weights (made for CUDA GPUs).",
+      ModelFormat.exl2 => "Sherpa can't run EXL2 weights (made for CUDA GPUs).",
+      ModelFormat.exl3 => "Sherpa can't run EXL3 weights (made for CUDA GPUs).",
+      ModelFormat.ggml => "Sherpa can't run old GGML files (llama.cpp now reads GGUF).",
+      ModelFormat.mlxNpz => "Sherpa can't run old MLX .npz weights.",
+      ModelFormat.onnx || ModelFormat.onnxData => "Sherpa can't run ONNX models.",
+      ModelFormat.other => "Sherpa can't run these files.",
+      ModelFormat.litert when fileName.toLowerCase().endsWith('.task') =>
+        "Sherpa can't run MediaPipe .task bundles (LiteRT-LM needs a .litertlm file).",
+      ModelFormat.litert when !_isLiteRtLm(fileName) =>
+        "Sherpa can't run TensorFlow Lite .tflite files (LiteRT-LM needs a .litertlm file).",
+      ModelFormat.gguf || ModelFormat.ggufPart || ModelFormat.mlx || ModelFormat.litert => null,
+    };
+
+/// The only LiteRT files Sherpa's LiteRT-LM runtime loads.
+bool _isLiteRtLm(String path) => path.toLowerCase().endsWith('.litertlm');
+
+/// Formats that share their extension with pickles (`.bin`, `.npz`) without
+/// being one. [FileSafety] refuses them by that extension; a variant in one
+/// says why nothing loads it with [unsupportedFormatReason] instead of
+/// calling it a pickle.
+const Set<ModelFormat> _pickleNamed = {ModelFormat.ggml, ModelFormat.mlxNpz};
+
+/// Name flags that only restate that a format has no runtime; a variant
+/// in such a format says so once, with [unsupportedFormatReason].
+const Set<NameFlag> _formatFlags = {NameFlag.gpuOnly, NameFlag.legacyGgml, NameFlag.legacyFormat};
+
 /// Groups a repo listing into [RepoVariant]s. Blocked variants are kept so
 /// the UI can list them greyed out with the reason (R08 §15.2).
+///
+/// [formatHints] are what the Hub says about the whole repo's format
+/// ([HubModelInfo.formatHints]), read with its file names: many MLX
+/// conversions of language models are tagged `mlx` without "mlx" in their
+/// name, so their safetensors folders count as MLX the way an `mlx` name
+/// token or the `mlx-community` owner makes them.
 List<RepoVariant> groupVariants(
   String repo,
   List<HubRepoFile> files, {
   HubRepoSecurity? repoSecurity,
   Map<String, Uint8List> sniffedHeads = const {},
+  Set<String> formatHints = const {},
 }) {
   final parsed = <String, ParsedModelName>{
     for (final f in files)
-      if (!f.isDirectory) f.path: parseModelName(repo, fileName: f.path),
+      if (!f.isDirectory) f.path: parseModelName(repo, fileName: f.path, repoHints: formatHints),
   };
   final groups = <String, List<HubRepoFile>>{};
   final kinds = <String, ModelFormat>{};
@@ -138,27 +193,28 @@ List<RepoVariant> groupVariants(
     final expected = primary.shard?.value.count;
     final present = {for (final f in fs) _partIndex(parsed[f.path]!)};
     final missing = expected == null ? <int>[] : [for (var i = 1; i <= expected; i++) if (!present.contains(i)) i];
+    final runtime = switch (format) {
+      ModelFormat.gguf || ModelFormat.ggufPart => SherpaRuntime.llamaCpp,
+      ModelFormat.litert when _isLiteRtLm(fs.first.path) => SherpaRuntime.litert,
+      _ => SherpaRuntime.none,
+    };
+    final unsupported = runtime == SherpaRuntime.none ? unsupportedFormatReason(format, fileName: fs.first.path) : null;
     final blocked = <String>{};
     final warnings = <String>{};
     for (final f in fs) {
       final p = parsed[f.path]!;
       for (final flag in p.flags) {
-        if (flag.blocking) blocked.add(flag.explanation);
+        if (flag.blocking && !(unsupported != null && _formatFlags.contains(flag))) blocked.add(flag.explanation);
       }
       final s = FileSafety.check(f, repoSecurity: repoSecurity, head: sniffedHeads[f.path]);
-      if (!s.allowed) blocked.add(s.reason!);
+      if (!s.allowed && !(s.byExtension && _pickleNamed.contains(format))) blocked.add(s.reason!);
       warnings.addAll(s.warnings);
     }
     final q = primary.quant?.value;
     if (q != null && q.ggufType?.status == QuantStatus.newRuntime) warnings.add(NameFlag.newRuntimeQuant.explanation);
     if (q != null && q.ambiguous) warnings.add(NameFlag.ambiguousQuant.explanation);
     if (primary.flags.contains(NameFlag.byteSplit)) warnings.add(NameFlag.byteSplit.explanation);
-    final runtime = switch (format) {
-      ModelFormat.gguf || ModelFormat.ggufPart => SherpaRuntime.llamaCpp,
-      ModelFormat.litert => SherpaRuntime.litert,
-      _ => SherpaRuntime.none,
-    };
-    if (format == ModelFormat.onnx) blocked.add('Sherpa has no ONNX runtime');
+    if (unsupported != null) blocked.add(unsupported);
     out.add(RepoVariant(
       id: e.key,
       label: q?.label ?? fs.first.name,
@@ -170,6 +226,7 @@ List<RepoVariant> groupVariants(
       expectedParts: expected,
       missingParts: List.unmodifiable(missing),
       blockedReasons: List.unmodifiable(blocked),
+      unsupportedFormat: unsupported,
       warnings: List.unmodifiable(warnings),
     ));
   }
@@ -180,6 +237,8 @@ List<RepoVariant> groupVariants(
     final dir = e.key;
     final fs = [...e.value]..sort((a, b) => a.path.compareTo(b.path));
     final primary = parsed[fs.first.path]!;
+    final format = primary.format;
+    final unsupported = unsupportedFormatReason(format, fileName: fs.first.path);
     final support = [
       for (final f in files)
         if (!f.isDirectory &&
@@ -191,17 +250,22 @@ List<RepoVariant> groupVariants(
     final warnings = <String>{};
     for (final f in [...fs, ...support]) {
       for (final flag in parsed[f.path]?.flags ?? const <NameFlag>{}) {
-        if (flag.blocking && flag != NameFlag.notAModel) blocked.add(flag.explanation);
+        if (flag.blocking && flag != NameFlag.notAModel && !(unsupported != null && _formatFlags.contains(flag))) {
+          blocked.add(flag.explanation);
+        }
       }
       final s = FileSafety.check(f, repoSecurity: repoSecurity, head: sniffedHeads[f.path]);
       if (!s.allowed) blocked.add(s.reason!);
       warnings.addAll(s.warnings);
     }
-    final format = primary.format;
-    if (format != ModelFormat.mlx) {
-      blocked.add('${format.name} weights: no Sherpa runtime (MLX needs an mlx-community style repo)');
-    }
+    if (unsupported != null) blocked.add(unsupported);
     if (!support.any((f) => f.name.toLowerCase() == 'config.json')) blocked.add('config.json is missing');
+    // MLX loads every weight file in the folder: two shard sets side by
+    // side (`-of-00018` and `-of-00028`) would load as one model.
+    final totals = {for (final f in fs) ?parsed[f.path]!.shard?.value.count}.toList()..sort();
+    if (format == ModelFormat.mlx && totals.length > 1) {
+      blocked.add('This folder holds more than one set of weights (in ${_andList(totals)} parts).');
+    }
     final expected = primary.shard?.value.count;
     final present = {for (final f in fs) parsed[f.path]!.shard?.value.index ?? 1};
     final missing = expected == null ? <int>[] : [for (var i = 1; i <= expected; i++) if (!present.contains(i)) i];
@@ -217,6 +281,7 @@ List<RepoVariant> groupVariants(
       expectedParts: expected,
       missingParts: List.unmodifiable(missing),
       blockedReasons: List.unmodifiable(blocked),
+      unsupportedFormat: unsupported,
       warnings: List.unmodifiable(warnings),
     ));
   }
@@ -236,6 +301,10 @@ List<RepoVariant> groupVariants(
 }
 
 int _partIndex(ParsedModelName p) => p.shard?.value.index ?? 1;
+
+/// `1, 18 and 28`.
+String _andList(List<Object> items) =>
+    items.length < 2 ? items.join() : '${items.sublist(0, items.length - 1).join(', ')} and ${items.last}';
 
 /// llama.cpp's `-hf` default: first `Q4_K_M`, then `Q8_0`, then the first
 /// usable model (R08 §13.2, vendored `common/download.cpp find_best_model`).
@@ -458,11 +527,13 @@ PlanOutcome planDownload({
   HubRepoSecurity? repoSecurity,
   Set<String> unsupportedQuants = const {},
   Map<String, Uint8List> sniffedHeads = const {},
+  Set<String> formatHints = const {},
 }) {
   if (!RegExp(r'^[0-9a-f]{40}$').hasMatch(commit)) {
     return const PlanRefused(['Downloads must be pinned to a commit sha, not a branch name.']);
   }
-  final variants = groupVariants(repo, files, repoSecurity: repoSecurity, sniffedHeads: sniffedHeads);
+  final variants =
+      groupVariants(repo, files, repoSecurity: repoSecurity, sniffedHeads: sniffedHeads, formatHints: formatHints);
   final v = quant == null ? defaultVariant(variants) : findVariant(variants, quant);
   if (v == null) {
     return PlanRefused([quant == null ? 'No loadable model in $repo.' : 'No "$quant" variant in $repo.']);

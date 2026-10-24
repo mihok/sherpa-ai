@@ -71,6 +71,44 @@ void main() {
     expect(byId.items.map((e) => e.id), contains('Qwen/Qwen3-0.6B-GGUF'));
   }, skip: skip);
 
+  test("a Transformers repo's GGUF versions: filter=base_model:quantized:<id> finds the official one", () async {
+    final page = await HfHubCatalog(hub).search(
+        const ModelSearchQuery(format: HubFormatFilter.gguf, quantizedFrom: 'Qwen/Qwen3-0.6B', sort: HubSort.downloads, limit: 50));
+    expect(page.items.map((e) => e.id), contains('Qwen/Qwen3-0.6B-GGUF'));
+    expect(page.items.every((e) => e.tags.contains('base_model:quantized:Qwen/Qwen3-0.6B')), isTrue);
+    expect(page.items.every((e) => e.tags.contains('gguf')), isTrue);
+  }, skip: skip);
+
+  test('an MLX conversion without "mlx" in its name is one MLX variant by its tags', () async {
+    final found = await hub.searchModels(const ModelSearchQuery(format: HubFormatFilter.mlx, sort: HubSort.trending, limit: 100));
+    final unnamed = found.items.where((m) => m.formatHints.contains('mlx') && !m.id.toLowerCase().contains('mlx')).toList();
+    expect(unnamed, isNotEmpty, reason: 'the Hub has MLX repos named without "mlx"');
+    final catalog = HfHubCatalog(hub);
+    var checked = 0;
+    for (final m in unnamed.take(5)) {
+      final d = await catalog.details(m.id);
+      final mlx = d.variants.where((v) => v.runtime == SherpaRuntime.mlx);
+      if (d.variants.any((v) => v.blockedReasons.join().contains('Transformers weights'))) {
+        fail('${m.id} (tagged mlx) was read as Transformers weights');
+      }
+      if (mlx.isNotEmpty) checked++;
+    }
+    expect(checked, greaterThan(0), reason: 'at least one of them holds safetensors read as MLX');
+  }, skip: skip, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('an MLX speech model only tagged mlx is never an MLX variant: the MLX runtime loads language models', () async {
+    final found = await hub.searchModels(const ModelSearchQuery(
+        format: HubFormatFilter.mlx, pipelineTag: 'automatic-speech-recognition', sort: HubSort.downloads, limit: 50));
+    // Named ones (mlx-community/whisper-…) are read as MLX by their names.
+    final unnamed = found.items.where((m) => !m.id.toLowerCase().contains('mlx')).toList();
+    expect(unnamed, isNotEmpty);
+    final catalog = HfHubCatalog(hub);
+    for (final m in unnamed.take(3)) {
+      final d = await catalog.details(m.id);
+      expect(d.variants.where((v) => v.runtime == SherpaRuntime.mlx && v.usable), isEmpty, reason: m.id);
+    }
+  }, skip: skip, timeout: const Timeout(Duration(minutes: 2)));
+
   test("a starter model's resolve leaves the Hub origin for a signed CDN URL (no token goes there)", () async {
     const repo = 'unsloth/Qwen3-0.6B-GGUF';
     final info = await hub.modelInfo(repo);

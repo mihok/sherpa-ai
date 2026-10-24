@@ -45,11 +45,16 @@ SniffedFormat sniffWeightFormat(Uint8List head) {
 
 @immutable
 final class SafetyDecision {
-  const SafetyDecision({required this.allowed, this.reason, this.warnings = const []});
+  const SafetyDecision({required this.allowed, this.reason, this.warnings = const [], this.byExtension = false});
 
   final bool allowed;
   final String? reason;
   final List<String> warnings;
+
+  /// Refused for a pickle family's extension (`.bin`, `.npz`…) that no
+  /// bytes read proved to be safetensors or GGUF; nothing else was found
+  /// wrong with the file.
+  final bool byExtension;
 }
 
 /// Download gate: an extension allowlist first, Hub scanner verdicts second
@@ -90,6 +95,7 @@ abstract final class FileSafety {
       if (!proven) {
         return SafetyDecision(
             allowed: false,
+            byExtension: true,
             reason: sniffed == SniffedFormat.legacyGgml
                 ? '${file.path} is a legacy GGML file; current llama.cpp cannot load it'
                 : '${file.path} uses a pickle-based format ($ext); Sherpa never downloads those');

@@ -53,6 +53,20 @@ final List<HubRepoFile> llama1bFiles = [
   const HubRepoFile(path: 'README.md', size: 9400, oid: '1d3a'),
 ];
 
+/// The base model of [llama1b] as the Hub lists it: Transformers weights,
+/// which no Sherpa runtime loads. bartowski's GGUF is one of its quantized
+/// versions (`base_model:quantized:` tag on [llama1b]'s card).
+const llamaBase = 'meta-llama/Llama-3.2-1B-Instruct';
+
+final List<HubRepoFile> llamaBaseFiles = [
+  _file('model.safetensors', 2471645608),
+  _file('tokenizer.json', 9085657),
+  const HubRepoFile(path: 'config.json', size: 877, oid: 'c0f1'),
+  const HubRepoFile(path: 'generation_config.json', size: 189, oid: 'c0f2'),
+  const HubRepoFile(path: 'tokenizer_config.json', size: 54528, oid: 'c0f3'),
+  const HubRepoFile(path: 'README.md', size: 41742, oid: 'c0f4'),
+];
+
 CatalogModelDetails fixtureDetails(
   String repo,
   List<HubRepoFile> files, {
@@ -62,19 +76,34 @@ CatalogModelDetails fixtureDetails(
   bool toolUse = true,
   int? downloads = 155390,
   int? likes = 184,
-}) =>
-    CatalogModelDetails(
-      id: repo,
-      commit: fixtureCommit,
-      name: parseModelName(repo),
-      variants: groupVariants(repo, files, repoSecurity: security),
-      files: [for (final f in files) CatalogFile(file: f, name: parseModelName(repo, fileName: f.path))],
-      gating: gating,
-      license: license,
-      security: security,
-      toolUseHint: toolUse,
-      info: HubModelInfo(id: repo, sha: fixtureCommit, downloads: downloads, likes: likes, gating: gating),
-    );
+  String? libraryName,
+  String? pipelineTag,
+  List<String> tags = const [],
+}) {
+  final info = HubModelInfo(
+    id: repo,
+    sha: fixtureCommit,
+    downloads: downloads,
+    likes: likes,
+    gating: gating,
+    libraryName: libraryName,
+    pipelineTag: pipelineTag,
+    tags: tags,
+  );
+  final hints = info.formatHints;
+  return CatalogModelDetails(
+    id: repo,
+    commit: fixtureCommit,
+    name: parseModelName(repo, repoHints: hints),
+    variants: groupVariants(repo, files, repoSecurity: security, formatHints: hints),
+    files: [for (final f in files) CatalogFile(file: f, name: parseModelName(repo, fileName: f.path, repoHints: hints))],
+    gating: gating,
+    license: license,
+    security: security,
+    toolUseHint: toolUse,
+    info: info,
+  );
+}
 
 /// The shape a Llama 3.2 1B GGUF header peek returns.
 final ModelShape llama1bShape = ModelShape(
@@ -107,7 +136,7 @@ CatalogEntry entry(String id, {List<String> tags = const ['gguf'], int? download
     );
 
 final List<CatalogEntry> fixtureEntries = [
-  entry(llama1b, downloads: 155390, likes: 184, toolUse: true),
+  entry(llama1b, tags: const ['gguf', 'base_model:quantized:$llamaBase'], downloads: 155390, likes: 184, toolUse: true),
   entry('unsloth/Qwen3-8B-GGUF', downloads: 2400000, likes: 812, toolUse: true),
   entry('ggml-org/gemma-3-270m-it-GGUF', downloads: 48000, likes: 61),
   entry('mradermacher/Llama-3.3-70B-Instruct-abliterated-GGUF', downloads: 9100, likes: 40),

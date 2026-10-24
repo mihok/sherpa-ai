@@ -1,13 +1,18 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:sherpa/app.dart';
 import 'package:sherpa/features/models/hf_account_screen.dart';
+import 'package:sherpa/features/models/model_detail_screen.dart';
 import 'package:sherpa/features/models/model_library_screen.dart';
 import 'package:sherpa/features/models/state/hub_account.dart';
 import 'package:sherpa/features/models/state/local_model_choice.dart';
 import 'package:sherpa/features/models/widgets/model_card.dart';
+import 'package:sherpa/routing/router.dart' show routerProvider;
 import 'package:sherpa/routing/routes.dart';
 import 'package:sherpa/services/downloads/downloads.dart';
 import 'package:sherpa_data/sherpa_data.dart';
@@ -18,6 +23,12 @@ import '../../services/support/gguf_fixture.dart';
 import '../../support/harness.dart';
 import 'support/models_rig.dart';
 import 'support/sample_jobs.dart';
+
+const iphone8 = DeviceProfile(platform: DevicePlatform.ios, totalRamBytes: 8 * gib, freeStorageBytes: 80 * gib);
+
+/// The app's router.
+GoRouter routerOf(WidgetTester tester) =>
+    ProviderScope.containerOf(tester.element(find.byType(SherpaApp))).read(routerProvider);
 
 Finder cardFor(String id) => find.byWidgetPredicate((w) => w is ModelCard && w.entry.id == id);
 
@@ -85,7 +96,7 @@ void main() {
     });
 
     testWidgets('format and trusted-quantizer chips narrow the results', (tester) async {
-      final rig = await ModelsRig.create(tester);
+      final rig = await ModelsRig.create(tester, device: iphone8);
       await rig.pump(tester, location: Routes.modelBrowse);
 
       await tester.tap(find.widgetWithText(ChoiceChip, 'MLX'));
@@ -99,6 +110,18 @@ void main() {
       await tester.pumpAndSettle();
       expect(cardFor(llama1b), findsOneWidget);
       expect(cardFor('unsloth/Qwen3-8B-GGUF'), findsNothing);
+    });
+
+    testWidgets('only the formats this device runs are offered: LiteRT on Android, MLX on iPhone', (tester) async {
+      Iterable<String> chips() => tester.widgetList<ChoiceChip>(find.byType(ChoiceChip)).map((c) => (c.label as Text).data!);
+
+      final android = await ModelsRig.create(tester);
+      await android.pump(tester, location: Routes.modelBrowse);
+      expect(chips(), ['GGUF', 'LiteRT']);
+
+      final iphone = await ModelsRig.create(tester, device: iphone8);
+      await iphone.pump(tester, location: Routes.modelBrowse);
+      expect(chips(), ['GGUF', 'MLX']);
     });
 
     testWidgets('size and tool-use filters apply on the client', (tester) async {
@@ -212,6 +235,120 @@ void main() {
       await tester.tap(find.text('Add token'));
       await tester.pumpAndSettle();
       expect(find.byType(HuggingFaceAccountScreen), findsOneWidget);
+    });
+
+    testWidgets("a Transformers repo on Android says what runs here, plainly, and finds the repo's GGUF versions over it",
+        (tester) async {
+      final rig = await ModelsRig.create(tester, details: {
+        llama1b: fixtureDetails(llama1b, llama1bFiles),
+        llamaBase: fixtureDetails(llamaBase, llamaBaseFiles),
+      });
+      await rig.pump(tester, location: Routes.modelBrowse);
+      await tester.enterText(find.byType(TextField).first, llamaBase);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open $llamaBase'));
+      await tester.pumpAndSettle();
+
+      expect(
+          find.text('Nothing in this repository runs on Android. Sherpa on Android runs GGUF and LiteRT-LM models. '
+              'Look for a GGUF version of this model.'),
+          findsOneWidget);
+      expect(find.textContaining('Look for a GGUF version'), findsOneWidget, reason: 'said once, in the summary');
+      final scheme = Theme.of(tester.element(find.byType(ModelDetailScreen))).colorScheme;
+      expect(tester.widget<Text>(find.text("Sherpa can't run Transformers weights (safetensors).")).style?.color,
+          scheme.onSurfaceVariant,
+          reason: 'a fact about the format, not an error');
+      expect(find.text("Can't run here"), findsOneWidget);
+      expect(find.text('Unavailable'), findsNothing);
+      expect(find.textContaining('MLX'), findsNothing);
+      expect(find.textContaining(RegExp(r'^Download ')), findsNothing, reason: 'no button that can never be pressed');
+
+      await tester.tap(find.text('Find GGUF versions'));
+      await tester.pumpAndSettle();
+      expect(find.text('Quantized from $llamaBase'), findsOneWidget, reason: 'the filter is on screen');
+      expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text, isEmpty,
+          reason: 'a list of its own, not the search typed under it');
+      expect(cardFor(llama1b), findsOneWidget);
+      expect(cardFor('unsloth/Qwen3-8B-GGUF'), findsNothing);
+
+      // A version's page and back: the versions; back again: the page that
+      // asked for them, then the search typed before it.
+      await tester.tap(cardFor(llama1b));
+      await tester.pumpAndSettle();
+      expect(find.byWidgetPredicate((w) => w is ModelDetailScreen && w.repoId == llama1b), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Quantized from $llamaBase'), findsOneWidget);
+      expect(cardFor('unsloth/Qwen3-8B-GGUF'), findsNothing);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byWidgetPredicate((w) => w is ModelDetailScreen && w.repoId == llamaBase), findsOneWidget);
+      expect(find.text('Quantized from $llamaBase'), findsNothing);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Open $llamaBase'), findsOneWidget);
+      expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text, llamaBase);
+    });
+
+    testWidgets('on an iPhone the page finds GGUF or MLX versions, as its summary says', (tester) async {
+      final rig = await ModelsRig.create(tester, device: iphone8, details: {llamaBase: fixtureDetails(llamaBase, llamaBaseFiles)});
+      await rig.pump(tester, location: Routes.modelDetail(llamaBase));
+      expect(find.textContaining('Look for a GGUF or MLX version of this model.'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Find GGUF versions'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, 'Find MLX versions'), findsOneWidget);
+
+      await tester.tap(find.text('Find MLX versions'));
+      await tester.pumpAndSettle();
+      expect(find.text('Quantized from $llamaBase'), findsOneWidget);
+      expect(tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'MLX')).selected, isTrue);
+      expect(find.text('Hugging Face lists no MLX versions of $llamaBase yet.'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Find MLX versions'), findsOneWidget, reason: 'back on the page that asked');
+    });
+
+    testWidgets('a repo nobody has made a GGUF of: the versions list says so and offers every model', (tester) async {
+      const repo = 'acme/Brand-New-1B';
+      final rig = await ModelsRig.create(tester, details: {repo: fixtureDetails(repo, llamaBaseFiles)});
+      await rig.pump(tester, location: Routes.modelDetail(repo));
+      await tester.tap(find.text('Find GGUF versions'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('No versions found'), findsOneWidget);
+      expect(find.text('Hugging Face lists no GGUF versions of $repo yet.'), findsOneWidget);
+      expect(find.byTooltip('Hugging Face repos tagged as quantized from $repo. Some may be fine-tunes of it.'),
+          findsOneWidget);
+
+      // With a filter on, fewer filters come first; every model stays an option.
+      await tester.tap(find.widgetWithText(FilterChip, 'Size'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Under 2B').last);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Clear filters'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Show all models'), findsNWidgets(2), reason: 'the versions row and the empty state');
+      await tester.tap(find.widgetWithText(FilledButton, 'Clear filters'));
+      await tester.pumpAndSettle();
+      expect(find.text('No versions found'), findsOneWidget, reason: 'still the versions of $repo');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Show all models'));
+      await tester.pumpAndSettle();
+      expect(find.text('No versions found'), findsNothing);
+      expect(cardFor(llama1b), findsOneWidget);
+    });
+
+    testWidgets("the route swapping Browse's list for a repo's versions swaps the search box too", (tester) async {
+      final rig = await ModelsRig.create(tester);
+      await rig.pump(tester, location: Routes.modelBrowse);
+      await tester.enterText(find.byType(TextField).first, 'qwen');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      routerOf(tester).go(Routes.modelBrowseVersionsOf(llamaBase));
+      await tester.pumpAndSettle();
+      expect(find.text('Quantized from $llamaBase'), findsOneWidget);
+      expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text, isEmpty);
+      expect(cardFor(llama1b), findsOneWidget);
     });
 
     testWidgets('unreadable header: fit unknown, download asks first', (tester) async {
