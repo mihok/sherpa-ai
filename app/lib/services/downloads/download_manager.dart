@@ -490,6 +490,13 @@ final class DownloadManager {
   Future<void> setWifiOnly(bool value) async {
     await init();
     _wifiOnly = value;
+    if (!value) {
+      // "Hasn't started this Wi-Fi-only download" no longer applies.
+      for (final j in _jobs.values.where((j) => j.notice == notStartedNotice).toList()) {
+        _jobs[j.id] = j.copyWith(clearNotice: true, updatedAt: _clock.now());
+        await _save(j.id);
+      }
+    }
     final prefs = await _store.get(_prefsCollection, ModelPreferenceIds.models) ?? <String, Object?>{};
     await _store.put(_prefsCollection, ModelPreferenceIds.models, {...prefs, 'wifiOnly': value});
     _onNetwork(_network?.current ?? NetworkKind.unknown);
@@ -523,7 +530,7 @@ final class DownloadManager {
     final order = _jobs.values.toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
     for (final job in order) {
       if (job.userPaused || job.isInstalled || job.error != null) continue;
-      if (_cancelling.contains(job.id) || _osHeld.contains(job.id)) continue;
+      if (_cancelling.contains(job.id) || (_osHeld.contains(job.id) && _wifiRequired(job))) continue;
       if (_wifiRequired(job) && net == NetworkKind.cellular) continue;
       for (final r in job.files) {
         if (running >= maxConcurrent) return;
@@ -695,9 +702,14 @@ final class DownloadManager {
             // Nothing told the user the phone is off Wi-Fi (it usually shows
             // Wi-Fi), so "Waiting for Wi-Fi" alone would read as a mistake:
             // say what Android is doing and what helps.
-            if (notStarted && a.stop == null) _note(jobId, notStartedNotice);
+            // A job that stopped needing Wi-Fi while it waited (the setting
+            // went off, or mobile data was allowed) is not held: the pump
+            // runs it again right away, without the Wi-Fi constraint.
+            final job = _jobs[jobId];
+            final wifiRequired = job != null && _wifiRequired(job);
+            if (notStarted && a.stop == null && wifiRequired) _note(jobId, notStartedNotice);
             a.stop ??= _Stop.hold;
-            _osHeld.add(jobId);
+            if (wifiRequired) _osHeld.add(jobId);
             return _applyStop(jobId, id, a);
           case TransferHttpError(:final statusCode) when statusCode == 416:
             if (onDisk < r.expectedBytes) {
@@ -840,7 +852,9 @@ final class DownloadManager {
     // Bytes flow, so Android started it after all (another network, a VPN
     // turned off): the "hasn't started" notice no longer holds.
     final job = _jobs[jobId];
-    if (job != null && job.notice == notStartedNotice) _jobs[jobId] = job.copyWith(clearNotice: true, updatedAt: now);
+    if (job != null && job.notice == notStartedNotice && progress.bytesOnDisk > a.bytes) {
+      _jobs[jobId] = job.copyWith(clearNotice: true, updatedAt: now);
+    }
     a.bytes = progress.bytesOnDisk;
     a.meter?.add(progress.bytesOnDisk, now, reported: progress.bytesPerSecond);
     if (now.difference(a.lastPersist ?? now) >= persistInterval) {
@@ -949,8 +963,9 @@ final class DownloadManager {
   /// (as `downloadStartMessage` says).
   String _hubMessage(HubException e, String repo) => switch (e) {
         HubGatedRepoException(:final needsSignIn) => needsSignIn
-            ? 'This model is gated. Accept its terms at huggingface.co/$repo, add your Hugging Face token with '
-                "Add token on the model's page, then try again."
+            ? 'This model is gated. Accept its terms at huggingface.co/$repo and use a Hugging Face token that can '
+                "read gated models (Add token on the model's page; if you added one already, replace it on the "
+                'Hugging Face account screen), then try again.'
             : 'Your Hugging Face account has no access to this model yet. Accept its terms at huggingface.co/$repo '
                 '(some authors approve requests by hand, which can take days), then try again.',
         HubRepoNotFoundException() => 'This repository is gone or private.',

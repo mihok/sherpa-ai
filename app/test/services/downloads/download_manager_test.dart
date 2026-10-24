@@ -363,6 +363,34 @@ void main() {
       expect(backend.requests.skip(1).first.requiresWiFi, isTrue, reason: 'still Wi-Fi only');
     });
 
+    test('turning Wi-Fi only off clears the notice and runs the held job', () async {
+      final id = await heldJob();
+      await m.setWifiOnly(false);
+      expect(m.job(id)!.job.notice, isNull, reason: "it isn't a Wi-Fi-only download any more");
+      await waitOn(m, id, (v) => v.phase == JobPhase.done);
+      expect(backend.requests.skip(1).first.requiresWiFi, isFalse);
+    });
+
+    test('Wi-Fi only turned off while Android sits on the task: it runs at once, without the notice', () async {
+      await setUpRig();
+      backend = _NotStartingBackend(rig.backend);
+      final release = Completer<void>();
+      // The backend reports "not started" only after its grace; the user
+      // turns Wi-Fi only off before that.
+      backend.holdUntil = release.future;
+      m = await managerOver(backend);
+      final id = ((await m.enqueue(rig.plan(), meta: meta)) as Enqueued).jobId;
+      while (backend.requests.isEmpty) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      await m.setWifiOnly(false);
+      release.complete();
+      final v = await waitOn(m, id, (v) => v.phase == JobPhase.done);
+      expect(v.job.notice, isNull);
+      expect(backend.requests.first.requiresWiFi, isTrue);
+      expect(backend.requests.skip(1).map((r) => r.requiresWiFi), everyElement(isFalse));
+    });
+
     test('Pause then Resume tries it again on the same connection', () async {
       final id = await heldJob();
       await m.pause(id);
@@ -656,6 +684,10 @@ final class _NotStartingBackend implements TransferBackend {
   final List<TransferRequest> requests = [];
   bool osWontStart = true;
 
+  /// When set, "not started" comes only once this completes (the
+  /// backend's grace).
+  Future<void>? holdUntil;
+
   @override
   int get transientBytes => _inner.transientBytes;
 
@@ -665,9 +697,26 @@ final class _NotStartingBackend implements TransferBackend {
   @override
   TransferHandle start(TransferRequest request) {
     requests.add(request);
-    if (request.requiresWiFi && osWontStart) return const _Ended(TransferWaitingForWifi(notStarted: true));
+    if (request.requiresWiFi && osWontStart) {
+      const outcome = TransferWaitingForWifi(notStarted: true);
+      final hold = holdUntil;
+      return hold == null ? const _Ended(outcome) : _Later(hold.then((_) => outcome));
+    }
     return _inner.start(request);
   }
+}
+
+final class _Later implements TransferHandle {
+  _Later(this.done);
+
+  @override
+  final Future<TransferOutcome> done;
+
+  @override
+  Stream<TransferProgress> get progress => const Stream.empty();
+
+  @override
+  Future<void> stop() async {}
 }
 
 final class _Ended implements TransferHandle {

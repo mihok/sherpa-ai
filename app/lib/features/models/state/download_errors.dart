@@ -31,8 +31,9 @@ String downloadStartMessage(Object error) {
     HubNetworkException() || SocketException() || http.ClientException() || TimeoutException() =>
       "Couldn't reach Hugging Face. Check your connection, then try again.",
     HubGatedRepoException(:final repo, :final needsSignIn) => needsSignIn
-        ? 'This model is gated. Accept its terms at huggingface.co/$repo, add your Hugging Face token with '
-            "Add token on the model's page, then try again."
+        ? 'This model is gated. Accept its terms at huggingface.co/$repo and use a Hugging Face token that can '
+            "read gated models (Add token on the model's page; if you added one already, replace it on the "
+            'Hugging Face account screen), then try again.'
         : 'Your Hugging Face account has no access to this model yet. Accept its terms at huggingface.co/$repo '
             '(some authors approve requests by hand), then try again.',
     HubException(:final code) => 'Hugging Face refused the download ($code). Try again, or choose another model.',

@@ -13,7 +13,10 @@ import 'package:sherpa/services/downloads/downloads.dart';
 /// background_downloader as it behaves on a device, minus the native side:
 /// `start` drops the native enqueue result (transfers.dart: `await
 /// downloader.enqueue(task); return transfer;`), `startAll` marks a refused
-/// task failed, and both set the hold reason before they return.
+/// task failed, and both set the hold reason before they return. An
+/// accepted task then gets progress 0 while it is still only queued (the
+/// plugin's database record of an enqueued task carries progress 0, and
+/// `Transfers` replays records to their transfers).
 final class _FakeTransfers implements Transfers {
   _FakeTransfers(this._fd);
 
@@ -44,7 +47,7 @@ final class _FakeTransfers implements Transfers {
   @override
   Future<Transfer> start(Task task) async {
     final t = _make(task);
-    if (nativeAccepts) run?.call(t);
+    if (nativeAccepts) _accepted(t);
     return t;
   }
 
@@ -60,9 +63,16 @@ final class _FakeTransfers implements Transfers {
     if (!nativeAccepts) {
       t.updateStatus(TaskStatusUpdate(task, TaskStatus.failed, TaskException('Failed to batch enqueue task on native platform')));
     } else {
-      run?.call(t);
+      _accepted(t);
     }
     return t;
+  }
+
+  void _accepted(Transfer t) {
+    scheduleMicrotask(() {
+      if (t.status == TaskStatus.enqueued) t.updateProgress(TaskProgressUpdate(t.task, 0.0));
+    });
+    run?.call(t);
   }
 
   @override

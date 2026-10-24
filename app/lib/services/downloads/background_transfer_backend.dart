@@ -192,7 +192,9 @@ final class _SegmentedTransfer implements TransferHandle {
     final length = end - start + 1;
     void onProgress() {
       final v = transfer.progress;
-      if (v == null || v < 0) return;
+      // 0 carries no bytes: the plugin also reports it for a task it has
+      // only queued (see [watchUnstarted]).
+      if (v == null || v <= 0) return;
       final speed = transfer.networkSpeed;
       _progress.add(TransferProgress(
         bytesOnDisk: start + (v * length).round(),
@@ -439,10 +441,19 @@ void Function() watchUnstarted({
     if (status.value != TaskStatus.enqueued) started();
   }
 
+  // Bytes only: the plugin echoes progress 0 for a task it has merely
+  // queued (its database record of an enqueued task carries progress 0,
+  // which `Transfers` replays to the transfer), so any change would end
+  // the watch before Android ever started the task.
+  void onProgress() {
+    final v = progress.value;
+    if (v != null && v > 0) started();
+  }
+
   void onForeground() => onScreen() ? arm() : stopTimer();
 
   status.addListener(onStatus);
-  progress.addListener(started);
+  progress.addListener(onProgress);
   foreground?.addListener(onForeground);
   if (status.value == TaskStatus.enqueued) {
     arm();
@@ -452,7 +463,7 @@ void Function() watchUnstarted({
   return () {
     started();
     status.removeListener(onStatus);
-    progress.removeListener(started);
+    progress.removeListener(onProgress);
     foreground?.removeListener(onForeground);
   };
 }
