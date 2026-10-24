@@ -168,7 +168,9 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.SHERPA_RELEASE_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.SHERPA_RELEASE_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.SHERPA_RELEASE_KEY_ALIAS }}
+          # The alias is not a secret: a repository variable keeps GitHub from
+          # masking it (a common word) everywhere in the logs.
+          KEY_ALIAS: ${{ vars.SHERPA_RELEASE_KEY_ALIAS || secrets.SHERPA_RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.SHERPA_RELEASE_KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
@@ -181,7 +183,7 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d > "$keystore"
           # Wrong secrets fail here, with a clear message, not deep in Gradle.
           if ! keytool -list -keystore "$keystore" -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" > /dev/null 2>&1; then
-            echo "::error::The keystore in SHERPA_RELEASE_KEYSTORE_BASE64 does not open with SHERPA_RELEASE_STORE_PASSWORD or has no key SHERPA_RELEASE_KEY_ALIAS."
+            echo "::error::The keystore in SHERPA_RELEASE_KEYSTORE_BASE64 does not open with SHERPA_RELEASE_STORE_PASSWORD or has no key named by SHERPA_RELEASE_KEY_ALIAS."
             exit 1
           fi
           # java.util.Properties reads backslashes as escapes.

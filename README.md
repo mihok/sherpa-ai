@@ -126,14 +126,15 @@ the release key. On a `v*` tag, `android-release-publish` attaches a release-sig
 tag's GitHub Release once the tests pass, creating the release as a draft if it does not exist yet. The tag must
 match the app version (`v0.1.0` for `version: 0.1.0+N`); a debug-signed APK is never attached.
 
-Repository secrets (Settings → Secrets and variables → Actions):
+Repository secrets and variables (Settings → Secrets and variables → Actions):
 
-| Secret | Value |
-|---|---|
-| `SHERPA_RELEASE_KEYSTORE_BASE64` | the keystore (`.jks`), base64 on one line |
-| `SHERPA_RELEASE_STORE_PASSWORD` | the keystore password |
-| `SHERPA_RELEASE_KEY_ALIAS` | the key's alias |
-| `SHERPA_RELEASE_KEY_PASSWORD` | the key password (for a PKCS12 keystore, keytool's default, the store password) |
+| Name | Kind | Value |
+|---|---|---|
+| `SHERPA_RELEASE_KEYSTORE_BASE64` | secret | the keystore (`.jks`), base64 on one line |
+| `SHERPA_RELEASE_STORE_PASSWORD` | secret | the keystore password |
+| `SHERPA_RELEASE_KEY_PASSWORD` | secret | the key password (for a PKCS12 keystore, keytool's default, the store password) |
+| `SHERPA_RELEASE_KEY_ALIAS` | variable (or secret) | the key's alias |
+| `SHERPA_RELEASE_CERT_SHA256` | variable, optional | the certificate's SHA-256; the job then fails on any other key |
 
 ```sh
 # Once: create the key (keep the .jks and its passwords backed up, outside the repository).
@@ -143,15 +144,15 @@ keytool -genkeypair -v -keystore sherpa-release.jks -storetype PKCS12 -keyalg RS
 base64 < sherpa-release.jks | tr -d '\n' > sherpa-release.jks.b64
 gh secret set SHERPA_RELEASE_KEYSTORE_BASE64 < sherpa-release.jks.b64 && rm sherpa-release.jks.b64
 gh secret set SHERPA_RELEASE_STORE_PASSWORD      # prompts for the value
-gh secret set SHERPA_RELEASE_KEY_ALIAS --body sherpa-upload
+gh variable set SHERPA_RELEASE_KEY_ALIAS --body sherpa-upload
 gh secret set SHERPA_RELEASE_KEY_PASSWORD
 # Optional: pin the certificate (the job then fails on any other key).
 keytool -list -keystore sherpa-release.jks -alias sherpa-upload | sed -n 's/.*(SHA-256): //p'
 gh variable set SHERPA_RELEASE_CERT_SHA256 --body '<that fingerprint>'
 ```
 
-GitHub masks every secret value wherever it appears in the logs, so pick an alias that occurs nowhere else
-(`sherpa-upload`, not `sherpa` or `release`).
+The alias is read from the variable first: GitHub masks every secret value wherever it appears in the logs, so
+an alias stored as a secret should be a word that occurs nowhere else (`sherpa-upload`, not `sherpa`).
 
 Locally, the same build and checks (the script finds the build tools through `ANDROID_HOME`):
 
