@@ -164,20 +164,79 @@ final RegExp _repoIdShape = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Z
 /// (`ollama run hf.co/owner/name:Q4_K_M`, `llama-server -hf owner/name:Q4_K_M`).
 final RegExp _quantTagged = RegExp(r'^([A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*):[A-Za-z0-9._-]+$');
 
-/// What `search=` gets for [text]: trimmed, and a pasted Hub link reduced
-/// to its `owner/name` (the API matches `author/name` substrings, so the
-/// full URL matched nothing), without a `:quant` tag.
+/// Hub repo kinds that are not models: their links share the
+/// `owner/name` shape, so they must not become an "Open owner/name" row.
+const Set<String> _notModels = {'spaces', 'datasets'};
+
+/// The Hub's own sections, names no user or organization can take, so a
+/// link there is never a repo. It searches its last segment instead: a
+/// blog post's, paper's or doc page's name, often a model family's.
+const Set<String> _hubSections = {
+  'api', 'blog', 'changelog', 'collections', 'docs', 'learn', 'organizations', 'papers', 'posts', 'tasks',
+};
+
+/// The Hub's account and site pages: nothing there names a model, so a
+/// link searches nothing (`huggingface.co/settings/tokens`, which the
+/// account screen copies, must not become "Open settings/tokens").
+const Set<String> _hubPages = {
+  'chat', 'enterprise', 'join', 'login', 'logout', 'new', 'new-collection', 'new-dataset', 'new-space',
+  'notifications', 'oauth', 'pricing', 'privacy', 'settings', 'terms-of-service', 'welcome',
+};
+
+/// The id the Hub appends to a collection's slug (`qwen3-67dd2474…`).
+final RegExp _collectionId = RegExp(r'-[0-9a-f]{24}$');
+
+/// Where a repo link's file or folder path starts (`/blob/main/x.gguf`,
+/// `/resolve/…`, `/tree/main`); never part of the id.
+const Set<String> _repoPathMarkers = {'blob', 'resolve', 'tree', 'raw', 'commit', 'commits', 'discussions', 'edit'};
+
+/// What `search=` gets for [text]: trimmed, a pasted Hub link reduced to
+/// its `owner/name` (the API matches `author/name` substrings, so the full
+/// URL matched nothing), without a `:quant` tag.
+///
+/// A Hub search page (`huggingface.co/models?search=qwen`) searches for
+/// its query. A Space or dataset link (`/spaces/owner/name`) searches for
+/// its name alone: they are not models, but one is often named after the
+/// model it demos or was made for, and a single word is never offered as
+/// a repo to open. Links into the Hub's own sections and pages (blog,
+/// papers, collections, settings…) are never repos either: see
+/// [_hubSections] and [_hubPages].
 String? searchTextOf(String text) {
   var t = text.trim();
   if (_hubLink.hasMatch(t)) {
-    t = t.replaceFirst(_hubLink, '').split(RegExp('[?#]')).first;
-    final parts = t.split('/').where((p) => p.isNotEmpty).toList();
-    // `models/…` and `/tree/main/…` are not part of the id.
-    if (parts.isNotEmpty && parts.first == 'models') parts.removeAt(0);
-    t = parts.take(2).join('/');
+    final uri = Uri.tryParse('https://huggingface.co/${t.replaceFirst(_hubLink, '')}');
+    final parts = [...?uri?.pathSegments.where((p) => p.isNotEmpty)];
+    t = switch (parts) {
+      [] || ['models' || 'spaces' || 'datasets'] => uri?.queryParameters['search']?.trim() ?? '',
+      [final kind, final owner, ...final rest] when _notModels.contains(kind) => rest.isEmpty ? owner : rest.first,
+      ['api', 'models', ...final id] when id.isNotEmpty => _repoIdIn(id),
+      [final section, ...final rest] when _hubSections.contains(section) => _sectionSearch(section, rest),
+      [final page, ...] when _hubPages.contains(page) => '',
+      ['models', ...final id] => _repoIdIn(id),
+      _ => _repoIdIn(parts),
+    };
   }
   if (_quantTagged.firstMatch(t) case final m?) t = m.group(1)!;
   return t.isEmpty ? null : t;
+}
+
+/// What a link into one of [_hubSections] searches: its last segment,
+/// without a collection's id; an organization's page searches the
+/// organization. A section's front page searches nothing.
+String _sectionSearch(String section, List<String> rest) => switch ((section, rest)) {
+      (_, []) => '',
+      ('organizations', [final org, ...]) => org,
+      ('collections', [..., final slug]) => slug.replaceFirst(_collectionId, ''),
+      (_, [..., final last]) => last,
+    };
+
+/// `owner/name` from a repo link's path. An id without an owner
+/// (`gpt2/blob/main/…`) stops at the marker, but only when a path that is
+/// not itself a repo's follows it: `someone/tree` and
+/// `someone/tree/blob/main/x` are a repo named "tree".
+String _repoIdIn(List<String> parts) {
+  final legacy = parts.length > 2 && _repoPathMarkers.contains(parts[1]) && !_repoPathMarkers.contains(parts[2]);
+  return (legacy ? parts.take(1) : parts.take(2)).join('/');
 }
 
 /// The repo id [text] names, if it is exactly one (`owner/name` or a Hub

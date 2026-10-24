@@ -3,8 +3,11 @@ import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier;
+import 'package:flutter/widgets.dart' show AppLifecycleState;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:sherpa/features/models/state/models_providers.dart' show transferBackendProvider;
 import 'package:sherpa/services/downloads/downloads.dart';
 
 /// background_downloader as it behaves on a device, minus the native side:
@@ -101,11 +104,18 @@ void main() {
     if (dir.existsSync()) await dir.delete(recursive: true);
   });
 
-  BackgroundTransferBackend backend({Duration grace = const Duration(milliseconds: 50), int segmentBytes = 1 << 20}) =>
+  BackgroundTransferBackend backend({
+    Duration grace = const Duration(milliseconds: 50),
+    Duration? unstartedGrace,
+    ValueNotifier<bool>? foreground,
+    int segmentBytes = 1 << 20,
+  }) =>
       BackgroundTransferBackend(
         downloader: fd,
         segmentBytes: segmentBytes,
         wifiHoldGrace: grace,
+        unstartedGrace: unstartedGrace,
+        foreground: foreground,
         splitPath: (path) async => (BaseDirectory.root, p.dirname(path), p.basename(path)),
       );
 
@@ -119,6 +129,14 @@ void main() {
         requiresWiFi: wifiOnly,
         displayName: 'Qwen3 1.7B Q4_K_M',
       );
+
+  /// The native side running a task to completion: writes the segment where
+  /// the backend expects it.
+  Future<void> runToCompletion(Transfer t, {int bytes = 1000}) async {
+    t.updateStatus(TaskStatusUpdate(t.task, TaskStatus.running));
+    await File(p.setExtension(request().partPath, '.seg')).writeAsBytes(List<int>.filled(bytes, 7));
+    t.updateStatus(TaskStatusUpdate(t.task, TaskStatus.complete, null, null, null, 206));
+  }
 
   test('segment tasks may pause, so Android resumes them at its 9-minute job limit instead of failing them', () {
     final task = buildSegmentTask(request(), 0, 268435455,
@@ -134,7 +152,25 @@ void main() {
     fd.fake.nativeAccepts = false;
     final handle = backend().start(request());
     final outcome = await handle.done.timeout(const Duration(seconds: 5));
-    expect(outcome, isA<TransferFailed>().having((o) => o.message, 'message', contains('refused the download')));
+    expect(outcome, isA<TransferFailed>().having((o) => o.message, 'message', contains('refused to schedule')));
+  });
+
+  test('a real failure that arrives before startAll returns is mapped, not reported as a refusal', () async {
+    // The worker can run and fail (an expired signed URL) before the native
+    // enqueue result reaches Dart: the transfer is already failed, with a
+    // typed exception, when `startAll` returns. A 403 has to reach the
+    // manager as one so it resolves a fresh URL.
+    fd.fake.run = (t) => t.updateStatus(TaskStatusUpdate(
+        t.task, TaskStatus.failed, TaskHttpException('Not authorized', 403), 'Auth failed: credentials expired', null, 403));
+    final outcome = await backend().start(request()).done.timeout(const Duration(seconds: 5));
+    expect(outcome, isA<TransferHttpError>().having((o) => o.statusCode, 'statusCode', 403).having((o) => o.isExpired, 'isExpired', isTrue));
+  });
+
+  test('only the plugin\'s own enqueue failure counts as a refusal', () {
+    expect(isEnqueueRefusal(TaskException('Failed to batch enqueue task on native platform')), isTrue);
+    expect(isEnqueueRefusal(TaskHttpException('Failed to batch enqueue task on native platform', 403)), isFalse);
+    expect(isEnqueueRefusal(TaskException('Task timed out')), isFalse);
+    expect(isEnqueueRefusal(null), isFalse);
   });
 
   test('a task the plugin already holds for Wi-Fi when start returns comes back as waiting for Wi-Fi', () async {
@@ -162,6 +198,68 @@ void main() {
     expect(File(request().partPath).lengthSync(), 1000);
   });
 
+  test('a Wi-Fi-only task Android never starts, with no hold reason, comes back as not started', () async {
+    // The phone is on Wi-Fi as far as the plugin knows (no hold reason),
+    // but Android does not count the connection (a VPN carries the default
+    // network): the WorkManager job stays enqueued and nothing ever runs.
+    final handle = backend(unstartedGrace: const Duration(milliseconds: 100)).start(request());
+    final outcome = await handle.done.timeout(const Duration(seconds: 5));
+    expect(outcome, isA<TransferWaitingForWifi>().having((o) => o.notStarted, 'notStarted', isTrue));
+    expect(fd.cancelled, ['rec1@0']);
+  });
+
+  test('in the background Android may defer any work: "not started" is judged only on screen', () async {
+    // Doze or battery saver hold work back whatever the connection; that
+    // must not read as "Android doesn't count this connection as Wi-Fi".
+    final onScreen = ValueNotifier(false);
+    var ended = false;
+    final handle = backend(unstartedGrace: const Duration(milliseconds: 100), foreground: onScreen).start(request());
+    unawaited(handle.done.then((_) => ended = true));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(ended, isFalse, reason: 'three graces in the background');
+    expect(fd.cancelled, isEmpty);
+
+    onScreen.value = true;
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(ended, isFalse, reason: 'the grace starts over on screen');
+    final outcome = await handle.done.timeout(const Duration(seconds: 5));
+    expect(outcome, isA<TransferWaitingForWifi>().having((o) => o.notStarted, 'notStarted', isTrue));
+    expect(fd.cancelled, ['rec1@0']);
+  });
+
+  test("the app's backend is told when Sherpa leaves the screen and when it comes back", () {
+    final binding = TestWidgetsFlutterBinding.ensureInitialized()
+      ..handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final onScreen = (container.read(transferBackendProvider) as BackgroundTransferBackend).foreground;
+    expect(onScreen?.value, isTrue);
+    for (final s in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]) {
+      binding.handleAppLifecycleStateChanged(s);
+    }
+    expect(onScreen?.value, isFalse);
+    for (final s in [AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed]) {
+      binding.handleAppLifecycleStateChanged(s);
+    }
+    expect(onScreen?.value, isTrue);
+  });
+
+  test('a slow start is not "not started": a task that runs before the grace completes', () async {
+    fd.fake.run = (t) => Timer(const Duration(milliseconds: 60), () => unawaited(runToCompletion(t)));
+    final handle = backend(unstartedGrace: const Duration(milliseconds: 150)).start(request());
+    final outcome = await handle.done.timeout(const Duration(seconds: 5));
+    expect(outcome, isA<TransferCompleted>());
+    expect(fd.cancelled, isEmpty);
+  });
+
+  test('a task that is not Wi-Fi-only is never flipped to waiting for Wi-Fi', () async {
+    fd.fake.run = (t) => Timer(const Duration(milliseconds: 250), () => unawaited(runToCompletion(t)));
+    final handle = backend(unstartedGrace: const Duration(milliseconds: 50)).start(request(wifiOnly: false));
+    final outcome = await handle.done.timeout(const Duration(seconds: 5));
+    expect(outcome, isA<TransferCompleted>());
+    expect(fd.cancelled, isEmpty);
+  });
+
   test('a stop that arrives while the task is being enqueued still cancels it', () async {
     // The cancel reaches the plugin before the task does, so there is
     // nothing to cancel yet; without a second cancel the segment runs on.
@@ -176,6 +274,91 @@ void main() {
     final outcome = await handle.done.timeout(const Duration(seconds: 5));
     expect(outcome, isA<TransferStopped>());
     expect(fd.fake.started.single.status, TaskStatus.canceled);
+  });
+
+  group('watchUnstarted', () {
+    Future<void> wait(int ms) => Future<void>.delayed(Duration(milliseconds: ms));
+
+    test('fires once when the task is still enqueued with no progress after the grace', () async {
+      final status = ValueNotifier(TaskStatus.enqueued);
+      final progress = ValueNotifier<double?>(null);
+      var fired = 0;
+      final stop = watchUnstarted(status: status, progress: progress, grace: const Duration(milliseconds: 100), onUnstarted: () => fired++);
+      await wait(30);
+      expect(fired, 0, reason: 'not before the grace');
+      await wait(150);
+      expect(fired, 1);
+      await wait(150);
+      expect(fired, 1, reason: 'once');
+      stop();
+    });
+
+    test('a task that started (running, or any progress) is left alone, even if it is enqueued again later', () async {
+      final status = ValueNotifier(TaskStatus.enqueued);
+      final progress = ValueNotifier<double?>(0.4);
+      var fired = 0;
+      final stop = watchUnstarted(status: status, progress: progress, grace: const Duration(milliseconds: 100), onUnstarted: () => fired++);
+      await wait(30);
+      status.value = TaskStatus.running;
+      status.value = TaskStatus.enqueued;
+      await wait(200);
+      expect(fired, 0);
+      stop();
+
+      final quiet = ValueNotifier(TaskStatus.enqueued);
+      final stop2 = watchUnstarted(status: quiet, progress: progress, grace: const Duration(milliseconds: 100), onUnstarted: () => fired++);
+      await wait(30);
+      progress.value = 0.5;
+      await wait(200);
+      expect(fired, 0, reason: 'progress is a sign of life even while the status lags');
+      stop2();
+    });
+
+    test('stopping the watch cancels it', () async {
+      final status = ValueNotifier(TaskStatus.enqueued);
+      var fired = 0;
+      final stop = watchUnstarted(
+          status: status, progress: ValueNotifier<double?>(null), grace: const Duration(milliseconds: 50), onUnstarted: () => fired++);
+      stop();
+      await wait(120);
+      expect(fired, 0);
+    });
+
+    test('the grace counts only while Sherpa is on screen, and starts over when it comes back', () async {
+      final status = ValueNotifier(TaskStatus.enqueued);
+      final onScreen = ValueNotifier(true);
+      var fired = 0;
+      final stop = watchUnstarted(
+        status: status,
+        progress: ValueNotifier<double?>(null),
+        grace: const Duration(milliseconds: 100),
+        foreground: onScreen,
+        onUnstarted: () => fired++,
+      );
+      await wait(70);
+      onScreen.value = false;
+      await wait(200);
+      expect(fired, 0, reason: 'not in the background');
+      onScreen.value = true;
+      await wait(70);
+      expect(fired, 0, reason: 'a full grace again, not what was left of the first');
+      await wait(100);
+      expect(fired, 1);
+      stop();
+
+      // Started in the background: nothing until Sherpa is on screen.
+      final hidden = ValueNotifier(false);
+      final stop2 = watchUnstarted(
+        status: ValueNotifier(TaskStatus.enqueued),
+        progress: ValueNotifier<double?>(null),
+        grace: const Duration(milliseconds: 50),
+        foreground: hidden,
+        onUnstarted: () => fired++,
+      );
+      await wait(150);
+      expect(fired, 1);
+      stop2();
+    });
   });
 
   group('watchWifiHold', () {

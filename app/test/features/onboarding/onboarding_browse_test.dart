@@ -4,11 +4,14 @@ import 'package:material_ui/material_ui.dart';
 import 'package:sherpa/app.dart';
 import 'package:sherpa/bootstrap.dart' show noRetry;
 import 'package:sherpa/features/diagnostics/app_error_ring.dart';
+import 'package:sherpa/features/models/hf_account_screen.dart';
+import 'package:sherpa/features/models/model_detail_screen.dart';
 import 'package:sherpa/features/models/state/models_providers.dart';
 import 'package:sherpa/services/downloads/downloads.dart';
 import 'package:sherpa/state/services.dart' show localProviderId;
 import 'package:sherpa_hub/sherpa_hub.dart';
 
+import '../../services/support/fake_hub.dart' show hfToken;
 import '../../support/harness.dart';
 import '../models/support/models_rig.dart';
 import 'onboarding_on_device_test.dart' show settleUntil;
@@ -17,6 +20,45 @@ Future<void> _toOnDeviceStep(WidgetTester tester) async {
   await tapText(tester, 'Get started');
   await tapText(tester, 'Run a model on this phone');
   await settleUntil(tester, () => find.text('Finding a model that fits this phone…').evaluate().isEmpty, what: 'the pick');
+}
+
+/// The fixture catalog behind a switchable rate limit, counting detail
+/// requests (a page reloaded after sign-in asks again).
+final class _HubCatalog implements ModelCatalog {
+  _HubCatalog(this._inner);
+
+  final ModelCatalog _inner;
+  bool rateLimited = false;
+  int detailRequests = 0;
+
+  @override
+  String get id => _inner.id;
+
+  @override
+  Future<HubPage<CatalogEntry>> search(ModelSearchQuery query, {String? cursor}) async {
+    if (rateLimited) throw HubRateLimitedException('Too Many Requests', statusCode: 429, retryAfter: const Duration(seconds: 30));
+    return _inner.search(query, cursor: cursor);
+  }
+
+  @override
+  Future<CatalogModelDetails> details(String modelId, {String? revision}) {
+    detailRequests++;
+    return _inner.details(modelId, revision: revision);
+  }
+
+  @override
+  Future<List<CatalogFile>> files(String modelId, {required String revision}) => _inner.files(modelId, revision: revision);
+}
+
+/// Signs in on the Hugging Face account screen with the fake Hub's token.
+Future<void> _signIn(WidgetTester tester) async {
+  await tester.enterText(fieldLabeled('Access token'), hfToken);
+  await tester.runAsync(() async {
+    await tester.tap(find.text('Verify and save'));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  });
+  await tester.pumpAndSettle();
+  expect(find.text('Sherpa Tester'), findsOneWidget);
 }
 
 void main() {
@@ -60,6 +102,85 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Run a model on this phone'), findsOneWidget);
   });
+
+  testWidgets("onboarding: Browse's Sign in opens the account screen over the list, which reloads on the way back",
+      (tester) async {
+    final rig = await ModelsRig.create(tester, onboarded: false, details: <String, CatalogModelDetails>{});
+    final catalog = _HubCatalog(rig.catalog)..rateLimited = true;
+    rig.catalogOverride = catalog;
+    await rig.pump(tester);
+    await _toOnDeviceStep(tester);
+    await tapText(tester, 'Choose a model from Hugging Face');
+    expect(find.text('Hugging Face needs a breather'), findsOneWidget);
+
+    await tapText(tester, 'Sign in');
+    expect(find.byType(HuggingFaceAccountScreen), findsOneWidget,
+        reason: "the account screen on top: the app's routes lead back to onboarding until it ends");
+    await _signIn(tester);
+    catalog.rateLimited = false;
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Browse models'), findsOneWidget, reason: 'back on the same list');
+    expect(find.text('Hugging Face needs a breather'), findsNothing, reason: 'reloaded with the token');
+    expect(find.textContaining('Llama 3.2'), findsWidgets);
+    expect(rig.app.prefs.onboardingComplete, isFalse);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Run a model on this phone'), findsOneWidget);
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
+  testWidgets("onboarding: a gated model's Add token opens the account screen over its page, which reloads with the token",
+      (tester) async {
+    final rig = await ModelsRig.create(tester, onboarded: false, details: <String, CatalogModelDetails>{});
+    rig.catalog.detailsById[llama1b] = fixtureDetails(llama1b, llama1bFiles, gating: HubGating.auto);
+    final catalog = _HubCatalog(rig.catalog);
+    rig.catalogOverride = catalog;
+    await rig.pump(tester);
+    await _toOnDeviceStep(tester);
+    // "Choose a model…" or "Choose another model…", whether or not the
+    // starter pick took the gated repo.
+    final browse = find.textContaining(RegExp(r'^Choose (a|another) model from Hugging Face$'));
+    await tester.ensureVisible(browse);
+    await tester.tap(browse);
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Llama 3.2').first);
+    await settleUntil(tester, () => find.text('Add token').evaluate().isNotEmpty, what: "the gated model's page");
+    final requests = catalog.detailRequests;
+    final peeks = rig.shapes.peeked.length;
+
+    await tapText(tester, 'Add token');
+    expect(find.byType(HuggingFaceAccountScreen), findsOneWidget,
+        reason: "the account screen on top: the app's routes lead back to onboarding until it ends");
+    await _signIn(tester);
+
+    await tester.binding.handlePopRoute();
+    await settleUntil(tester, () => find.textContaining('Sherpa uses your token (sherpa-tester)').evaluate().isNotEmpty,
+        what: 'the page with the token');
+    expect(find.byWidgetPredicate((w) => w is ModelDetailScreen && w.repoId == llama1b), findsOneWidget,
+        reason: 'back on the same page');
+    expect(find.text('Add token'), findsNothing);
+    expect(catalog.detailRequests, greaterThan(requests), reason: 'the details were asked for again');
+    expect(rig.shapes.peeked.length, greaterThan(peeks), reason: 'the header peek ran again (it was behind the gate)');
+    expect(rig.app.prefs.onboardingComplete, isFalse);
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
+  testWidgets('onboarding shows the download\'s notice beside the Wi-Fi action', (tester) async {
+    const notice = 'This Wi-Fi is metered, so the download waits for another network.';
+    final rig = await ModelsRig.create(tester, onboarded: false, details: <String, CatalogModelDetails>{}, network: NetworkKind.cellular);
+    rig.catalog.detailsById[llama1b] = fixtureDetails(llama1b, [for (final f in rig.hub.files.values) f.listing]);
+    rig.mapJobs = (jobs) => [
+          for (final v in jobs)
+            DownloadJobView(job: v.job.copyWith(notice: notice), phase: v.phase, bytesDone: v.bytesDone, wifiOnly: v.wifiOnly),
+        ];
+    await rig.pump(tester);
+    await _toOnDeviceStep(tester);
+    await tester.tap(find.textContaining('and start'));
+    await settleUntil(tester, () => find.text('Use mobile data for this download').evaluate().isNotEmpty,
+        what: 'the job waiting for Wi-Fi');
+    expect(find.textContaining('Waiting for Wi-Fi'), findsOneWidget);
+    expect(find.text(notice), findsOneWidget);
+  }, timeout: const Timeout(Duration(minutes: 2)));
 
   testWidgets('a download service that fails to start says why, is recorded, and the next tap retries it',
       (tester) async {

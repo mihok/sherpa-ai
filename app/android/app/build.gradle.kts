@@ -57,10 +57,11 @@ android {
             pickFirsts += "**/libc++_shared.so"
             // The Flutter Gradle plugin resets `ndk.abiFilters` to
             // armeabi-v7a, arm64-v8a and x86_64, so the arm64-only filter
-            // above does not reach plugin AARs. LiteRT-LM's x86_64 engine
-            // (26 MB, stored uncompressed) would ship in every APK; Sherpa
-            // runs on-device models on arm64 only. On an x86_64 emulator
-            // sherpa_litert then reports LiteRT-LM unavailable
+            // above does not reach plugin AARs (release builds drop the
+            // other ABIs below). LiteRT-LM's x86_64 engine (26 MB, stored
+            // uncompressed) would ship in every debug and profile APK;
+            // Sherpa runs on-device models on arm64 only. On an x86_64
+            // emulator sherpa_litert then reports LiteRT-LM unavailable
             // (`runtime_missing`) instead of crashing.
             excludes += "lib/x86_64/liblitertlm_jni.so"
         }
@@ -81,6 +82,20 @@ android {
         release {
             signingConfig = signingConfigs.getByName(if (hasReleaseKey) "release" else "debug")
         }
+    }
+}
+
+// Release APKs and bundles ship lib/arm64-v8a only. Plugin AARs still bring
+// armeabi-v7a and x86_64 copies of their own libraries (see the abiFilters
+// note above) but no libflutter.so, so such an APK would install on a
+// 32-bit-only or x86_64 device and crash at launch. Debug and profile keep
+// x86_64 for the emulator (flutter run, the frame-bench CI job's
+// `flutter drive --profile`). tools/check_release_apk.sh gates this.
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.packaging.jniLibs.excludes.addAll(
+            listOf("armeabi", "armeabi-v7a", "x86", "x86_64", "riscv64", "mips", "mips64").map { "lib/$it/**" },
+        )
     }
 }
 

@@ -140,7 +140,8 @@ final class DownloadManager {
   final Set<String> _cancelling = {};
 
   /// Jobs the OS held for Wi-Fi although our monitor saw no reason; they
-  /// wait for the next network change instead of retrying in a loop.
+  /// wait for the next network change (a VPN going on or off counts) or
+  /// the user's Resume instead of retrying in a loop.
   final Set<String> _osHeld = {};
   final StreamController<List<DownloadJobView>> _changes = StreamController.broadcast();
   final Map<String, Future<void>> _writes = {};
@@ -397,6 +398,9 @@ final class DownloadManager {
       final a = _active[f.id];
       if (a != null && a.stop == null) stops.add(_stop(a, _Stop.pause));
     }
+    // The view reads paused from here on (see [_view]); the transfers wind
+    // down behind it.
+    _emit(force: true);
     await Future.wait(stops);
     await _save(jobId);
     _emit(force: true);
@@ -416,6 +420,8 @@ final class DownloadManager {
     if (check.verdict == StorageVerdict.insufficient) {
       return 'Not enough free space to continue. ${check.message}';
     }
+    // Asked to try now: an OS hold waits for no network change.
+    _osHeld.remove(jobId);
     final now = _clock.now();
     _jobs[jobId] = job.copyWith(
       userPaused: false,
@@ -474,7 +480,7 @@ final class DownloadManager {
     // The OS held it for Wi-Fi; mobile data is now allowed, so try again
     // without waiting for the next network change.
     _osHeld.remove(jobId);
-    _jobs[jobId] = job.copyWith(allowCellular: true, updatedAt: _clock.now());
+    _jobs[jobId] = job.copyWith(allowCellular: true, updatedAt: _clock.now(), clearNotice: job.notice == notStartedNotice);
     await _save(jobId);
     _emit(force: true);
     _pump();
@@ -538,7 +544,7 @@ final class DownloadManager {
       await _runFile(jobId, recordId, a);
     } on Object catch (e) {
       // Programming errors (an illegal transition) must not wedge the queue.
-      await _fail(jobId, recordId, 'Unexpected error: ${e.runtimeType}. Tap Retry.', code: 'unexpected', cause: e);
+      await _fail(jobId, recordId, 'Unexpected error: ${e.runtimeType}. Try again.', code: 'unexpected', cause: e);
     } finally {
       _active.remove(recordId);
       a.finished.complete();
@@ -678,14 +684,18 @@ final class DownloadManager {
             if (onDisk < r.expectedBytes) {
               // Connection closed early: resume from what arrived.
               if (!progressed && ++resolvesWithoutProgress > maxResolvesWithoutProgress) {
-                return _fail(jobId, id, 'The download keeps stopping early. Tap Retry.', code: 'short_reads');
+                return _fail(jobId, id, 'The download keeps stopping early. Try again.', code: 'short_reads');
               }
               _put(jobId, r.transition(DownloadState.resolving, at: _clock.now()));
               continue;
             }
           case TransferStopped():
             return _applyStop(jobId, id, a);
-          case TransferWaitingForWifi():
+          case TransferWaitingForWifi(:final notStarted):
+            // Nothing told the user the phone is off Wi-Fi (it usually shows
+            // Wi-Fi), so "Waiting for Wi-Fi" alone would read as a mistake:
+            // say what Android is doing and what helps.
+            if (notStarted && a.stop == null) _note(jobId, notStartedNotice);
             a.stop ??= _Stop.hold;
             _osHeld.add(jobId);
             return _applyStop(jobId, id, a);
@@ -706,7 +716,7 @@ final class DownloadManager {
             // and continue with Range from the bytes on disk.
             if (!progressed && ++resolvesWithoutProgress > maxResolvesWithoutProgress) {
               return _fail(jobId, id, 'The download link keeps expiring. Check the date and time on this device, '
-                  'then tap Retry.', code: 'url_expiry_loop');
+                  'then try again.', code: 'url_expiry_loop');
             }
             _put(jobId, r.transition(DownloadState.resolving, at: _clock.now()));
             continue;
@@ -717,7 +727,7 @@ final class DownloadManager {
               continue;
             }
             return _fail(jobId, id, 'The download server answered HTTP $statusCode'
-                '${message == null || message.isEmpty ? '' : ' (${message.trim()})'}. Tap Retry.', code: 'http_$statusCode');
+                '${message == null || message.isEmpty ? '' : ' (${message.trim()})'}. Try again.', code: 'http_$statusCode');
           case TransferNetworkError():
             final net = _network?.current ?? NetworkKind.unknown;
             if (!net.isOnline) {
@@ -729,7 +739,7 @@ final class DownloadManager {
               _put(jobId, _rec(jobId, id)!.transition(DownloadState.resolving, at: _clock.now()));
               continue;
             }
-            return _fail(jobId, id, 'The connection keeps dropping. Your progress is saved; tap Resume to continue.',
+            return _fail(jobId, id, 'The connection keeps dropping. Your progress is saved; try again to continue.',
                 code: 'connection_dropping');
           case TransferFailed(:final message):
             return _fail(jobId, id, message, code: 'transfer_failed');
@@ -827,6 +837,10 @@ final class DownloadManager {
 
   void _onProgress(String jobId, String id, _Active a, TransferProgress progress) {
     final now = _clock.now();
+    // Bytes flow, so Android started it after all (another network, a VPN
+    // turned off): the "hasn't started" notice no longer holds.
+    final job = _jobs[jobId];
+    if (job != null && job.notice == notStartedNotice) _jobs[jobId] = job.copyWith(clearNotice: true, updatedAt: now);
     a.bytes = progress.bytesOnDisk;
     a.meter?.add(progress.bytesOnDisk, now, reported: progress.bytesPerSecond);
     if (now.difference(a.lastPersist ?? now) >= persistInterval) {
@@ -852,14 +866,14 @@ final class DownloadManager {
         });
         if (got != sha.toLowerCase()) {
           return "${p.basename(r.path)} didn't match its SHA-256 (corrupted in transit or changed upstream). "
-              'The partial file was deleted; tap Retry to download it again.';
+              'The partial file was deleted; try again to download it from the start.';
         }
         return null;
       }
       final blob = r.gitBlobSha1;
       if (blob != null) {
         final got = await gitBlobSha1OfFile(path);
-        return got == blob ? null : "${p.basename(r.path)} didn't match its git hash. Tap Retry.";
+        return got == blob ? null : "${p.basename(r.path)} didn't match its git hash. Try again.";
       }
       return '${p.basename(r.path)} has no hash to verify against.';
     } on FileSystemException catch (e) {
@@ -913,25 +927,42 @@ final class DownloadManager {
             'restart Sherpa and export diagnostics from Settings › About.',
       };
 
+  /// Shown on a job whose Wi-Fi-only transfer the OS never started
+  /// ([TransferWaitingForWifi.notStarted]). It must not say the phone is
+  /// off Wi-Fi: the phone shows Wi-Fi. It says what was seen, not a cause
+  /// it can't know, and what the mobile data option really does: it lasts
+  /// for the rest of the download ([allowCellular]). Turning a VPN off is
+  /// a network change, which tries the job again. Cleared when the user
+  /// allows mobile data or bytes start to flow.
+  static const String notStartedNotice = "Android hasn't started this Wi-Fi-only download. It may not count this "
+      'connection as Wi-Fi; a VPN can cause this, and turning the VPN off lets the download start. Or use mobile '
+      'data for this download: it starts now, and goes on over mobile data if you leave Wi-Fi.';
+
   void _note(String jobId, String notice) {
     final j = _jobs[jobId];
     if (j != null) _jobs[jobId] = j.copyWith(notice: notice, updatedAt: _clock.now());
   }
 
+  /// The job's error for a Hub refusal. Onboarding shows it too, where
+  /// Settings can't be opened yet and the button reads "Try again", so it
+  /// names neither: a gated model's own page has Add token in both places
+  /// (as `downloadStartMessage` says).
   String _hubMessage(HubException e, String repo) => switch (e) {
         HubGatedRepoException(:final needsSignIn) => needsSignIn
-            ? 'This model is gated. Add your Hugging Face token in Settings › Hugging Face account, '
-                'accept the terms at huggingface.co/$repo, then tap Retry.'
-            : 'Your Hugging Face account has no access yet. Accept the terms at huggingface.co/$repo '
-                '(some authors approve by hand, which can take days), then tap Retry.',
+            ? 'This model is gated. Accept its terms at huggingface.co/$repo, add your Hugging Face token with '
+                "Add token on the model's page, then try again."
+            : 'Your Hugging Face account has no access to this model yet. Accept its terms at huggingface.co/$repo '
+                '(some authors approve requests by hand, which can take days), then try again.',
         HubRepoNotFoundException() => 'This repository is gone or private.',
         HubEntryNotFoundException() => 'This file is no longer in the pinned commit.',
         HubRevisionNotFoundException() => 'The pinned commit is gone from the repository.',
         HubDisabledRepoException() => 'Hugging Face disabled this repository.',
-        HubNetworkException() => 'Could not reach Hugging Face. Your progress is saved; tap Resume to continue.',
-        HubServerException() => 'Hugging Face is having trouble right now. Tap Resume to try again.',
+        HubNetworkException() => 'Could not reach Hugging Face. Your progress is saved; try again to continue.',
+        HubServerException() => 'Hugging Face is having trouble right now. Your progress is saved; try again later.',
         HubUnauthorizedException() || HubForbiddenException() =>
-          'Hugging Face refused the download. Check your token in Settings › Hugging Face account.',
+          'Hugging Face refused the download. If you added a Hugging Face token, it may have been revoked or may '
+              'not cover this model: replace it on the Hugging Face account screen, then try again. Or choose '
+              'another model.',
         _ => 'Hugging Face answered: ${e.message}',
       };
 
@@ -1104,8 +1135,13 @@ final class DownloadManager {
     for (final f in job.files) {
       final a = _active[f.id];
       if (a != null) {
-        anyActive = true;
         bytes += f.state == DownloadState.downloading ? a.bytes : f.bytesDownloaded;
+        // A transfer told to pause takes a moment to wind down (the plugin
+        // cancels natively, then reports back); the job reads as paused
+        // from the tap on. A pause does not interrupt hashing, so that
+        // still shows.
+        if (job.userPaused && a.stop == _Stop.pause && f.state != DownloadState.verifying) continue;
+        anyActive = true;
         final s = a.meter?.bytesPerSecond;
         if (s != null && f.state == DownloadState.downloading) speed = (speed ?? 0) + s;
         if (f.state == DownloadState.verifying) verify = a.verifyProgress;

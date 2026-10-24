@@ -41,9 +41,11 @@ final class HubRetryPolicy {
   /// Until the response headers arrive.
   final Duration requestTimeout;
 
-  /// Reading a buffered (JSON) response body after its headers: a body
-  /// that stalls on a weak mobile link becomes a [HubNetworkException]
-  /// instead of a list that loads forever.
+  /// Longest gap between bytes of a buffered (JSON) response body after its
+  /// headers. A slow but steady body may take longer in total; one that
+  /// stalls on a weak mobile link is cancelled (releasing the connection)
+  /// and becomes a [HubNetworkException] instead of a list that loads
+  /// forever.
   final Duration bodyTimeout;
 }
 
@@ -448,9 +450,10 @@ final class HfHubClient {
     final streamed = await _send(method, url, headers: headers, body: body);
     final http.Response resp;
     try {
-      resp = await http.Response.fromStream(streamed).timeout(retryPolicy.bodyTimeout);
+      resp = await _readBody(streamed);
     } on TimeoutException catch (e) {
-      throw HubNetworkException('the response stalled for ${retryPolicy.bodyTimeout.inSeconds} s', cause: e, url: url);
+      throw HubNetworkException('the response stalled: no data for ${retryPolicy.bodyTimeout.inSeconds} s',
+          cause: e, url: url);
     } on http.ClientException catch (e) {
       throw HubNetworkException(Redactor.text(e.message), cause: e, url: url);
     } on IOException catch (e) {
@@ -459,6 +462,23 @@ final class HfHubClient {
     if (resp.statusCode >= 200 && resp.statusCode < 300) return resp;
     throw _error(resp.statusCode, resp.headers, resp.body, url,
         repo: repo, unauthorizedIsMissingRepo: unauthorizedIsMissingRepo);
+  }
+
+  /// Buffers a body, allowing at most [HubRetryPolicy.bodyTimeout] between
+  /// chunks (not for the whole body). On a stall the [TimeoutException]
+  /// ends the `await for`, which cancels the response stream and so
+  /// releases the connection.
+  Future<http.Response> _readBody(http.StreamedResponse streamed) async {
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in streamed.stream.timeout(retryPolicy.bodyTimeout)) {
+      bytes.add(chunk);
+    }
+    return http.Response.bytes(bytes.takeBytes(), streamed.statusCode,
+        request: streamed.request,
+        headers: streamed.headers,
+        isRedirect: streamed.isRedirect,
+        persistentConnection: streamed.persistentConnection,
+        reasonPhrase: streamed.reasonPhrase);
   }
 
   /// One logical request with rate-limit waits, retries and auth scoping.

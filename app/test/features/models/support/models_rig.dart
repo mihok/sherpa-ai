@@ -248,11 +248,18 @@ final class ModelsRig {
   /// to build first).
   Override? managerOverride;
 
+  /// Replaces the fixture catalog (e.g. one that is rate limited first).
+  ModelCatalog? catalogOverride;
+
+  /// Replaces the live job list with one derived from it (e.g. with a
+  /// notice), unlike [staticJobs], which freezes it.
+  List<DownloadJobView> Function(List<DownloadJobView> jobs)? mapJobs;
+
   List<Override> get overrides => [
         ...app.overrides,
         modelRecordStoreProvider.overrideWithValue(store),
         modelStorageLayoutProvider.overrideWithValue(manager.layout),
-        modelCatalogProvider.overrideWithValue(catalog),
+        modelCatalogProvider.overrideWithValue(catalogOverride ?? catalog),
         modelShapeSourceProvider.overrideWithValue(shapes),
         deviceProfileSourceProvider.overrideWithValue(device),
         networkMonitorProvider.overrideWithValue(network),
@@ -262,7 +269,13 @@ final class ModelsRig {
         managerOverride ?? downloadManagerProvider.overrideWithValue(manager),
         useLocalModelInChatProvider.overrideWithValue((context, choice) async => usedInChat.add(choice)),
         modelFilePickerProvider.overrideWithValue(() async => pickedFile),
-        if (staticJobs != null) downloadJobsProvider.overrideWith((ref) => Stream.value(staticJobs!)),
+        if (staticJobs != null)
+          downloadJobsProvider.overrideWith((ref) => Stream.value(staticJobs!))
+        else if (mapJobs case final map?)
+          downloadJobsProvider.overrideWith((ref) async* {
+            yield map(manager.jobs);
+            yield* manager.changes.map(map);
+          }),
       ];
 
   Widget widget() => ProviderScope(overrides: overrides, retry: noRetry, child: const SherpaApp());

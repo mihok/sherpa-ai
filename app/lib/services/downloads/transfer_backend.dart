@@ -132,7 +132,13 @@ final class TransferNetworkError extends TransferOutcome {
 
 /// The OS holds the transfer until Wi-Fi is back.
 final class TransferWaitingForWifi extends TransferOutcome {
-  const TransferWaitingForWifi();
+  const TransferWaitingForWifi({this.notStarted = false});
+
+  /// Nothing said the phone was off Wi-Fi, but the OS never started the
+  /// Wi-Fi-only transfer: it does not count the current connection as
+  /// Wi-Fi (see `watchUnstarted`). The user needs to hear why, because
+  /// the phone itself shows Wi-Fi.
+  final bool notStarted;
 }
 
 /// Disk full, permission denied, unexpected bytes — not retryable as is.

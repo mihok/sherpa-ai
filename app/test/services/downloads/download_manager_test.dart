@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sherpa/services/downloads/downloads.dart';
 import 'package:sherpa_data/sherpa_data.dart';
@@ -33,6 +34,38 @@ void main() {
   List<String> partFiles() => Directory(rig.layout.partialDir).existsSync()
       ? [for (final f in Directory(rig.layout.partialDir).listSync()) f.path.split('/').last]
       : const [];
+
+  /// A manager like the rig's, over [backend] instead of the rig's own
+  /// (and [network], when given, instead of the rig's fake).
+  Future<DownloadManager> managerOver(TransferBackend backend, {NetworkMonitor? network}) async {
+    final m = DownloadManager(
+      store: rig.store,
+      layout: rig.layout,
+      backend: backend,
+      hubBackend: rig.hubBackend,
+      resolver: HubDownloadResolver(rig.hub.hubClient()),
+      library: rig.library,
+      device: rig.device,
+      network: network ?? rig.network,
+      ids: rig.ids,
+      sleep: (_) async {},
+      largeFileBytes: 1 << 20,
+    );
+    // Before the rig's tearDown deletes the directory under it.
+    addTearDown(m.dispose);
+    await m.init();
+    return m;
+  }
+
+  Future<DownloadJobView> waitOn(DownloadManager m, String id, bool Function(DownloadJobView v) test) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (true) {
+      final v = m.job(id);
+      if (v != null && test(v)) return v;
+      if (DateTime.now().isAfter(deadline)) throw TimeoutException('job $id: ${v?.phase} ${v?.error}');
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  }
 
   test('happy path: resolve, transfer, verify SHA-256, install with sidecar paired', () async {
     await setUpRig(token: hfToken);
@@ -116,7 +149,7 @@ void main() {
     final id = await enqueue();
     await rig.waitFor(id, (v) => v.phase == JobPhase.downloading && v.bytesDone > 0);
     await rig.manager.pause(id);
-    await rig.waitFor(id, (v) => v.phase == JobPhase.paused);
+    await rig.waitFor(id, (v) => v.phase == JobPhase.paused && rig.backend.active == 0);
     final rec = rig.manager.job(id)!.job.files.firstWhere((f) => f.path == file.path);
     expect(File(rig.layout.partPath(rec.id)).lengthSync(), greaterThan(0));
 
@@ -142,7 +175,7 @@ void main() {
     final pausing = rig.manager.pause(id);
     gate.complete();
     await pausing;
-    final paused = await rig.waitFor(id, (v) => v.phase == JobPhase.paused);
+    final paused = await rig.waitFor(id, (v) => v.phase == JobPhase.paused && rig.backend.active == 0);
     final rec = paused.job.files.firstWhere((f) => f.path == 'Tiny-1B-Q4_K_M.gguf');
     expect(rec.state, DownloadState.paused);
     final have = File(rig.layout.partPath(rec.id)).lengthSync();
@@ -155,6 +188,35 @@ void main() {
     await rig.waitFor(id, (v) => v.phase == JobPhase.done);
     final resumed = rig.backend.requests.skip(started).firstWhere((r) => r.id == rec.id);
     expect(resumed.offset, have);
+  });
+
+  test('pause reads as paused from the tap on, while the transfer is still winding down', () async {
+    await setUpRig();
+    rig.backend.gate = Completer<void>();
+    final backend = _SlowStopBackend(rig.backend);
+    final m = await managerOver(backend);
+    final id = ((await m.enqueue(rig.plan(), meta: meta)) as Enqueued).jobId;
+    await waitOn(m, id, (v) => v.phase == JobPhase.downloading && v.bytesDone > 0);
+    final emitted = <JobPhase>[];
+    final sub = m.changes.listen((jobs) => emitted.add(jobs.single.phase));
+    final pausing = m.pause(id);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    // The plugin has not confirmed the stop yet; the screen already knows.
+    expect(rig.backend.active, 1);
+    expect(m.job(id)!.phase, JobPhase.paused);
+    expect(emitted, isNotEmpty, reason: 'the list updates at the tap, not when the plugin answers');
+    backend.stopConfirmed.complete();
+    await pausing;
+    await waitOn(m, id, (v) => rig.backend.active == 0);
+    await sub.cancel();
+    expect(emitted, everyElement(JobPhase.paused), reason: 'no flicker back to downloading');
+    final rec = m.job(id)!.job.files.firstWhere((f) => f.path == 'Tiny-1B-Q4_K_M.gguf');
+    expect(rec.state, DownloadState.paused);
+    expect(rec.bytesDownloaded, File(rig.layout.partPath(rec.id)).lengthSync());
+
+    rig.backend.gate = null;
+    await m.resume(id);
+    await waitOn(m, id, (v) => v.phase == JobPhase.done);
   });
 
   test('Wi-Fi only: waits on cellular, starts on Wi-Fi, stops again when Wi-Fi is lost', () async {
@@ -204,6 +266,113 @@ void main() {
     await rig.manager.allowCellular(id);
     await rig.waitFor(id, (v) => v.phase == JobPhase.done);
     expect(rig.backend.requests.skip(count).first.requiresWiFi, isFalse);
+  });
+
+  test('the network monitor reports a VPN going on or off over Wi-Fi; a repeat is not a change', () async {
+    // Android doesn't start a Wi-Fi-only transfer while a VPN carries the
+    // traffic, so the manager has to hear when it goes off, although the
+    // kind stays Wi-Fi.
+    final links = StreamController<List<ConnectivityResult>>();
+    final monitor = ConnectivityNetworkMonitor(links.stream);
+    final seen = <NetworkKind>[];
+    final sub = monitor.changes.listen(seen.add);
+    for (final r in [
+      [ConnectivityResult.wifi, ConnectivityResult.vpn],
+      [ConnectivityResult.vpn, ConnectivityResult.wifi],
+      [ConnectivityResult.wifi],
+      [ConnectivityResult.wifi],
+      [ConnectivityResult.wifi, ConnectivityResult.vpn],
+      [ConnectivityResult.mobile],
+    ]) {
+      links.add(r);
+      await pumpEventQueue();
+    }
+    expect(seen, [NetworkKind.wifi, NetworkKind.wifi, NetworkKind.wifi, NetworkKind.cellular]);
+    expect(monitor.current, NetworkKind.cellular);
+    await sub.cancel();
+    await monitor.dispose();
+    await links.close();
+
+    // The first event states where things are: a change only when it
+    // differs from what the monitor started with.
+    final first = StreamController<List<ConnectivityResult>>();
+    final quiet = ConnectivityNetworkMonitor(first.stream, initial: NetworkKind.wifi);
+    final none = <NetworkKind>[];
+    final sub2 = quiet.changes.listen(none.add);
+    first.add([ConnectivityResult.wifi, ConnectivityResult.vpn]);
+    await pumpEventQueue();
+    expect(none, isEmpty);
+    await sub2.cancel();
+    await quiet.dispose();
+    await first.close();
+  });
+
+  group('Android never starts a Wi-Fi-only transfer although the phone shows Wi-Fi', () {
+    late _NotStartingBackend backend;
+    late DownloadManager m;
+
+    Future<String> heldJob({NetworkMonitor? network}) async {
+      await setUpRig();
+      backend = _NotStartingBackend(rig.backend);
+      m = await managerOver(backend, network: network);
+      final id = ((await m.enqueue(rig.plan(), meta: meta)) as Enqueued).jobId;
+      final held = await waitOn(m, id, (v) => v.phase == JobPhase.waitingForWifi);
+      // Not "you're off Wi-Fi": what Android is doing, and what helps.
+      expect((network ?? rig.network).current, NetworkKind.wifi);
+      expect(held.job.notice, DownloadManager.notStartedNotice);
+      expect(
+        held.job.notice,
+        allOf(contains("hasn't started"), contains('may not count'), contains('VPN'), contains('use mobile data')),
+        reason: 'what was seen, not a cause the check cannot know',
+      );
+      expect(held.job.notice, isNot(contains('because')));
+      expect(held.job.notice, contains('goes on over mobile data if you leave Wi-Fi'),
+          reason: 'the choice lasts for the rest of the download, so say so');
+      expect(held.wifiOnly, isTrue, reason: 'the "Use mobile data" button shows for waitingForWifi');
+      final doc = await rig.store.get(DocumentCollections.downloads, id);
+      expect(DownloadJob.fromJson(doc!).notice, DownloadManager.notStartedNotice, reason: 'survives a relaunch');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(backend.requests, hasLength(1), reason: 'held until the network changes or the user acts, not retried in a loop');
+      return id;
+    }
+
+    test('the job waits and says why; "use mobile data" runs it on this connection', () async {
+      final id = await heldJob();
+      await m.allowCellular(id);
+      expect(m.job(id)!.job.notice, isNull, reason: 'the advice was taken');
+      await waitOn(m, id, (v) => v.phase == JobPhase.done);
+      expect(backend.requests.skip(1).first.requiresWiFi, isFalse);
+    });
+
+    test('turning the VPN off tries it again, though the phone stays on Wi-Fi; the notice goes', () async {
+      // connectivity_plus as on a phone: `[wifi, vpn]` with the VPN on,
+      // `[wifi]` once it is off. Both are Wi-Fi, so only the link changed.
+      final links = StreamController<List<ConnectivityResult>>.broadcast();
+      final network = ConnectivityNetworkMonitor(links.stream);
+      addTearDown(() async {
+        await network.dispose();
+        await links.close();
+      });
+      links.add([ConnectivityResult.wifi, ConnectivityResult.vpn]);
+      await pumpEventQueue();
+      final id = await heldJob(network: network);
+      backend.osWontStart = false;
+      links.add([ConnectivityResult.wifi]);
+      final v = await waitOn(m, id, (v) => v.phase == JobPhase.done);
+      expect(v.job.notice, isNull);
+      expect(backend.requests.skip(1).first.requiresWiFi, isTrue, reason: 'still Wi-Fi only');
+    });
+
+    test('Pause then Resume tries it again on the same connection', () async {
+      final id = await heldJob();
+      await m.pause(id);
+      expect(m.job(id)!.phase, JobPhase.paused);
+      backend.osWontStart = false;
+      expect(await m.resume(id), isNull);
+      final v = await waitOn(m, id, (v) => v.phase == JobPhase.done);
+      expect(v.job.notice, isNull);
+      expect(backend.requests.skip(1).first.requiresWiFi, isTrue, reason: 'still Wi-Fi only');
+    });
   });
 
   test('a failed start-up is not cached: the download explains it, and the next try works', () async {
@@ -339,6 +508,11 @@ void main() {
     final id = await enqueue();
     final v = await rig.waitFor(id, (v) => v.phase == JobPhase.failed);
     expect(v.error, allOf(contains('gated'), contains('Hugging Face token')));
+    // Onboarding shows this error too: no Settings there yet, and its
+    // button reads "Try again". The model's page has Add token in both.
+    expect(v.error, allOf(contains('huggingface.co/acme/Tiny-1B-GGUF'), contains("Add token on the model's page"),
+        contains('try again')));
+    expect(v.error, isNot(anyOf(contains('Settings'), contains('Retry'))));
     expect(rig.backend.requests, isEmpty);
   });
 
@@ -469,5 +643,81 @@ final class _FlakyStore implements ModelRecordStore {
       throw StateError('database is locked');
     }
     return _inner.list(collection);
+  }
+}
+
+/// [FakeCdnBackend] behind Android's Wi-Fi constraint: while [osWontStart]
+/// is set, a Wi-Fi-only transfer ends the way [BackgroundTransferBackend]
+/// reports a task Android never started.
+final class _NotStartingBackend implements TransferBackend {
+  _NotStartingBackend(this._inner);
+
+  final FakeCdnBackend _inner;
+  final List<TransferRequest> requests = [];
+  bool osWontStart = true;
+
+  @override
+  int get transientBytes => _inner.transientBytes;
+
+  @override
+  Future<void> recover() => _inner.recover();
+
+  @override
+  TransferHandle start(TransferRequest request) {
+    requests.add(request);
+    if (request.requiresWiFi && osWontStart) return const _Ended(TransferWaitingForWifi(notStarted: true));
+    return _inner.start(request);
+  }
+}
+
+final class _Ended implements TransferHandle {
+  const _Ended(this.outcome);
+
+  final TransferOutcome outcome;
+
+  @override
+  Stream<TransferProgress> get progress => const Stream.empty();
+
+  @override
+  Future<TransferOutcome> get done => Future.value(outcome);
+
+  @override
+  Future<void> stop() async {}
+}
+
+/// [FakeCdnBackend] whose stop takes a while to be confirmed, like the
+/// plugin's: `stop` returns once [stopConfirmed] completes.
+final class _SlowStopBackend implements TransferBackend {
+  _SlowStopBackend(this._inner);
+
+  final FakeCdnBackend _inner;
+  final Completer<void> stopConfirmed = Completer();
+
+  @override
+  int get transientBytes => _inner.transientBytes;
+
+  @override
+  Future<void> recover() => _inner.recover();
+
+  @override
+  TransferHandle start(TransferRequest request) => _SlowStop(_inner.start(request), stopConfirmed.future);
+}
+
+final class _SlowStop implements TransferHandle {
+  _SlowStop(this._inner, this._confirmed);
+
+  final TransferHandle _inner;
+  final Future<void> _confirmed;
+
+  @override
+  Stream<TransferProgress> get progress => _inner.progress;
+
+  @override
+  Future<TransferOutcome> get done => _inner.done;
+
+  @override
+  Future<void> stop() async {
+    await _confirmed;
+    await _inner.stop();
   }
 }

@@ -94,6 +94,21 @@ void main() {
     expect(formatContext(32768), '32K');
   });
 
+  test('live progress moves from the first megabytes; finished sizes read the same', () {
+    const mb = 1 << 20;
+    const gb = 1 << 30;
+    final total = (1.7 * gb).round();
+    expect(formatBytesOf(0, total), '0 MB of 1.7 GB');
+    expect(formatBytesOf(3 * mb, total), '3 MB of 1.7 GB', reason: 'not "0.0 of 1.7 GB" until 50 MB arrive');
+    expect(formatBytesOf(48 * mb, total), '48 MB of 1.7 GB');
+    expect(formatBytesOf(900 * mb, total), '900 MB of 1.7 GB');
+    expect(formatBytesOf((1.2 * gb).round(), (2.3 * gb).round()), '1.2 of 2.3 GB', reason: 'past 1 GB both in GB');
+    expect(formatBytesOf(512 * mb, 18 * gb), '512 MB of 18 GB');
+    expect(formatBytesOf(5 * gb, 18 * gb), '5 of 18 GB');
+    expect(formatBytesOf(12 * mb, 812 * mb), '12 of 812 MB');
+    expect(formatBytes(total), '1.7 GB', reason: 'a finished size');
+  });
+
   test('card estimates come from the parameter count and say so', () {
     final e = entry('unsloth/Qwen3-8B-GGUF');
     final small = estimateCardFit(e, phone4)!;

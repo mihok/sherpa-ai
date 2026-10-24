@@ -14,6 +14,10 @@
 #   permissions   android.permission.INTERNET is requested.
 #   service       io.github.mihok.sherpa_inference.InferenceService runs in the ":inference" process, is not
 #                 exported, and its class is in the dex.
+#   abis          lib/arm64-v8a is the only ABI directory. Plugins bring armeabi-v7a/x86_64 copies of their own
+#                 libraries, and the engine is arm64-only: such an APK installs on a 32-bit-only or x86_64 device
+#                 and fails there, at launch when the ABI has no libflutter.so (app/android/app/build.gradle.kts
+#                 drops the other ABIs in release builds).
 #   engine        lib/arm64-v8a holds the on-device engine (native/llama/build_android.sh) and the JNI shim;
 #                 every native library is stored uncompressed (the engine dlopens CPU variants from the APK).
 #   jni           every Java class named by a string in lib/arm64-v8a/*.so (io/, com/, org/, dev/ packages,
@@ -239,6 +243,18 @@ else
 fi
 
 # ---- native libraries ------------------------------------------------------------------------------------
+LIB_ENTRIES="$(unzip -Z1 "$APK" 'lib/*' 2> /dev/null || true)"
+OTHER_ABIS="$(awk -F/ 'NF > 2 && $2 != "arm64-v8a" { print $2 }' <<< "$LIB_ENTRIES" | LC_ALL=C sort -u)"
+if [ -z "$OTHER_ABIS" ]; then
+  pass abis "lib/arm64-v8a is the only ABI"
+else
+  fail abis "lib/ also holds $(paste -sd' ' - <<< "$OTHER_ABIS"): the APK would install on those devices and fail there (the engine is arm64-only; without libflutter.so it crashes at launch). Release builds exclude them in app/android/app/build.gradle.kts"
+  while read -r abi; do
+    files="$(awk -F/ -v a="$abi" '$2 == a && $3 != "" { print $3 }' <<< "$LIB_ENTRIES")"
+    grep -qx libflutter.so <<< "$files" || files="$files"$'\n'"(no libflutter.so)"
+    printf 'lib/%s: %s\n' "$abi" "$(paste -sd' ' - <<< "$files")"
+  done <<< "$OTHER_ABIS" | detail
+fi
 LIBS="$(unzip -Z1 "$APK" 'lib/arm64-v8a/*.so' 2> /dev/null || true)"
 missing=""
 for l in $JNI_SHIM $ENGINE_LIBS; do grep -qx "lib/arm64-v8a/$l" <<< "$LIBS" || missing="$missing $l"; done

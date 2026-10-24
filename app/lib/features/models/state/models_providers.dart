@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show immutable, listEquals;
+import 'package:flutter/foundation.dart' show ValueNotifier, immutable, listEquals;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sherpa_data/sherpa_data.dart' show DocumentCollections;
@@ -9,6 +9,7 @@ import 'package:sherpa_hub/sherpa_hub.dart';
 import '../../../app_info.dart';
 import '../../../services/device/device_profile_source.dart';
 import '../../../services/downloads/downloads.dart';
+import '../../../services/inference/app_foreground.dart';
 import '../../../state/connectivity.dart';
 import '../../../state/providers.dart';
 import '../../diagnostics/app_error_ring.dart';
@@ -31,7 +32,20 @@ final modelStorageLayoutProvider = Provider<ModelStorageLayout>(
 );
 
 /// The byte mover. background_downloader on devices; a fake in tests.
-final transferBackendProvider = Provider<TransferBackend>((ref) => BackgroundTransferBackend());
+/// It is told when Sherpa is on screen: only then does a Wi-Fi-only
+/// download Android hasn't started count as held (see
+/// [BackgroundTransferBackend.foreground]).
+final transferBackendProvider = Provider<TransferBackend>((ref) {
+  final app = AppLifecycleForeground();
+  final onScreen = ValueNotifier<bool>(app.isForeground);
+  final sub = app.changes.listen((v) => onScreen.value = v);
+  ref.onDispose(() {
+    unawaited(sub.cancel());
+    app.dispose();
+    onScreen.dispose();
+  });
+  return BackgroundTransferBackend(foreground: onScreen);
+});
 
 /// In-process transfers for files served from huggingface.co itself (the
 /// only transfer path that may carry the Hub token).

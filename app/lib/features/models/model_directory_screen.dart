@@ -13,6 +13,7 @@ import '../../routing/routes.dart';
 import '../../services/device/device_profile_source.dart';
 import '../../state/connectivity.dart';
 import '../../state/ui_preferences.dart';
+import 'hf_account_screen.dart';
 import 'state/directory_controller.dart';
 import 'state/model_fit.dart';
 import 'state/models_providers.dart';
@@ -28,8 +29,9 @@ class ModelDirectoryScreen extends ConsumerStatefulWidget {
   const ModelDirectoryScreen({super.key, this.onOpenModel});
 
   /// Set when the browser is opened from onboarding (outside the app's
-  /// routes): opens a repo there instead of on the Browse route, and hides
-  /// the Downloads shortcut (onboarding shows the download itself).
+  /// routes): opens a repo there instead of on the Browse route, hides the
+  /// Downloads shortcut (onboarding shows the download itself), and opens
+  /// the Hugging Face account screen on top of the list.
   final ValueChanged<String>? onOpenModel;
 
   @override
@@ -118,6 +120,18 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
     }
   }
 
+  /// Settings › Hugging Face account. Onboarding's routes send every other
+  /// route back to onboarding, so there it opens on top of this list, and
+  /// the list reloads on the way back with the token's higher limit.
+  Future<void> _signIn(BuildContext context) async {
+    if (widget.onOpenModel == null) {
+      context.go(Routes.huggingFace);
+      return;
+    }
+    await Navigator.of(context).push<void>(MotionPageRoute(builder: (_) => const HuggingFaceAccountScreen()));
+    if (mounted) unawaited(ref.read(directoryControllerProvider.notifier).refresh());
+  }
+
   List<Widget> _results(BuildContext context, DirectoryState s, DirectoryController c) {
     final t = SherpaTokens.of(context);
     final pad = EdgeInsets.fromLTRB(t.space.lg, t.space.sm, t.space.lg, t.space.xxxl);
@@ -140,7 +154,15 @@ class _ModelDirectoryScreenState extends ConsumerState<ModelDirectoryScreen> {
     }
     final failure = s.failure;
     if (s.raw.isEmpty && (failure != null || offline)) {
-      return [SliverFillRemaining(hasScrollBody: false, child: _FailureView(failure: offline ? const DirectoryOffline() : failure!))];
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: _FailureView(
+            failure: offline ? const DirectoryOffline() : failure!,
+            onSignIn: () => unawaited(_signIn(context)),
+          ),
+        ),
+      ];
     }
     final items = s.items;
     if (items.isEmpty) {
@@ -570,9 +592,10 @@ class _ListFooter extends StatelessWidget {
 }
 
 class _FailureView extends ConsumerWidget {
-  const _FailureView({required this.failure});
+  const _FailureView({required this.failure, required this.onSignIn});
 
   final DirectoryFailure failure;
+  final VoidCallback onSignIn;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -595,10 +618,7 @@ class _FailureView extends ConsumerWidget {
             icon: const Icon(Icons.refresh),
             label: const Text('Try again'),
           ),
-          secondaryAction: OutlinedButton(
-            onPressed: () => context.go(Routes.huggingFace),
-            child: const Text('Sign in'),
-          ),
+          secondaryAction: OutlinedButton(onPressed: onSignIn, child: const Text('Sign in')),
         ),
       DirectoryError(:final message) => ErrorState(
           title: "Couldn't load models",

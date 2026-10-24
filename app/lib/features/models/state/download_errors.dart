@@ -20,6 +20,9 @@ Object unwrapProviderError(Object error) {
 
 /// What the user reads when a download could not be started: what went
 /// wrong and what to do about it. Never a bare "couldn't start".
+///
+/// Shown in onboarding too, where Settings can't be opened yet: a gated
+/// model points to its own page's Add token button, which works in both.
 String downloadStartMessage(Object error) {
   final e = unwrapProviderError(error);
   return switch (e) {
@@ -27,8 +30,11 @@ String downloadStartMessage(Object error) {
         'signing in to Hugging Face raises the limit.',
     HubNetworkException() || SocketException() || http.ClientException() || TimeoutException() =>
       "Couldn't reach Hugging Face. Check your connection, then try again.",
-    HubGatedRepoException() => 'This model is gated. Add your Hugging Face token in Settings › Hugging Face account '
-        'and accept its terms on huggingface.co, then try again.',
+    HubGatedRepoException(:final repo, :final needsSignIn) => needsSignIn
+        ? 'This model is gated. Accept its terms at huggingface.co/$repo, add your Hugging Face token with '
+            "Add token on the model's page, then try again."
+        : 'Your Hugging Face account has no access to this model yet. Accept its terms at huggingface.co/$repo '
+            '(some authors approve requests by hand), then try again.',
     HubException(:final code) => 'Hugging Face refused the download ($code). Try again, or choose another model.',
     FileSystemException() => DownloadManager.initFailureMessage(e),
     _ => "Sherpa's download service didn't start (${e.runtimeType}). Try again; if it keeps happening, restart "

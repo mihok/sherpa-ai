@@ -323,6 +323,50 @@ void main() {
           throwsA(isA<HubNetworkException>().having((e) => e.code, 'code', 'hub_network')));
     });
 
+    const gapPolicy = HubRetryPolicy(bodyTimeout: Duration(milliseconds: 150));
+
+    test('bodyTimeout is a gap between bytes: a slow but steady body loads', () async {
+      // Ten chunks 30 ms apart: about 300 ms in total, twice the timeout.
+      final json = utf8.encode(jsonEncode([for (var i = 0; i < 10; i++) {'id': 'org/model-$i'}]));
+      final step = (json.length / 10).ceil();
+      final steady = StreamController<List<int>>();
+      var sent = 0;
+      final ticks = Timer.periodic(const Duration(milliseconds: 30), (t) {
+        steady.add(json.sublist(sent, min(sent + step, json.length)));
+        sent += step;
+        if (sent >= json.length) {
+          t.cancel();
+          steady.close();
+        }
+      });
+      addTearDown(ticks.cancel);
+      final slow = HfHubClient(
+        httpClient: MockClient.streaming((req, _) async => http_pkg.StreamedResponse(steady.stream, 200)),
+        sleep: (_) async {},
+        retryPolicy: gapPolicy,
+      );
+      final watch = Stopwatch()..start();
+      final page = await slow.searchModels(const ModelSearchQuery()).timeout(const Duration(seconds: 5));
+      expect(page.items.map((m) => m.id), [for (var i = 0; i < 10; i++) 'org/model-$i']);
+      expect(watch.elapsed, greaterThan(gapPolicy.bodyTimeout), reason: 'the whole body took longer than one gap');
+    });
+
+    test('a stalled body is cancelled, so its connection is released', () async {
+      final cancelled = Completer<void>();
+      final stalled = StreamController<List<int>>(onCancel: cancelled.complete);
+      addTearDown(stalled.close);
+      final stuck = HfHubClient(
+        httpClient: MockClient.streaming((req, _) async => http_pkg.StreamedResponse(stalled.stream, 200)),
+        sleep: (_) async {},
+        retryPolicy: gapPolicy,
+      );
+      stalled.add(utf8.encode('[{"id":"a/b"'));
+      await expectLater(stuck.searchModels(const ModelSearchQuery()).timeout(const Duration(seconds: 5)),
+          throwsA(isA<HubNetworkException>()));
+      await expectLater(cancelled.future.timeout(const Duration(seconds: 1)), completes,
+          reason: 'the response stream was cancelled');
+    });
+
     test("today's Xet CDN (us.aws.cdn.hf.co) is not the Hub origin: no token goes there", () async {
       const cdn = 'https://us.aws.cdn.hf.co/xet-bridge-us/68b0/2c1e?X-Xet-Cas-Uid=public'
           '&Expires=1793000000&Policy=p&Signature=s&Key-Pair-Id=K';

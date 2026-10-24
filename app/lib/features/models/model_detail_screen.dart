@@ -20,6 +20,7 @@ import '../../services/device/device_profile_source.dart';
 import '../../services/downloads/downloads.dart';
 import '../../state/ui_preferences.dart';
 import '../diagnostics/app_error_ring.dart';
+import 'hf_account_screen.dart';
 import 'state/directory_controller.dart' show DirectoryError, DirectoryOffline, DirectoryRateLimited, failureOf;
 import 'state/download_errors.dart';
 import 'state/model_fit.dart';
@@ -44,8 +45,9 @@ class ModelDetailScreen extends ConsumerStatefulWidget {
   /// Set when the page is opened from onboarding (outside the app's
   /// routes): called with the outcome once a download is queued, or with
   /// [AlreadyPresent] for a variant that is downloading or installed, so
-  /// onboarding can follow it and open the first chat on it. Without it,
-  /// the page links to Downloads and the library as usual.
+  /// onboarding can follow it and open the first chat on it, and Add token
+  /// opens the Hugging Face account screen on top of the page. Without it,
+  /// the page links to Downloads, the library and Settings as usual.
   final ValueChanged<EnqueueOutcome>? onDownloadStarted;
 
   @override
@@ -110,7 +112,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
                 padding: EdgeInsets.only(bottom: t.space.xl),
                 children: [
                   _Header(details: d),
-                  if (d.gating.isGated) _GatedCard(details: d),
+                  if (d.gating.isGated) _GatedCard(details: d, onAddToken: () => unawaited(_addToken())),
                   _FitSummary(
                     assessment: assessment,
                     device: device,
@@ -231,6 +233,22 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen> {
     } finally {
       if (mounted) setState(() => _starting = false);
     }
+  }
+
+  /// Settings › Hugging Face account. Onboarding's routes send every other
+  /// route back to onboarding, so there it opens on top of this page, and
+  /// the page reloads on the way back so a token added there applies to
+  /// the gate, the header peek and the download.
+  Future<void> _addToken() async {
+    if (widget.onDownloadStarted == null) {
+      context.go(Routes.huggingFace);
+      return;
+    }
+    await Navigator.of(context).push<void>(MotionPageRoute(builder: (_) => const HuggingFaceAccountScreen()));
+    if (!mounted) return;
+    ref
+      ..invalidate(modelDetailsProvider(widget.repoId))
+      ..invalidate(modelShapeProvider);
   }
 
   void _snack(String message, {SnackBarAction? action}) {
@@ -363,9 +381,10 @@ class _ScanPill extends StatelessWidget {
 
 /// Gated repos: what to do, in order, without leaving the user guessing.
 class _GatedCard extends ConsumerWidget {
-  const _GatedCard({required this.details});
+  const _GatedCard({required this.details, required this.onAddToken});
 
   final CatalogModelDetails details;
+  final VoidCallback onAddToken;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -426,7 +445,7 @@ class _GatedCard extends ConsumerWidget {
                     ),
                     if (profile == null)
                       FilledButton.tonalIcon(
-                        onPressed: () => context.go(Routes.huggingFace),
+                        onPressed: onAddToken,
                         icon: const Icon(Icons.key_outlined),
                         label: const Text('Add token'),
                       ),

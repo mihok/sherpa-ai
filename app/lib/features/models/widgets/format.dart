@@ -19,13 +19,17 @@ String formatBytes(int bytes) {
   return '$bytes B';
 }
 
-/// "1.2 of 4.6 GB": both sides in the larger unit so the numbers compare.
+/// Live progress: "1.2 of 4.6 GB", both sides in the larger unit so the
+/// numbers compare. Below 1 GB done the part done is in MB ("48 MB of
+/// 1.7 GB"), so the first megabytes show instead of "0.0 of 1.7 GB"
+/// looking stalled. A finished size is [formatBytes].
 String formatBytesOf(int done, int total) {
   if (total >= _gib) {
     final t = total / _gib;
-    final d = done / _gib;
     final digits = t >= 10 ? 0 : 1;
-    return '${d.toStringAsFixed(digits)} of ${t.toStringAsFixed(digits)} GB';
+    final of = '${t.toStringAsFixed(digits)} GB';
+    if (done < _gib) return '${(done / _mib).round()} MB of $of';
+    return '${(done / _gib).toStringAsFixed(digits)} of $of';
   }
   return '${(done / _mib).round()} of ${(total / _mib).round()} MB';
 }

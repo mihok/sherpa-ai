@@ -39,8 +39,11 @@ final class BackgroundTransferBackend implements TransferBackend {
     this.segmentBytes = 256 << 20,
     this.group = 'sherpa-models',
     this.wifiHoldGrace = const Duration(seconds: 10),
+    Duration? unstartedGrace,
+    this.foreground,
     Future<(BaseDirectory, String, String)> Function(String path)? splitPath,
   })  : _downloader = downloader,
+        unstartedGrace = unstartedGrace ?? (Platform.isAndroid ? const Duration(seconds: 30) : null),
         _split = splitPath ?? ((path) => Task.split(filePath: path));
 
   FileDownloader? _downloader;
@@ -57,6 +60,22 @@ final class BackgroundTransferBackend implements TransferBackend {
   /// How long a segment the plugin holds for Wi-Fi may stay unstarted
   /// before it comes back as [TransferWaitingForWifi] (see [watchWifiHold]).
   final Duration wifiHoldGrace;
+
+  /// How long a Wi-Fi-only segment may stay enqueued with no progress,
+  /// while Sherpa is on screen, before it comes back as
+  /// [TransferWaitingForWifi] with `notStarted` (see [watchUnstarted]);
+  /// null turns the watch off. Android only (the default elsewhere is
+  /// null): WorkManager starts work whose constraints hold within a second
+  /// or two while Sherpa is on screen, so 30 s is far past a slow start,
+  /// yet short enough that nobody stares at "0 B" for long.
+  final Duration? unstartedGrace;
+
+  /// Whether Sherpa is on screen; null counts as always. The
+  /// [unstartedGrace] runs only then: in the background Android defers
+  /// work for its own reasons (Doze, battery saver), which says nothing
+  /// about the connection. Every segment is watched, not just the first,
+  /// because a VPN can come up between two of them.
+  final ValueListenable<bool>? foreground;
   final Future<(BaseDirectory, String, String)> Function(String path) _split;
 
   @override
@@ -155,13 +174,16 @@ final class _SegmentedTransfer implements TransferHandle {
     if (_stopped) return const TransferStopped();
     // `startAll`, not `start`: `start` drops the native enqueue result, so a
     // task Android refused (URL validation, WorkManager) would wait forever
-    // at "Downloading: 0 B". `startAll` marks it failed instead.
+    // at "Downloading: 0 B". `startAll` marks it failed instead. Any other
+    // failure already here is a real one that arrived before `startAll`
+    // returned (a fast 403 from an expired URL); the result below maps it
+    // like any other, so the manager can resolve again.
     final transfer = (await _fd.transfers.startAll([task])).single;
-    if (transfer.status == TaskStatus.failed) {
+    if (transfer.status == TaskStatus.failed && isEnqueueRefusal(transfer.exception)) {
       _task = null;
       if (seg.existsSync()) await seg.delete();
-      return TransferFailed("This phone's download service refused the download "
-          '(${transfer.exception?.description ?? 'not scheduled'}). Tap Retry; if it keeps failing, restart Sherpa.');
+      return const TransferFailed("This phone's download service refused to schedule the download. "
+          'Try again; if it keeps failing, restart Sherpa.');
     }
     // A stop() during `startAll` reached the plugin before the task did
     // (it encodes tasks in an isolate first), so it cancelled nothing; the
@@ -181,6 +203,7 @@ final class _SegmentedTransfer implements TransferHandle {
     // The plugin sets the hold reason inside `startAll`, before it returns,
     // so the watch has to look at the value it already has.
     var heldForWifi = false;
+    var notStarted = false;
     final ValueListenable<double?> pn = transfer.progressNotifier;
     pn.addListener(onProgress);
     final unwatch = watchWifiHold(
@@ -188,17 +211,32 @@ final class _SegmentedTransfer implements TransferHandle {
       status: transfer.statusNotifier,
       grace: _backend.wifiHoldGrace,
       onHeld: () {
-        if (_stopped) return;
+        if (_stopped || notStarted) return;
         heldForWifi = true;
         unawaited(_fd.cancel(task));
       },
     );
+    final unstartedGrace = _backend.unstartedGrace;
+    final unwatchStart = !task.requiresWiFi || unstartedGrace == null
+        ? null
+        : watchUnstarted(
+            status: transfer.statusNotifier,
+            progress: pn,
+            grace: unstartedGrace,
+            foreground: _backend.foreground,
+            onUnstarted: () {
+              if (_stopped || heldForWifi) return;
+              notStarted = true;
+              unawaited(_fd.cancel(task));
+            },
+          );
     final TaskStatusUpdate result;
     try {
       result = await transfer.result;
     } finally {
       pn.removeListener(onProgress);
       unwatch();
+      unwatchStart?.call();
       _task = null;
     }
     switch (result.status) {
@@ -207,8 +245,11 @@ final class _SegmentedTransfer implements TransferHandle {
       case TaskStatus.canceled:
         if (seg.existsSync()) await seg.delete();
         // The plugin clears the hold reason when the task ends, so the
-        // flag says why it was cancelled.
-        return heldForWifi && !_stopped ? const TransferWaitingForWifi() : const TransferStopped();
+        // flags say why it was cancelled.
+        if (_stopped) return const TransferStopped();
+        if (heldForWifi) return const TransferWaitingForWifi();
+        if (notStarted) return const TransferWaitingForWifi(notStarted: true);
+        return const TransferStopped();
       case TaskStatus.notFound:
         return const TransferHttpError(404);
       case TaskStatus.failed:
@@ -330,5 +371,88 @@ void Function() watchWifiHold({
     timer?.cancel();
     hold.removeListener(check);
     status.removeListener(check);
+  };
+}
+
+/// Whether [e] is how background_downloader 9.6's `Transfers.startAll`
+/// marks a task the native side refused to schedule (its `enqueueAll`
+/// answered false): a plain [TaskException] with this exact text. A real
+/// failure that arrives before `startAll` returns (a fast 403) carries a
+/// typed exception ([TaskHttpException], [TaskConnectionException], …)
+/// and is not a refusal.
+@visibleForTesting
+bool isEnqueueRefusal(TaskException? e) =>
+    e != null && e.exceptionType == 'TaskException' && e.description == 'Failed to batch enqueue task on native platform';
+
+/// Calls [onUnstarted] once when [status] is still enqueued, with no
+/// [progress] update, after [grace] in the [foreground]. Returns a
+/// function that stops watching.
+///
+/// A Wi-Fi-only task is WorkManager work with a Wi-Fi network constraint
+/// (unmetered Wi-Fi before Android 9, a Wi-Fi `NetworkRequest` after,
+/// checked against the app's default network). When the phone is on Wi-Fi
+/// but Android does not count the connection (a VPN carries the default
+/// network, and the request asks for a non-VPN one), the work never
+/// starts, and the plugin sets no hold reason: its Dart-side check only
+/// asks "is this Wi-Fi?". Without this watch the download sat at
+/// "Downloading: 0 B" with nothing to tap.
+///
+/// Any sign of life ends the watch for good: a status other than enqueued,
+/// or a progress update. On ordinary Wi-Fi the task turns running long
+/// before [grace]; one that starts later just cancels the watch.
+///
+/// The grace counts only while [foreground] is true (null: always), and
+/// starts over each time Sherpa comes back on screen. In the background
+/// Android holds work back for power reasons (Doze, battery saver, a
+/// blocked network) on any connection, and a frozen process wakes with an
+/// overdue timer that would race the task's "running" update.
+@visibleForTesting
+void Function() watchUnstarted({
+  required ValueListenable<TaskStatus> status,
+  required ValueListenable<double?> progress,
+  required Duration grace,
+  required void Function() onUnstarted,
+  ValueListenable<bool>? foreground,
+}) {
+  Timer? timer;
+  var ended = false;
+  bool onScreen() => foreground?.value ?? true;
+  void stopTimer() {
+    timer?.cancel();
+    timer = null;
+  }
+
+  void arm() {
+    if (ended || timer != null || !onScreen()) return;
+    timer = Timer(grace, () {
+      timer = null;
+      if (!ended && onScreen() && status.value == TaskStatus.enqueued) onUnstarted();
+    });
+  }
+
+  void started() {
+    ended = true;
+    stopTimer();
+  }
+
+  void onStatus() {
+    if (status.value != TaskStatus.enqueued) started();
+  }
+
+  void onForeground() => onScreen() ? arm() : stopTimer();
+
+  status.addListener(onStatus);
+  progress.addListener(started);
+  foreground?.addListener(onForeground);
+  if (status.value == TaskStatus.enqueued) {
+    arm();
+  } else {
+    ended = true;
+  }
+  return () {
+    started();
+    status.removeListener(onStatus);
+    progress.removeListener(started);
+    foreground?.removeListener(onForeground);
   };
 }

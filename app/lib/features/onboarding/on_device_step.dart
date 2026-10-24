@@ -330,6 +330,7 @@ class _JobProgress extends StatelessWidget {
     final t = SherpaTokens.of(context);
     final theme = Theme.of(context);
     final p = job.phase;
+    final notice = job.job.notice;
     final text = switch (p) {
       JobPhase.waitingForWifi => 'Waiting for Wi-Fi to download ${formatBytes(job.totalBytes)}.',
       JobPhase.waitingForNetwork => 'Waiting for a connection…',
@@ -350,6 +351,17 @@ class _JobProgress extends StatelessWidget {
           ),
           SizedBox(height: t.space.xs),
           Text(text, textAlign: TextAlign.center, style: theme.textTheme.bodySmall),
+          // What the manager wants the user to know without failing the job
+          // (Android hasn't started a Wi-Fi-only download, a file restarted),
+          // as Downloads shows it.
+          if (notice != null) ...[
+            SizedBox(height: t.space.xs),
+            Text(
+              notice,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ],
           if (p == JobPhase.waitingForWifi)
             TextButton(onPressed: onAllowCellular, child: const Text('Use mobile data for this download')),
           if (p.canResume) TextButton(onPressed: onRetry, child: const Text('Try again')),

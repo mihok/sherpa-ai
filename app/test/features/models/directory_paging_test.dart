@@ -114,6 +114,69 @@ void main() {
       expect(repoIdOf('https://huggingface.co/Qwen'), isNull);
       expect(DirectoryQuery(text: 'https://huggingface.co/Qwen').toSearch().text, 'Qwen');
     });
+
+    test('file links reduce to the repo, even with a download query', () {
+      for (final text in [
+        'https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/blob/main/Qwen3-0.6B-Q8_0.gguf',
+        'https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf?download=true',
+        'huggingface.co/models/Qwen/Qwen3-0.6B-GGUF/resolve/main/sub/dir/model.gguf',
+        'https://huggingface.co/Qwen/Qwen3-0.6B-GGUF#files',
+      ]) {
+        expect(DirectoryQuery(text: text).toSearch().text, 'Qwen/Qwen3-0.6B-GGUF', reason: text);
+        expect(repoIdOf(text), 'Qwen/Qwen3-0.6B-GGUF', reason: text);
+      }
+      // A legacy id without an owner is not "gpt2/blob".
+      expect(searchTextOf('https://huggingface.co/gpt2/blob/main/config.json'), 'gpt2');
+      expect(repoIdOf('https://huggingface.co/gpt2/resolve/main/model.safetensors'), isNull);
+    });
+
+    test("the Hub's search page searches for its query", () {
+      expect(searchTextOf('https://huggingface.co/models?search=qwen'), 'qwen');
+      expect(searchTextOf('huggingface.co/models?library=gguf&search=qwen%203&sort=trending'), 'qwen 3');
+      expect(repoIdOf('https://huggingface.co/models?search=qwen'), isNull);
+      expect(searchTextOf('https://huggingface.co/models?search=Qwen/Qwen3-0.6B-GGUF'), 'Qwen/Qwen3-0.6B-GGUF');
+      expect(searchTextOf('https://huggingface.co/models'), isNull, reason: 'no query: the default list');
+      expect(searchTextOf('https://huggingface.co/models?library=gguf'), isNull);
+    });
+
+    test('Spaces and datasets are not models: their name is searched and never offered to open', () {
+      for (final (text, name) in [
+        ('https://huggingface.co/spaces/Qwen/Qwen3-Demo', 'Qwen3-Demo'),
+        ('https://huggingface.co/spaces/ggml-org/gguf-my-repo/blob/main/app.py', 'gguf-my-repo'),
+        ('huggingface.co/datasets/bartowski/calibration_datav3', 'calibration_datav3'),
+        ('https://hf.co/datasets/acme/chat-logs/tree/main', 'chat-logs'),
+      ]) {
+        expect(DirectoryQuery(text: text).toSearch().text, name, reason: text);
+        expect(repoIdOf(text), isNull, reason: 'no "Open spaces/…" row for $text');
+      }
+      expect(searchTextOf('https://huggingface.co/spaces?search=llama'), 'llama');
+      expect(searchTextOf('https://huggingface.co/spaces'), isNull);
+    });
+
+    test("the Hub's own sections and pages are never repos: a name is searched, or nothing", () {
+      for (final (text, search) in [
+        ('https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f8b75e43', 'qwen3'),
+        ('https://huggingface.co/papers/2505.09388', '2505.09388'),
+        ('https://huggingface.co/docs/hub/gguf', 'gguf'),
+        ('https://huggingface.co/blog/gemma3', 'gemma3'),
+        ('https://huggingface.co/organizations/Qwen/share/abc', 'Qwen'),
+        ('https://huggingface.co/blog', null),
+        // What the account screen's "Copy token page link" copies.
+        ('https://huggingface.co/settings/tokens', null),
+        ('huggingface.co/join', null),
+      ]) {
+        expect(searchTextOf(text), search, reason: text);
+        expect(repoIdOf(text), isNull, reason: 'no "Open …" row for $text');
+      }
+      expect(repoIdOf('https://huggingface.co/api/models/Qwen/Qwen3-0.6B-GGUF'), 'Qwen/Qwen3-0.6B-GGUF');
+    });
+
+    test('a repo named like a path marker stays a repo; the marker counts only with a path after it', () {
+      expect(repoIdOf('https://huggingface.co/someone/tree'), 'someone/tree');
+      expect(repoIdOf('https://huggingface.co/someone/raw'), 'someone/raw');
+      expect(repoIdOf('https://huggingface.co/someone/edit/blob/main/README.md'), 'someone/edit');
+      expect(searchTextOf('https://huggingface.co/gpt2/tree/main'), 'gpt2');
+    });
   });
 
   group('browse screen', () {
@@ -155,6 +218,25 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byWidgetPredicate((w) => w is ModelDetailScreen && w.repoId == 'Qwen/Qwen3-0.6B-GGUF'), findsOneWidget,
           reason: "the repo's page");
+    });
+
+    testWidgets('a pasted search page searches its query; a Space link offers no repo to open', (tester) async {
+      final rig = await ModelsRig.create(tester);
+      await rig.pump(tester, location: Routes.modelBrowse);
+      final openRow = find.byWidgetPredicate((w) => w is Text && (w.data ?? '').startsWith('Open '));
+
+      await tester.enterText(find.byType(TextField).first, 'https://huggingface.co/models?search=gemma&library=gguf');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Gemma'), findsWidgets);
+      expect(find.textContaining('Llama 3.2'), findsNothing, reason: 'the search, not the default list');
+      expect(openRow, findsNothing);
+
+      await tester.enterText(find.byType(TextField).first, 'https://huggingface.co/spaces/ggml-org/gemma-3-270m-it-GGUF');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      expect(openRow, findsNothing, reason: 'a Space is not a model');
+      expect(find.textContaining('Gemma'), findsWidgets, reason: 'models named like the Space');
     });
   });
 }
